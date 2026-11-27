@@ -1929,38 +1929,8 @@ impl Broker {
     /// login carries over to. Adoption keeps a live worker's exact binding;
     /// only a `replacing` reload (an adopt-only declaration followed by a reset
     /// that stops that worker first) may move it.
-    fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
-        let store = &self.args.provider_store;
-        if !matches!(
-            store.account_worker_binding_admits(session, replacing),
-            Ok(true)
-        ) {
-            return false;
-        }
-        let carries = |previous: &StartSession| {
-            account_worker::binding_matches(previous, session)
-                || (!session.provider_account_id.is_default()
-                    && store.account_launch_carries(previous, session))
-        };
-        let declaration_matches = self
-            .sessions
-            .lock()
-            .get(&session.session_id)
-            .is_none_or(&carries);
-        declaration_matches
-            && self
-                .workers
-                .lock()
-                .get(&session.session_id)
-                .is_none_or(|worker| {
-                    worker.snapshot.launch.as_ref().map_or(
-                        session.provider_account_id.is_default(),
-                        |previous| {
-                            account_worker::binding_matches(previous, session)
-                                || (replacing && carries(previous))
-                        },
-                    )
-                })
+    async fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
+        account_worker::account_binding_matches_async(self, session, replacing).await
     }
 
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
@@ -1982,10 +1952,9 @@ impl Broker {
             );
             return;
         }
-        // An adopt-only declaration precedes a reload's reset and never spawns
-        // (every launch rechecks the journal), so it may name a release the
-        // same login carries over to while the old worker is still running.
-        if !self.account_binding_matches(&session, session.adopt_only) {
+        // Adopt-only declarations precede reset and never spawn; allow carried login releases.
+        let adopt = session.adopt_only;
+        if !self.account_binding_matches(&session, adopt).await {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
@@ -2172,7 +2141,7 @@ impl Broker {
         if !lease_active(self) {
             return;
         }
-        if !self.account_binding_matches(&session, true) {
+        if !self.account_binding_matches(&session, true).await {
             self.command_rejected(
                 &session_id,
                 command_id,
@@ -6510,7 +6479,7 @@ mod tests {
             assert!(matches!(rx.recv().await,
                 Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
                     if reason.contains("subscription cannot change")));
-            assert!(broker.account_binding_matches(&launch, false));
+            assert!(broker.account_binding_matches(&launch, false).await);
             assert!(broker.workers.lock().contains_key("sess-1"));
             assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
             assert!(worker_rx.try_recv().is_err());

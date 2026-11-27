@@ -161,23 +161,30 @@ impl PreparedRuntime {
 
     /// Re-verify staging root and every staged component right before an outer
     /// readiness probe, off the Tokio async worker threads.
-    pub(super) async fn verify_before_outer_probe(self) -> Result<Self> {
+    pub(super) async fn verify_before_outer_probe(
+        self,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<Self> {
         match self {
             Self::AlreadyInstalled { metadata } => Ok(Self::AlreadyInstalled { metadata }),
             Self::Pending(pending) => {
-                let pending = tokio::task::spawn_blocking(move || -> Result<PendingRuntime> {
-                    verify_child_dir(
-                        pending.content_dir_fd.as_fd(),
-                        &pending.temp_name,
-                        pending.temp_identity,
-                    )?;
-                    for (artifact, staged, _) in &pending.components {
-                        staged.verify_staged_bytes(Some(pending.temp_dir_fd.as_fd()), artifact)?;
-                    }
-                    Ok(pending)
-                })
-                .await
-                .context("outer probe pre-verification task failed")??;
+                let pending = MachinePluginStore::run_with_lifecycle(
+                    lifecycle,
+                    "outer probe pre-verification task failed",
+                    move || {
+                        verify_child_dir(
+                            pending.content_dir_fd.as_fd(),
+                            &pending.temp_name,
+                            pending.temp_identity,
+                        )?;
+                        for (artifact, staged, _) in &pending.components {
+                            staged
+                                .verify_staged_bytes(Some(pending.temp_dir_fd.as_fd()), artifact)?;
+                        }
+                        Ok(pending)
+                    },
+                )
+                .await?;
                 Ok(Self::Pending(pending))
             }
         }
@@ -198,86 +205,87 @@ impl PreparedRuntime {
     pub(super) async fn finalize(
         self,
         guard: &InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> Result<InstalledRuntimeMetadata> {
         match self {
             Self::AlreadyInstalled { metadata } => Ok(metadata),
             Self::Pending(mut pending) => {
                 guard.check()?;
                 let lease_check = guard.lease_check();
-                // Await the blocking task directly so a lease expiry cannot
-                // drop `_lifecycle` while `renameat` or staging cleanup runs;
-                // `lease_check.check()?` still aborts before every component
-                // and before atomic publication.
-                let metadata = tokio::task::spawn_blocking(move || {
-                    verify_child_dir(
-                        pending.content_dir_fd.as_fd(),
-                        &pending.temp_name,
-                        pending.temp_identity,
-                    )?;
-                    let temporary = pending.staging.path().to_path_buf();
-                    let mut commands = BTreeMap::new();
-                    for (artifact, staged, probe_ms) in &pending.components {
-                        lease_check.check()?;
-                        attach_and_verify_staged_component(
-                            Some(pending.temp_dir_fd.as_fd()),
-                            staged,
-                            artifact,
-                            *probe_ms,
-                            pending.all_probes_exit_confirmed,
+                let metadata = MachinePluginStore::run_with_lifecycle(
+                    lifecycle,
+                    "Provider runtime finalization task failed",
+                    move || {
+                        verify_child_dir(
+                            pending.content_dir_fd.as_fd(),
+                            &pending.temp_name,
+                            pending.temp_identity,
                         )?;
-                        let executable = staged
-                            .executable
-                            .strip_prefix(&temporary)
-                            .context("staged Provider runtime escaped its staging directory")?;
-                        let stored_artifact = staged
-                            .artifact
-                            .strip_prefix(&temporary)
-                            .context("staged Provider artifact escaped its staging directory")?;
-                        let installed = InstalledRuntimeCommand {
-                            executable: Path::new("runtime")
-                                .join(executable)
-                                .to_string_lossy()
-                                .into_owned(),
-                            artifact: Path::new("runtime")
-                                .join(stored_artifact)
-                                .to_string_lossy()
-                                .into_owned(),
-                            artifact_digest: artifact.artifact_digest.to_ascii_lowercase(),
+                        let temporary = pending.staging.path().to_path_buf();
+                        let mut commands = BTreeMap::new();
+                        for (artifact, staged, probe_ms) in &pending.components {
+                            lease_check.check()?;
+                            attach_and_verify_staged_component(
+                                Some(pending.temp_dir_fd.as_fd()),
+                                staged,
+                                artifact,
+                                *probe_ms,
+                                pending.all_probes_exit_confirmed,
+                            )?;
+                            let executable = staged
+                                .executable
+                                .strip_prefix(&temporary)
+                                .context("staged Provider runtime escaped its staging directory")?;
+                            let stored_artifact =
+                                staged.artifact.strip_prefix(&temporary).context(
+                                    "staged Provider artifact escaped its staging directory",
+                                )?;
+                            let installed = InstalledRuntimeCommand {
+                                executable: Path::new("runtime")
+                                    .join(executable)
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                artifact: Path::new("runtime")
+                                    .join(stored_artifact)
+                                    .to_string_lossy()
+                                    .into_owned(),
+                                artifact_digest: artifact.artifact_digest.to_ascii_lowercase(),
+                            };
+                            ensure!(
+                                commands
+                                    .insert(artifact.command.clone(), installed)
+                                    .is_none(),
+                                "duplicate staged Provider command"
+                            );
+                        }
+                        let metadata = InstalledRuntimeMetadata {
+                            schema_version: 2,
+                            commands,
                         };
-                        ensure!(
-                            commands
-                                .insert(artifact.command.clone(), installed)
-                                .is_none(),
-                            "duplicate staged Provider command"
-                        );
-                    }
-                    let metadata = InstalledRuntimeMetadata {
-                        schema_version: 2,
-                        commands,
-                    };
-                    lease_check.check()?;
-                    verify_child_dir(
-                        pending.content_dir_fd.as_fd(),
-                        &pending.temp_name,
-                        pending.temp_identity,
-                    )?;
-                    artifact_cache::write_bytes_at(
-                        pending.temp_dir_fd.as_fd(),
-                        "metadata.json",
-                        &serde_json::to_vec(&metadata)?,
-                    )?;
-                    rustix::fs::renameat(
-                        pending.content_dir_fd.as_fd(),
-                        pending.temp_name.as_str(),
-                        pending.content_dir_fd.as_fd(),
-                        "runtime",
-                    )?;
-                    rustix::fs::fsync(pending.content_dir_fd.as_fd())?;
-                    pending.staging.commit();
-                    Ok(metadata)
-                })
-                .await
-                .context("Provider runtime finalization task failed")??;
+                        lease_check.check()?;
+                        verify_child_dir(
+                            pending.content_dir_fd.as_fd(),
+                            &pending.temp_name,
+                            pending.temp_identity,
+                        )?;
+                        artifact_cache::write_bytes_at(
+                            pending.temp_dir_fd.as_fd(),
+                            "metadata.json",
+                            &serde_json::to_vec(&metadata)?,
+                        )?;
+                        lease_check.check()?;
+                        rustix::fs::renameat(
+                            pending.content_dir_fd.as_fd(),
+                            pending.temp_name.as_str(),
+                            pending.content_dir_fd.as_fd(),
+                            "runtime",
+                        )?;
+                        rustix::fs::fsync(pending.content_dir_fd.as_fd())?;
+                        pending.staging.commit();
+                        Ok(metadata)
+                    },
+                )
+                .await?;
                 guard.check()?;
                 Ok(metadata)
             }
@@ -306,29 +314,34 @@ fn harden_extracted_tree(root: &Path, executable: &Path) -> Result<()> {
     walk(root, executable)
 }
 
+#[allow(clippy::too_many_lines)] // One fenced runtime download and extraction flow.
 pub(super) async fn prepare_provider_runtime(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
     guard: &InstallGuard<'_>,
     cache_state: Option<&Path>,
     sealed_probe: bool,
+    lifecycle: &mut Option<LifecycleGuard>,
 ) -> Result<PreparedRuntime> {
     guard.check()?;
     let active = content.join("runtime");
     if active.symlink_metadata().is_ok() {
         let content_owned = content.to_owned();
         let artifacts_owned = artifacts.clone();
-        let metadata = tokio::task::spawn_blocking(move || -> Result<InstalledRuntimeMetadata> {
-            let metadata = read_installed_runtime(&content_owned)
-                .context("existing Provider runtime metadata is invalid")?;
-            ensure!(
-                installed_runtime_matches(&content_owned, &artifacts_owned, &metadata)?,
-                "existing content-addressed Provider runtime failed integrity verification"
-            );
-            Ok(metadata)
-        })
-        .await
-        .context("existing Provider runtime verification task failed")??;
+        let metadata = MachinePluginStore::run_with_lifecycle(
+            lifecycle,
+            "existing Provider runtime verification task failed",
+            move || {
+                let metadata = read_installed_runtime(&content_owned)
+                    .context("existing Provider runtime metadata is invalid")?;
+                ensure!(
+                    installed_runtime_matches(&content_owned, &artifacts_owned, &metadata)?,
+                    "existing content-addressed Provider runtime failed integrity verification"
+                );
+                Ok(metadata)
+            },
+        )
+        .await?;
         return Ok(PreparedRuntime::AlreadyInstalled { metadata });
     }
     let (content_dir_fd, _) = open_pinned_dir(content)?;
@@ -337,8 +350,10 @@ pub(super) async fn prepare_provider_runtime(
         std::process::id(),
         ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
-    let staging = artifact_cache::StagedRuntimeDirectory::new(content.join(&temp_name));
-    let temporary = staging.path().to_path_buf();
+    let mut staging = Some(artifact_cache::StagedRuntimeDirectory::new(
+        content.join(&temp_name),
+    ));
+    let temporary = staging.as_ref().unwrap().path().to_path_buf();
     fs::create_dir_all(&temporary)?;
     fs::set_permissions(&temporary, fs::Permissions::from_mode(0o700))?;
     let (temp_dir_fd, temp_identity) = open_pinned_dir(&temporary)?;
@@ -354,6 +369,8 @@ pub(super) async fn prepare_provider_runtime(
             guard,
             cache_state,
             Some(content),
+            lifecycle,
+            &mut staging,
         )
         .await?;
         staged_components.push((artifact.clone(), staged));
@@ -366,24 +383,31 @@ pub(super) async fn prepare_provider_runtime(
         guard.check()?;
         let probe_started = Instant::now();
         if !sealed_probe {
-            // Re-verify staging root AND every reachable component before
-            // executing each subsequent probe so no earlier probe can alter
-            // what this probe executes or loads from any sibling.
             if idx > 0 {
                 let verify_name = temp_name.clone();
-                let (returned_content_fd, returned_temp_fd, returned_components) =
-                    tokio::task::spawn_blocking(move || -> Result<_> {
-                        verify_child_dir(content_dir_fd.as_fd(), &verify_name, temp_identity)?;
-                        for (a, s) in &staged_components {
-                            s.verify_staged_bytes(Some(temp_dir_fd.as_fd()), a)?;
-                        }
-                        Ok((content_dir_fd, temp_dir_fd, staged_components))
-                    })
-                    .await
-                    .context("pre-probe staged component verification task failed")??;
+                let owned_staging = staging.take().context("staged runtime directory lost")?;
+                let (returned_content_fd, returned_temp_fd, returned_components, returned_staging) =
+                    MachinePluginStore::run_with_lifecycle(
+                        lifecycle,
+                        "pre-probe staged component verification task failed",
+                        move || {
+                            verify_child_dir(content_dir_fd.as_fd(), &verify_name, temp_identity)?;
+                            for (a, s) in &staged_components {
+                                s.verify_staged_bytes(Some(temp_dir_fd.as_fd()), a)?;
+                            }
+                            Ok((
+                                content_dir_fd,
+                                temp_dir_fd,
+                                staged_components,
+                                owned_staging,
+                            ))
+                        },
+                    )
+                    .await?;
                 content_dir_fd = returned_content_fd;
                 temp_dir_fd = returned_temp_fd;
                 staged_components = returned_components;
+                staging = Some(returned_staging);
             }
             let (artifact, staged) = &staged_components[idx];
             let confirmed = guard
@@ -403,7 +427,7 @@ pub(super) async fn prepare_provider_runtime(
         temp_name,
         temp_dir_fd,
         temp_identity,
-        staging,
+        staging: staging.context("staged runtime directory lost")?,
         components,
         all_probes_exit_confirmed,
     }))
@@ -417,9 +441,18 @@ pub(super) async fn stage_provider_runtime(
     cache_state: Option<&Path>,
     sealed_probe: bool,
 ) -> Result<InstalledRuntimeMetadata> {
-    let prepared =
-        prepare_provider_runtime(content, artifacts, guard, cache_state, sealed_probe).await?;
-    prepared.finalize(guard).await
+    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let mut lifecycle = Some(lock.lock_owned().await);
+    let prepared = prepare_provider_runtime(
+        content,
+        artifacts,
+        guard,
+        cache_state,
+        sealed_probe,
+        &mut lifecycle,
+    )
+    .await?;
+    prepared.finalize(guard, &mut lifecycle).await
 }
 
 #[cfg(test)]
@@ -432,6 +465,9 @@ pub(super) async fn stage_runtime_component(
     generation_content: Option<&Path>,
     sealed_probe: bool,
 ) -> Result<StagedRuntimeComponent> {
+    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let mut lifecycle = Some(lock.lock_owned().await);
+    let mut staging = None;
     let staged = materialize_runtime_component(
         client,
         runtime_root,
@@ -439,6 +475,8 @@ pub(super) async fn stage_runtime_component(
         guard,
         cache_state,
         generation_content,
+        &mut lifecycle,
+        &mut staging,
     )
     .await?;
     let probe_started = Instant::now();
@@ -457,6 +495,7 @@ pub(super) async fn stage_runtime_component(
     Ok(staged)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn materialize_runtime_component(
     client: &reqwest::Client,
     runtime_root: &Path,
@@ -464,6 +503,8 @@ async fn materialize_runtime_component(
     guard: &InstallGuard<'_>,
     cache_state: Option<&Path>,
     generation_content: Option<&Path>,
+    lifecycle: &mut Option<LifecycleGuard>,
+    staging: &mut Option<artifact_cache::StagedRuntimeDirectory>,
 ) -> Result<StagedRuntimeComponent> {
     guard.check()?;
     let url = reqwest::Url::parse(&artifact.artifact_url)?;
@@ -476,8 +517,10 @@ async fn materialize_runtime_component(
     let lookup_cache_state = cache_state.map(Path::to_owned);
     let lookup_generation = generation_content.map(Path::to_owned);
     let lookup_digest = artifact.artifact_digest.clone();
-    let local_bytes =
-        tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, &'static str)>> {
+    let local_bytes = MachinePluginStore::run_with_lifecycle(
+        lifecycle,
+        "Provider runtime cache read task failed",
+        move || {
             if let Some(bytes) = lookup_cache_state
                 .as_deref()
                 .map(|state| artifact_cache::read(state, &lookup_digest))
@@ -493,9 +536,9 @@ async fn materialize_runtime_component(
                 return Ok(Some((bytes, "retained_generation")));
             }
             Ok(None)
-        })
-        .await
-        .context("Provider runtime cache read task failed")??;
+        },
+    )
+    .await?;
     let (bytes, source) = match local_bytes {
         Some(found) => found,
         None => (
@@ -511,19 +554,25 @@ async fn materialize_runtime_component(
     let runtime_root = runtime_root.to_owned();
     let artifact = artifact.clone();
     let cache_state = cache_state.map(Path::to_owned);
-    let staged = tokio::task::spawn_blocking(move || {
-        unpack_runtime_component_blocking(
-            &runtime_root,
-            &artifact,
-            &lease_check,
-            cache_state.as_deref(),
-            bytes,
-            source,
-            fetch_ms,
-        )
-    })
-    .await
-    .context("Provider runtime materialization task failed")??;
+    let owned_staging = staging.take();
+    let (staged, returned_staging) = MachinePluginStore::run_with_lifecycle(
+        lifecycle,
+        "Provider runtime materialization task failed",
+        move || {
+            let staged = unpack_runtime_component_blocking(
+                &runtime_root,
+                &artifact,
+                &lease_check,
+                cache_state.as_deref(),
+                bytes,
+                source,
+                fetch_ms,
+            )?;
+            Ok((staged, owned_staging))
+        },
+    )
+    .await?;
+    *staging = returned_staging;
     guard.check()?;
     Ok(staged)
 }
@@ -790,15 +839,26 @@ mod tests {
         // FD to the probed inode cannot alter the published binary.
         let gen3 = state.path().join("gen3/content");
         fs::create_dir_all(&gen3).unwrap();
-        let mut prepared =
-            prepare_provider_runtime(&gen3, &artifacts, &guard, Some(state.path()), true)
-                .await
-                .unwrap();
+        let mut lifecycle = Some(
+            std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                .lock_owned()
+                .await,
+        );
+        let mut prepared = prepare_provider_runtime(
+            &gen3,
+            &artifacts,
+            &guard,
+            Some(state.path()),
+            true,
+            &mut lifecycle,
+        )
+        .await
+        .unwrap();
         let probed_bin = prepared.command_path("node").unwrap();
         let probed_ino = probed_bin.symlink_metadata().unwrap().ino();
         let mut leaked_fd = OpenOptions::new().write(true).open(&probed_bin).unwrap();
         prepared.record_outer_probe_exit_confirmed(false);
-        prepared.finalize(&guard).await.unwrap();
+        prepared.finalize(&guard, &mut lifecycle).await.unwrap();
 
         leaked_fd.write_all(b"post-finalize-tamper").unwrap();
         leaked_fd.sync_all().unwrap();
@@ -832,14 +892,25 @@ mod tests {
         let guard = InstallGuard::Legacy;
         let generation = state.path().join("gen/content");
         fs::create_dir_all(&generation).unwrap();
-        let prepared =
-            prepare_provider_runtime(&generation, &artifacts, &guard, Some(state.path()), true)
-                .await
-                .unwrap();
+        let mut lifecycle = Some(
+            std::sync::Arc::new(tokio::sync::Mutex::new(()))
+                .lock_owned()
+                .await,
+        );
+        let prepared = prepare_provider_runtime(
+            &generation,
+            &artifacts,
+            &guard,
+            Some(state.path()),
+            true,
+            &mut lifecycle,
+        )
+        .await
+        .unwrap();
         let staged_bin = prepared.command_path("node").unwrap();
         // Simulate an outer probe tampering with the private staged binary.
         fs::write(&staged_bin, b"#!/bin/sh\necho tampered\n").unwrap();
-        let err = prepared.finalize(&guard).await.unwrap_err();
+        let err = prepared.finalize(&guard, &mut lifecycle).await.unwrap_err();
         assert!(
             err.to_string().contains("changed signed artifact bytes"),
             "unexpected error: {err:#}"

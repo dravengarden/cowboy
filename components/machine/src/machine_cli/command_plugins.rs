@@ -82,33 +82,14 @@ pub(super) fn handle(
             });
         }
         MachineCommand::RefreshInventory { request_id } => {
-            tokio::spawn(async move {
-                let components =
-                    collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                let workspace_result = workspaces.reload();
-                if workspace_result.is_ok() {
-                    let (snapshot, workspace_identities) = workspaces.advertisement();
-                    let _ = events.send(MachineEvent::Inventory {
-                        components,
-                        workspace_identities: Some(workspace_identities),
-                        workspaces: Some(snapshot.workspaces.clone()),
-                        workspace_revision: snapshot.revision.clone(),
-                        workspace_owner: Some(snapshot.owner),
-                        observed_at_ms: unix_ms(),
-                    });
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins: providers.inventory_async().await.unwrap_or_default(),
-                        observed_at_ms: unix_ms(),
-                    });
-                }
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted: workspace_result.is_ok(),
-                    detail: workspace_result
-                        .err()
-                        .map(|error| format!("workspace configuration reload failed: {error:#}")),
-                });
-            });
+            tokio::spawn(refresh_inventory_task(
+                request_id,
+                components,
+                zed_adapter_socket,
+                workspaces,
+                providers,
+                events,
+            ));
         }
         MachineCommand::ObservePluginInstallation { request_id, query } => {
             tokio::spawn(async move {
@@ -184,10 +165,7 @@ pub(super) fn handle(
                 let result = providers.uninstall(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory_async().await.unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
+                publish_plugin_inventory_if_ok(&providers, &events, "after uninstall").await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -204,10 +182,7 @@ pub(super) fn handle(
                 let result = providers.reactivate(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory_async().await.unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
+                publish_plugin_inventory_if_ok(&providers, &events, "after reactivation").await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -266,5 +241,82 @@ pub(super) fn handle(
             command = ?std::mem::discriminant(&other),
             "machine command routed to the wrong family (command_plugins)"
         ),
+    }
+}
+
+async fn refresh_inventory_task(
+    request_id: String,
+    components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
+    workspaces: Arc<WorkspaceConfig>,
+    providers: Arc<MachinePluginStore>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let components = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+    let workspace_result = workspaces.reload();
+    let mut inventory_error = None;
+    if workspace_result.is_ok() {
+        let (snapshot, workspace_identities) = workspaces.advertisement();
+        let _ = events.send(MachineEvent::Inventory {
+            components,
+            workspace_identities: Some(workspace_identities),
+            workspaces: Some(snapshot.workspaces.clone()),
+            workspace_revision: snapshot.revision.clone(),
+            workspace_owner: Some(snapshot.owner),
+            observed_at_ms: unix_ms(),
+        });
+        match providers.inventory_async().await {
+            Ok(plugins) => {
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins,
+                    observed_at_ms: unix_ms(),
+                });
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "Plugin inventory refresh failed; preserving previous observed Plugins"
+                );
+                inventory_error = Some(error);
+            }
+        }
+    }
+    let (accepted, detail) = match (workspace_result, inventory_error) {
+        (Err(error), _) => (
+            false,
+            Some(format!("workspace configuration reload failed: {error:#}")),
+        ),
+        (Ok(_), Some(error)) => (
+            false,
+            Some(format!("Plugin inventory refresh failed: {error:#}")),
+        ),
+        (Ok(_), None) => (true, None),
+    };
+    let _ = events.send(MachineEvent::CommandResult {
+        request_id,
+        accepted,
+        detail,
+    });
+}
+
+async fn publish_plugin_inventory_if_ok(
+    providers: &MachinePluginStore,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    context: &str,
+) {
+    match providers.inventory_async().await {
+        Ok(plugins) => {
+            let _ = events.send(MachineEvent::PluginInventory {
+                plugins,
+                observed_at_ms: unix_ms(),
+            });
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                context,
+                "Plugin inventory refresh failed; preserving previous observed Plugins"
+            );
+        }
     }
 }

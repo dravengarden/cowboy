@@ -1857,10 +1857,7 @@ async fn publish_provider_auth_observations(
     force_inventory: bool,
     protocol: u16,
 ) {
-    let store = Arc::clone(providers);
-    let Ok(mut observations) =
-        tokio::task::spawn_blocking(move || store.auth_refresh_observations()).await
-    else {
+    let Ok(mut observations) = providers.auth_refresh_observations_async().await else {
         return;
     };
     if !force_inventory

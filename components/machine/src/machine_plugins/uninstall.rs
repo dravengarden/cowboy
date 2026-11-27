@@ -17,12 +17,15 @@ impl MachinePluginStore {
         &self,
         plugin_id: &str,
         authority: &machine_browser::DrainAuthority<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
         let store = self.clone();
         let pid = plugin_id.to_owned();
-        let is_browser = tokio::task::spawn_blocking(move || store.is_browser_plugin(&pid))
-            .await
-            .context("browser plugin check task failed")?;
+        let is_browser =
+            Self::run_with_lifecycle(lifecycle, "browser plugin check task failed", move || {
+                store.is_browser_plugin_checked(&pid)
+            })
+            .await?;
         if !is_browser {
             return Ok(None);
         }
@@ -32,7 +35,6 @@ impl MachinePluginStore {
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
         else {
-            // No browser manager runs in this process: nothing to drain.
             return Ok(None);
         };
         drain
@@ -51,29 +53,48 @@ impl MachinePluginStore {
         &self,
         plugin_id: &str,
         expected_digest: &str,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
         let store = self.clone();
         let pid = plugin_id.to_owned();
-        if let Some(active) = tokio::task::spawn_blocking(move || store.inventory_one(&pid))
-            .await
-            .context("uninstall inventory check task failed")??
+        if let Some(active) = Self::run_with_lifecycle(
+            lifecycle,
+            "uninstall inventory check task failed",
+            move || store.inventory_one(&pid),
+        )
+        .await?
         {
             ensure!(
                 active.generation_digest == expected_digest,
                 "active Plugin generation changed; refresh the uninstall plan"
             );
         }
-        self.drain_browsers(plugin_id, &|| Ok(())).await
+        self.drain_browsers(plugin_id, &|| Ok(()), lifecycle).await
     }
 
-    /// Whether `plugin_id`'s active installation is a Machine browser.
+    /// Strictly classify whether an active Plugin is a Machine browser from its
+    /// signed descriptor; unreadable or inconsistent active slots fail closed.
+    pub(super) fn is_browser_plugin_checked(&self, plugin_id: &str) -> Result<bool> {
+        validate_plugin_id(plugin_id)?;
+        let active = self.plugin_root(plugin_id).join("active");
+        let Some(generation) = read_link_name(&active) else {
+            ensure!(
+                active.symlink_metadata().is_err(),
+                "invalid active link for Plugin {plugin_id}"
+            );
+            return Ok(false);
+        };
+        let gen_dir = self
+            .plugin_root(plugin_id)
+            .join("generations")
+            .join(&generation);
+        let kind = retirement::classify_generation_kind(plugin_id, &generation, &gen_dir)
+            .with_context(|| format!("cannot classify active generation for Plugin {plugin_id}"))?;
+        Ok(kind == cowboy_plugin_sdk::PluginKind::MachineBrowser)
+    }
+
     pub(super) fn is_browser_plugin(&self, plugin_id: &str) -> bool {
-        self.inventory_one(plugin_id)
-            .ok()
-            .flatten()
-            .is_some_and(|installed| {
-                installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser
-            })
+        self.is_browser_plugin_checked(plugin_id).unwrap_or(false)
     }
 
     pub(super) fn uninstall_inner(

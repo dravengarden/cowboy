@@ -88,7 +88,14 @@ async fn sealed_continuations_recheck_exact_lease_and_envelope_before_any_effect
         pending: Box::new(pending),
         lease: &wrong_lease,
     });
-    assert!(store.install_inner(&desired, &mut guard).await.is_err());
+    let mut lifecycle = Some(store.lock_lifecycle_owned().await);
+    let verified = store.verified_install_package(&desired).unwrap();
+    assert!(
+        store
+            .install_inner(&desired, verified, &mut guard, &mut lifecycle)
+            .await
+            .is_err()
+    );
     let correct_lease = scope.installation(&step).unwrap();
     let InstallGuard::Durable(ref mut admission) = guard else {
         panic!();
@@ -96,10 +103,22 @@ async fn sealed_continuations_recheck_exact_lease_and_envelope_before_any_effect
     admission.lease = &correct_lease;
     let mut changed = desired.clone();
     changed.package_base64.push('A');
-    assert!(store.install_inner(&changed, &mut guard).await.is_err());
+    let verified = store.verified_install_package(&desired).unwrap();
     assert!(
         store
-            .install_inner(&desired, &mut InstallGuard::Legacy)
+            .install_inner(&changed, verified, &mut guard, &mut lifecycle)
+            .await
+            .is_err()
+    );
+    let verified = store.verified_install_package(&desired).unwrap();
+    assert!(
+        store
+            .install_inner(
+                &desired,
+                verified,
+                &mut InstallGuard::Legacy,
+                &mut lifecycle
+            )
             .await
             .is_err()
     );

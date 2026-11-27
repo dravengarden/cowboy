@@ -419,7 +419,7 @@ impl MachinePluginStore {
         machine: &str,
     ) -> crate::machine_protocol::plugin_recovery::RecoveryObservation {
         use crate::machine_protocol::plugin_recovery::{RecoveryObservation, RecoverySnapshot};
-        let _lifecycle = self.lifecycle.lock().await;
+        let lifecycle = self.lock_lifecycle_owned().await;
         let Ok(request_digest) = step.request_digest() else {
             return RecoveryObservation::Unavailable {
                 reason: StepUnavailable::InvalidRequest,
@@ -433,6 +433,7 @@ impl MachinePluginStore {
         let store = self.clone();
         let step_owned = step.clone();
         match tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
             let receipt = match store.operations.query(&step_owned) {
                 StepLookup::Found { receipt } => Some(receipt),
                 StepLookup::NotFound {} => None,
@@ -469,6 +470,7 @@ impl MachinePluginStore {
         active_digest(&self.plugin_root(plugin))
     }
 
+    #[allow(clippy::too_many_lines)] // One fenced durable uninstall transaction.
     pub async fn uninstall_step(
         &self,
         step: &UninstallStep,
@@ -477,42 +479,58 @@ impl MachinePluginStore {
         admission_enabled: bool,
         access: UninstallAccess<'_>,
     ) -> StepObservation {
-        let _lifecycle = self.lifecycle.lock().await;
-        // A browser Plugin's instances are drained (and their exit confirmed)
-        // before its generation is unlinked; an unconfirmed instance leaves
-        // the step pending rather than acknowledged. Only a step the journal
-        // would execute now (owner, lease, installation CAS, slot fences and
-        // the exact target all hold) may stop browsers, and the lease is
-        // re-checked before every individual stop. The drain is idempotent
-        // (it stops only what still runs) and needs no journal entry of its
-        // own: it changes no Plugin state, and a hibernated browser reopens.
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         let should_drain = match access {
             UninstallAccess::Execute(lease)
-                if service == Some(step.service_id.as_str()) && machine == step.machine_id =>
+                if step.validate().is_ok()
+                    && service == Some(step.service_id.as_str())
+                    && machine == step.machine_id =>
             {
                 let store = self.clone();
                 let step_owned = step.clone();
                 let lease_owned = lease.clone_lease();
-                tokio::task::spawn_blocking(move || {
-                    store.is_browser_plugin(&step_owned.plugin_id)
-                        && store.uninstall_drain_authorized(
+                match Self::run_with_lifecycle(
+                    &mut lifecycle,
+                    "browser uninstall preflight task failed",
+                    move || {
+                        if !store.uninstall_drain_authorized(
                             &step_owned,
                             admission_enabled,
                             &lease_owned,
-                        )
-                })
+                        ) {
+                            return Ok(false);
+                        }
+                        store.is_browser_plugin_checked(&step_owned.plugin_id)
+                    },
+                )
                 .await
-                .unwrap_or(false)
+                {
+                    Ok(decision) => decision,
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %format!("{error:#}"),
+                            plugin = %step.plugin_id,
+                            "uninstall browser drain classification failed; refusing removal"
+                        );
+                        return StepObservation {
+                            admission_enabled: admission_enabled
+                                && service.is_some()
+                                && self.operations.installations.admits(step),
+                            result: unavailable(StepUnavailable::Storage),
+                        };
+                    }
+                }
             }
             _ => false,
         };
-        let _drained = match access {
+        let drained = match access {
             UninstallAccess::Execute(lease) if should_drain => {
                 let authority = || lease.before_effect();
-                match self.drain_browsers(&step.plugin_id, &authority).await {
+                match self
+                    .drain_browsers(&step.plugin_id, &authority, &mut lifecycle)
+                    .await
+                {
                     Ok(hold) => hold,
-                    // A lease that ended meanwhile is answered by execution
-                    // below exactly as without a drain.
                     Err(error) if lease.before_effect().is_err() => {
                         tracing::warn!(error = %format!("{error:#}"), plugin = %step.plugin_id, "browser drain stopped: uninstall lease ended");
                         None
@@ -540,9 +558,23 @@ impl MachinePluginStore {
                 UninstallAccess::Observe => None,
                 UninstallAccess::Execute(lease) => Some(lease.clone_lease()),
             };
-            tokio::task::spawn_blocking(move || match cloned_lease {
-                None => store.uninstall_step_preflight(&step_owned),
-                Some(lease) => store.execute_uninstall_step(&step_owned, admission_enabled, &lease),
+            let Some(owned_lifecycle) = lifecycle.take() else {
+                return StepObservation {
+                    admission_enabled: admission_enabled
+                        && service.is_some()
+                        && self.operations.installations.admits(step),
+                    result: unavailable(StepUnavailable::Storage),
+                };
+            };
+            tokio::task::spawn_blocking(move || {
+                let _lifecycle = owned_lifecycle;
+                let _drained = drained;
+                match cloned_lease {
+                    None => store.uninstall_step_preflight(&step_owned),
+                    Some(lease) => {
+                        store.execute_uninstall_step(&step_owned, admission_enabled, &lease)
+                    }
+                }
             })
             .await
             .unwrap_or_else(|_| unavailable(StepUnavailable::Storage))

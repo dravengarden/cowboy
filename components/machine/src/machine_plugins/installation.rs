@@ -71,53 +71,57 @@ impl InstallGuard<'_> {
     /// Flush regular files and directory entries of the staged, signed runtime
     /// before publishing activation. Archive extraction alone does not fsync
     /// payload bytes. Never follow archive symlinks out of this generation.
-    pub(super) async fn flush_staging(&self, content: &Path) -> Result<()> {
+    pub(super) async fn flush_staging(
+        &self,
+        content: &Path,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
         if matches!(self, Self::Legacy) {
             return Ok(());
         }
         self.check()?;
         let content = content.to_owned();
         let lease_check = self.lease_check();
-        // Await the blocking task directly (never cancel via timeout) so no
-        // detached filesystem walk outlives the store's lifecycle lock; lease
-        // expiry still aborts promptly at each entry via `lease_check`.
-        tokio::task::spawn_blocking(move || {
-            let mut pending = vec![content];
-            let mut entries = 0_u64;
-            while let Some(path) = pending.pop() {
-                lease_check.check()?;
-                entries += 1;
-                ensure!(
-                    entries <= 1_000_000,
-                    "staged installation exceeds flush limit"
-                );
-                let metadata = path.symlink_metadata()?;
-                if metadata.file_type().is_symlink() {
-                    continue;
-                }
-                ensure!(
-                    metadata.is_file() || metadata.is_dir(),
-                    "invalid staged installation entry"
-                );
-                let file = OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                    .open(&path)?;
-                if metadata.is_dir() {
-                    for entry in fs::read_dir(&path)? {
-                        ensure!(
-                            pending.len() < 1_000_000,
-                            "staged installation exceeds flush limit"
-                        );
-                        pending.push(entry?.path());
+        MachinePluginStore::run_with_lifecycle(
+            lifecycle,
+            "staged installation flush task failed",
+            move || {
+                let mut pending = vec![content];
+                let mut entries = 0_u64;
+                while let Some(path) = pending.pop() {
+                    lease_check.check()?;
+                    entries += 1;
+                    ensure!(
+                        entries <= 1_000_000,
+                        "staged installation exceeds flush limit"
+                    );
+                    let metadata = path.symlink_metadata()?;
+                    if metadata.file_type().is_symlink() {
+                        continue;
                     }
+                    ensure!(
+                        metadata.is_file() || metadata.is_dir(),
+                        "invalid staged installation entry"
+                    );
+                    let file = OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                        .open(&path)?;
+                    if metadata.is_dir() {
+                        for entry in fs::read_dir(&path)? {
+                            ensure!(
+                                pending.len() < 1_000_000,
+                                "staged installation exceeds flush limit"
+                            );
+                            pending.push(entry?.path());
+                        }
+                    }
+                    file.sync_all()?;
                 }
-                file.sync_all()?;
-            }
-            lease_check.check()
-        })
-        .await
-        .context("staged installation flush task failed")??;
+                lease_check.check()
+            },
+        )
+        .await?;
         self.check()
     }
 
@@ -165,14 +169,21 @@ impl InstallGuard<'_> {
         self.check()
     }
 
-    pub(super) async fn before_activation(&mut self, store: &MachinePluginStore) -> Result<()> {
+    pub(super) async fn before_activation(
+        &mut self,
+        store: &MachinePluginStore,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
         self.check()?;
         if let Self::Durable(InstallAdmission { pending, .. }) = self {
             let step = pending.receipt().step.clone();
             let store = store.clone();
-            let target = tokio::task::spawn_blocking(move || store.install_target(&step.plugin_id))
-                .await
-                .context("installation target check task failed")??;
+            let target = MachinePluginStore::run_with_lifecycle(
+                lifecycle,
+                "installation target check task failed",
+                move || store.install_target(&step.plugin_id),
+            )
+            .await?;
             self.check()?;
             ensure!(
                 target == step.expected,
@@ -275,12 +286,13 @@ impl MachinePluginStore {
         machine: &str,
         admitted: bool,
     ) -> InstallTargetObservation {
-        let _lifecycle = self.lifecycle.lock().await;
+        let lifecycle = self.lock_lifecycle_owned().await;
         let store = self.clone();
         let query = query.clone();
         let service = service.map(str::to_owned);
         let machine = machine.to_owned();
         tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
             let result = (|| {
                 let query_digest = query
                     .digest()
@@ -318,13 +330,14 @@ impl MachinePluginStore {
         machine: &str,
         admitted: bool,
     ) -> InstallObservation {
-        let _lifecycle = self.lifecycle.lock().await;
+        let lifecycle = self.lock_lifecycle_owned().await;
         let store = self.clone();
         let step = step.clone();
         let service = service.map(str::to_owned);
         let machine = machine.to_owned();
         let admission_enabled = service.is_some() && store.install_admission(admitted);
         let result = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
             if step.validate().is_err() {
                 unavailable(InstallUnavailable::InvalidRequest)
             } else if service.as_deref() != Some(step.service_id.as_str())
@@ -368,23 +381,29 @@ impl MachinePluginStore {
         lease: &InstallationLease,
         admitted: bool,
     ) -> InstallObservation {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         let admission_enabled = self.install_admission(admitted);
         let result = if !step.matches_envelope(desired) || !lease.matches(step) {
             unavailable(InstallUnavailable::InvalidRequest)
         } else {
             let store = self.clone();
             let preflight_step = step.clone();
-            let preflight =
-                tokio::task::spawn_blocking(move || store.installation_preflight(&preflight_step))
-                    .await
-                    .unwrap_or_else(|_| unavailable(InstallUnavailable::Storage));
+            let preflight = Self::run_with_lifecycle(
+                &mut lifecycle,
+                "installation preflight task failed",
+                move || Ok(store.installation_preflight(&preflight_step)),
+            )
+            .await
+            .unwrap_or_else(|_| unavailable(InstallUnavailable::Storage));
             match preflight {
                 InstallLookup::NotFound {} if !admission_enabled => {
                     unavailable(InstallUnavailable::ReaderOnly)
                 }
-                InstallLookup::NotFound {} => self.execute_installation(step, desired, lease).await,
-                found => found, // Even an expired duplicate is historical evidence, never replay.
+                InstallLookup::NotFound {} => {
+                    self.execute_installation(step, desired, lease, &mut lifecycle)
+                        .await
+                }
+                found => found,
             }
         };
         InstallObservation {
@@ -398,36 +417,457 @@ impl MachinePluginStore {
         step: &InstallStep,
         desired: &DesiredPlugin,
         lease: &InstallationLease,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> InstallLookup {
-        // Validate the complete signed package before admitting storage/effects.
-        if lease.check().is_err() {
-            return unavailable(InstallUnavailable::WrongOwner);
+        enum PrepareDecision {
+            Ready(Box<VerifiedInstallPackage>, Box<PendingAttempt>),
+            Rejected(InstallUnavailable),
         }
         let store = self.clone();
-        let desired_check = desired.clone();
-        let verified =
-            tokio::task::spawn_blocking(move || store.verified_install_package(&desired_check))
-                .await;
-        if !matches!(verified, Ok(Ok(_))) {
-            return unavailable(InstallUnavailable::InvalidRequest);
-        }
-        let journal = &self.operations.install_attempts;
-        if !journal.has_capacity() {
-            return unavailable(InstallUnavailable::Capacity);
-        }
-        let Ok(pending) = journal.begin(step) else {
-            return unavailable(InstallUnavailable::Storage);
+        let desired_owned = desired.clone();
+        let step_owned = step.clone();
+        let lease_owned = lease.clone_lease();
+        let prepared = Self::run_with_lifecycle(
+            lifecycle,
+            "installation preparation task failed",
+            move || {
+                if lease_owned.check().is_err() {
+                    return Ok(PrepareDecision::Rejected(InstallUnavailable::WrongOwner));
+                }
+                let Ok(verified) = store.verified_install_package(&desired_owned) else {
+                    return Ok(PrepareDecision::Rejected(
+                        InstallUnavailable::InvalidRequest,
+                    ));
+                };
+                if lease_owned.check().is_err() {
+                    return Ok(PrepareDecision::Rejected(InstallUnavailable::WrongOwner));
+                }
+                let journal = &store.operations.install_attempts;
+                if !journal.has_capacity() {
+                    return Ok(PrepareDecision::Rejected(InstallUnavailable::Capacity));
+                }
+                let Ok(pending) = journal.begin(&step_owned) else {
+                    return Ok(PrepareDecision::Rejected(InstallUnavailable::Storage));
+                };
+                Ok(PrepareDecision::Ready(
+                    Box::new(verified),
+                    Box::new(pending),
+                ))
+            },
+        )
+        .await;
+        let (verified, pending) = match prepared {
+            Ok(PrepareDecision::Ready(verified, pending)) => (*verified, pending),
+            Ok(PrepareDecision::Rejected(reason)) => return unavailable(reason),
+            Err(_) => return unavailable(InstallUnavailable::Storage),
         };
+        let journal = &self.operations.install_attempts;
         let mut guard = InstallGuard::Durable(InstallAdmission {
             journal,
-            pending: Box::new(pending),
+            pending,
             lease,
         });
-        let result = self.install_inner(desired, &mut guard).await;
+        let result = self
+            .install_inner(desired, verified, &mut guard, lifecycle)
+            .await;
         if guard.finish(&result).is_err() {
             return unavailable(InstallUnavailable::Storage);
         }
         journal.query(step)
+    }
+    #[allow(clippy::too_many_lines)] // One fenced Agent Provider install flow.
+    pub(super) async fn install_agent_plugin(
+        &self,
+        plugin_package: &PluginPackage,
+        desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
+        guard: &mut InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<PluginInventory> {
+        let package = plugin_package
+            .agent_provider()
+            .context("Machine Agent installer received a non-Agent Plugin")?
+            .clone();
+        let provider_release = desired.release.agent_provider_binding(plugin_package)?;
+        let payload = matching_payload(&package, &self.platform, &self.architecture)?;
+        let runtime_artifacts =
+            matching_runtime_artifacts(&provider_release, &self.platform, &self.architecture)?;
+        let plugin_root = self.plugin_root(&package.manifest.id);
+        let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
+        let generation = plugin_root.join("generations").join(&generation_name);
+        let content = generation.join("content");
+        let (auth_envelope, prepared_auth) = self
+            .prestage_agent_generation_async(
+                &package,
+                plugin_package,
+                desired,
+                host_bundle,
+                host_bundle_bytes,
+                &generation,
+                &content,
+                guard,
+                lifecycle,
+            )
+            .await?;
+
+        let started = Instant::now();
+        let mut prepared = runtime_staging::prepare_provider_runtime(
+            &content,
+            runtime_artifacts,
+            guard,
+            self.root.parent(),
+            account_sandbox::sandboxed(&package),
+            lifecycle,
+        )
+        .await?;
+        let runtime_ms = started.elapsed().as_millis();
+        let probe_started = Instant::now();
+        if !prepared.is_already_installed() {
+            let launch_command = prepared.command_path(&payload.launch_command)?;
+            prepared = prepared.verify_before_outer_probe(lifecycle).await?;
+            guard.check()?;
+            let exit_confirmed = guard
+                .bounded(probe_provider_runtime(
+                    &package.manifest.runtime,
+                    &launch_command,
+                ))
+                .await?;
+            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
+        }
+        let probe_ms = probe_started.elapsed().as_millis();
+        let _runtime = prepared.finalize(guard, lifecycle).await?;
+        let flush_started = Instant::now();
+        guard.flush_staging(&content, lifecycle).await?;
+        tracing::info!(
+            plugin_id = %package.manifest.id,
+            runtime_ms,
+            probe_ms,
+            flush_ms = flush_started.elapsed().as_millis(),
+            staging_ms = started.elapsed().as_millis(),
+            "Provider generation staged"
+        );
+        // Last, so a worker selected while staging is the one that is checked.
+        guard
+            .bounded(self.ensure_worker_reads_package(
+                &content.join("package.cowboy-provider"),
+                &package.manifest.runtime.required_capabilities,
+            ))
+            .await?;
+        guard.before_activation(self, lifecycle).await?;
+        let pending = self
+            .begin_installation_async(
+                &package.manifest.id,
+                &desired.release.artifact_digest,
+                guard,
+                lifecycle,
+            )
+            .await?;
+        let activation = {
+            let plugin_root_for_activate = plugin_root.clone();
+            let generation_name_for_activate = generation_name.clone();
+            let lease_check = guard.lease_check();
+            Self::run_with_lifecycle(lifecycle, "Provider activation task failed", move || {
+                lease_check.check()?;
+                Self::activate(&plugin_root_for_activate, &generation_name_for_activate)
+            })
+            .await?
+        };
+        // A sealed Service replica may predate installation. Materialize it as
+        // part of activation so installation never asks for another login.
+        if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth) {
+            guard.phase(InstallPhase::ProjectingAuthentication)?;
+            self.commit_install_auth_async(
+                envelope,
+                &package,
+                prepared,
+                &plugin_root,
+                activation,
+                guard,
+                lifecycle,
+            )
+            .await?;
+        }
+        self.finish_installation_async(&package.manifest.id, pending, lifecycle)
+            .await?;
+        self.inventory_one_async(&package.manifest.id, lifecycle)
+            .await?
+            .context("activated Provider is missing from inventory")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_install_auth_async(
+        &self,
+        envelope: &SealedProviderAuth,
+        package: &ProviderPackage,
+        prepared: PreparedProviderAuth,
+        plugin_root: &Path,
+        activation: ProviderActivationSnapshot,
+        guard: &InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
+        let store = self.clone();
+        let envelope = envelope.clone();
+        let package = package.clone();
+        let plugin_root = plugin_root.to_owned();
+        let lease_check = guard.lease_check();
+        Self::run_with_lifecycle(
+            lifecycle,
+            "Provider authentication activation task failed",
+            move || -> Result<()> {
+                lease_check.check()?;
+                if let Err(error) = store.commit_prepared_auth(&envelope, Some(&package), prepared) {
+                    lease_check.check()?;
+                    if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation)
+                    {
+                        bail!(
+                            "Provider authentication activation failed: {error:#}; restoring the previous Provider generation also failed: {rollback_error:#}"
+                        );
+                    }
+                    return Err(error.context(
+                        "Provider authentication activation failed; previous generation restored",
+                    ));
+                }
+                Ok(())
+            },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prestage_agent_generation_async(
+        &self,
+        package: &ProviderPackage,
+        plugin_package: &PluginPackage,
+        desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
+        generation: &Path,
+        content: &Path,
+        guard: &InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<(Option<SealedProviderAuth>, Option<PreparedProviderAuth>)> {
+        let store = self.clone();
+        let package = package.clone();
+        let plugin_package = plugin_package.clone();
+        let desired = desired.clone();
+        let host_bundle = host_bundle.cloned();
+        let host_bundle_bytes = host_bundle_bytes.map(ToOwned::to_owned);
+        let generation = generation.to_owned();
+        let content = content.to_owned();
+        let lease_check = guard.lease_check();
+        Self::run_with_lifecycle(
+            lifecycle,
+            "Provider generation pre-staging task failed",
+            move || -> Result<_> {
+                lease_check.check()?;
+                let auth_envelope = store.latest_auth_envelope(&package.manifest.id)?;
+                let prepared_auth = auth_envelope
+                    .as_ref()
+                    .map(|envelope| store.prepare_auth_inner(envelope, Some(&package)))
+                    .transpose()?;
+                lease_check.check()?;
+                fs::create_dir_all(&content).with_context(|| {
+                    format!("creating Provider generation {}", generation.display())
+                })?;
+                fs::set_permissions(&generation, fs::Permissions::from_mode(0o700))?;
+                write_provider_generation_files(
+                    &content,
+                    &package,
+                    &plugin_package,
+                    &desired,
+                    host_bundle.as_ref(),
+                    host_bundle_bytes.as_deref(),
+                )?;
+                Ok((auth_envelope, prepared_auth))
+            },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced non-Agent Plugin install flow.
+    pub(super) async fn install_non_agent_plugin(
+        &self,
+        package: &PluginPackage,
+        desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
+        guard: &mut InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<PluginInventory> {
+        let artifacts = matching_plugin_runtime_artifacts(
+            &desired.release.runtime_artifacts,
+            &self.platform,
+            &self.architecture,
+        )?;
+        if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
+            ensure!(
+                artifacts.components.iter().any(|component| {
+                    component.kind == PluginComponentKind::CodeIntelligenceAdapter
+                }),
+                "code-intelligence Plugin has no adapter component"
+            );
+        }
+        let runtime_artifacts = provider_staging_projection(artifacts);
+        let plugin_root = self.plugin_root(&package.manifest.id);
+        let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
+        let generation = plugin_root.join("generations").join(&generation_name);
+        let content = generation.join("content");
+        self.prestage_non_agent_generation_async(
+            package,
+            desired,
+            host_bundle,
+            host_bundle_bytes,
+            &generation,
+            &content,
+            guard,
+            lifecycle,
+        )
+        .await?;
+        let mut prepared = runtime_staging::prepare_provider_runtime(
+            &content,
+            &runtime_artifacts,
+            guard,
+            self.root.parent(),
+            false,
+            lifecycle,
+        )
+        .await?;
+        if !prepared.is_already_installed() {
+            let (returned, exit_confirmed) = self
+                .probe_staged_code_runtime(
+                    package,
+                    &desired.release.artifact_digest,
+                    prepared,
+                    guard,
+                    lifecycle,
+                )
+                .await?;
+            prepared = returned;
+            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
+        }
+        prepared.finalize(guard, lifecycle).await?;
+        let inventory = PluginInventory {
+            plugin_id: package.manifest.id.clone(),
+            plugin_version: package.manifest.version.clone(),
+            plugin_kind: package.manifest.kind,
+            generation_digest: desired.release.artifact_digest.clone(),
+            installation_revision: None,
+            contract_fingerprint: package.contract_fingerprint.clone(),
+            state: PluginInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: None,
+            replica_state: ProviderReplicaState::Absent,
+            materialization_state: ProviderMaterializationState::NotInstalled,
+            detail: None,
+        };
+        {
+            let content_for_inv = content.clone();
+            let lease_check = guard.lease_check();
+            Self::run_with_lifecycle(
+                lifecycle,
+                "Plugin inventory staging task failed",
+                move || {
+                    lease_check.check()?;
+                    atomic_write(
+                        &content_for_inv.join("plugin-inventory.json"),
+                        &serde_json::to_vec(&inventory)?,
+                        0o600,
+                    )
+                },
+            )
+            .await?;
+        }
+        guard.flush_staging(&content, lifecycle).await?;
+        guard.before_activation(self, lifecycle).await?;
+        let pending = self
+            .begin_installation_async(
+                &package.manifest.id,
+                &desired.release.artifact_digest,
+                guard,
+                lifecycle,
+            )
+            .await?;
+        {
+            let store = self.clone();
+            let package_for_act = package.clone();
+            let plugin_root_for_act = plugin_root.clone();
+            let generation_name_for_act = generation_name.clone();
+            let lease_check = guard.lease_check();
+            Self::run_with_lifecycle(lifecycle, "Plugin activation task failed", move || {
+                lease_check.check()?;
+                if matches!(package_for_act.payload, PluginPayload::CodeIntelligence(_)) {
+                    store.activate_code_generation(&package_for_act, &generation_name_for_act)
+                } else {
+                    Self::activate(&plugin_root_for_act, &generation_name_for_act)?;
+                    Ok(())
+                }
+            })
+            .await?;
+        }
+        self.finish_installation_async(&package.manifest.id, pending, lifecycle)
+            .await?;
+        self.inventory_one_async(&package.manifest.id, lifecycle)
+            .await?
+            .context("activated Plugin is missing from inventory")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prestage_non_agent_generation_async(
+        &self,
+        package: &PluginPackage,
+        desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
+        generation: &Path,
+        content: &Path,
+        guard: &InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
+        let store = self.clone();
+        let package = package.clone();
+        let desired = desired.clone();
+        let host_bundle = host_bundle.cloned();
+        let host_bundle_bytes = host_bundle_bytes.map(ToOwned::to_owned);
+        let generation = generation.to_owned();
+        let content = content.to_owned();
+        let lease_check = guard.lease_check();
+        Self::run_with_lifecycle(
+            lifecycle,
+            "Plugin generation pre-staging task failed",
+            move || -> Result<()> {
+                lease_check.check()?;
+                store.validate_extension_dependencies(&package)?;
+                lease_check.check()?;
+                fs::create_dir_all(&content).with_context(|| {
+                    format!("creating Plugin generation {}", generation.display())
+                })?;
+                fs::set_permissions(&generation, fs::Permissions::from_mode(0o700))?;
+                atomic_write(
+                    &content.join("package.cowboy-plugin"),
+                    &package.canonical_bytes()?,
+                    0o600,
+                )?;
+                atomic_write(
+                    &content.join("plugin-release.json"),
+                    &serde_json::to_vec(&desired.release)?,
+                    0o600,
+                )?;
+                atomic_write(
+                    &content.join("publisher.pub"),
+                    desired.publisher_public_key.as_bytes(),
+                    0o600,
+                )?;
+                stage_plugin_host_bundle(
+                    &content,
+                    host_bundle.as_ref(),
+                    host_bundle_bytes.as_deref(),
+                )?;
+                Ok(())
+            },
+        )
+        .await
     }
 }
 

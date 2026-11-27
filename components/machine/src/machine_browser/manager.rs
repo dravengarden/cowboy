@@ -117,7 +117,7 @@ impl Drop for UplinkGuard {
 
 struct AccountSlot {
     /// Serializes lifecycle mutations and snapshots of one account.
-    lifecycle: tokio::sync::Mutex<()>,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
     instance: parking_lot::Mutex<Option<Arc<Instance>>>,
     /// How the account's last instance stopped. Written where `instance` is
     /// cleared and read with it, both under the `instance` lock, so a query
@@ -890,7 +890,7 @@ impl BrowserManager {
                 .entry(account_id.as_str().to_owned())
                 .or_insert_with(|| {
                     Arc::new(AccountSlot {
-                        lifecycle: tokio::sync::Mutex::new(()),
+                        lifecycle: Arc::new(tokio::sync::Mutex::new(())),
                         instance: parking_lot::Mutex::new(None),
                         last_stop: parking_lot::Mutex::new(None),
                         order: parking_lot::Mutex::new(None),

@@ -35,23 +35,25 @@ impl Descriptors {
         invocation: McpInvocation,
     ) -> Result<Value> {
         invocation.check()?;
-        let _lifecycle = tokio::select! {
+        let lifecycle = tokio::select! {
             biased;
             () = invocation.ended() => anyhow::bail!("MCP authorization ended"),
-            guard = store.lifecycle.lock() => guard,
+            guard = Arc::clone(&store.lifecycle).lock_owned() => guard,
         };
         let profile = invocation.profile();
-        let descriptor = {
+        let (descriptor, _lifecycle) = {
             let store = store.clone();
             let binding = profile.binding.clone();
             let epoch = profile.epoch.clone();
-            tokio::task::spawn_blocking(move || {
-                store
-                    .prepare_mcp_binding(&binding)?
-                    .native_descriptor(&epoch)
+            let (result, lifecycle) = tokio::task::spawn_blocking(move || {
+                let result = store
+                    .prepare_mcp_binding(&binding)
+                    .and_then(|prepared| prepared.native_descriptor(&epoch));
+                (result, lifecycle)
             })
             .await
-            .context("MCP native descriptor preparation task failed")??
+            .context("MCP native descriptor preparation task failed")?;
+            (result?, lifecycle)
         };
         let key = (profile.session_id.clone(), profile.binding.name.clone());
         let mut state = self.0.lock();

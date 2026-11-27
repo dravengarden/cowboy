@@ -25,6 +25,7 @@ const DEADLINE: Duration = Duration::from_secs(30);
 
 /// The Controller connection, receipt deadline and checked sidecar set one
 /// invocation was admitted under; nothing starts after either has passed.
+#[derive(Clone)]
 pub struct HostAdmission {
     connected: Arc<AtomicBool>,
     deadline: Instant,
@@ -237,23 +238,43 @@ impl MachinePluginStore {
         let guard = tokio::time::timeout(admission.remaining()?, scoped.native_observation_guard())
             .await
             .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
+        let lifecycle = tokio::time::timeout(admission.remaining()?, self.lock_lifecycle_owned())
+            .await
+            .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
         admission.remaining()?;
-        let participants = std::iter::once(request.plugin_id.as_str()).chain(
-            request
-                .sidecars
-                .iter()
-                .map(|sidecar| sidecar.plugin_id.as_str()),
-        );
-        for plugin in participants {
-            ensure!(
-                scoped.latest_auth_envelope(plugin)?.is_some_and(|replica| {
-                    replica.auth_generation == request.auth_generation
-                        && replica.action == ProviderAuthAction::Apply
-                }),
-                "portable_usage_replica_pending"
-            );
-        }
-        self.require_refresh_free(&request.plugin_id, &request.generation_digest)?;
+        let participants: Vec<String> = std::iter::once(request.plugin_id.clone())
+            .chain(
+                request
+                    .sidecars
+                    .iter()
+                    .map(|sidecar| sidecar.plugin_id.clone()),
+            )
+            .collect();
+        let store = self.clone();
+        let scoped_check = scoped.clone();
+        let plugin_id = request.plugin_id.clone();
+        let digest = request.generation_digest.clone();
+        let auth_generation = request.auth_generation;
+        let guard =
+            tokio::task::spawn_blocking(move || -> Result<tokio::sync::OwnedMutexGuard<()>> {
+                let _lifecycle = lifecycle;
+                for plugin in &participants {
+                    ensure!(
+                        scoped_check
+                            .latest_auth_envelope(plugin)?
+                            .is_some_and(|replica| {
+                                replica.auth_generation == auth_generation
+                                    && replica.action == ProviderAuthAction::Apply
+                            }),
+                        "portable_usage_replica_pending"
+                    );
+                }
+                store.require_refresh_free(&plugin_id, &digest)?;
+                Ok(guard)
+            })
+            .await
+            .context("portable_usage_collector_unavailable")??;
+        admission.remaining()?;
         Ok((scoped, guard))
     }
 
@@ -614,16 +635,15 @@ impl MachinePluginStore {
         account: ProviderAccountId,
         plugin: String,
     ) -> Result<(bool, bool)> {
+        let lifecycle = self.lock_lifecycle_owned().await;
         let observer = self.clone();
         tokio::task::spawn_blocking(move || {
-            // The observer is best effort (an unreadable directory reads as
-            // empty); this check is strict: the account's credential root and
-            // the Provider's session homes must enumerate, and one must exist.
+            let _lifecycle = lifecycle;
             let enumerable = fs::read_dir(observer.auth_watch_root()).is_ok()
                 && observer
                     .runtime_projection_generations(&plugin)
                     .is_ok_and(|homes| !homes.is_empty());
-            let observations = observer.auth_refresh_observations();
+            let observations = observer.auth_refresh_observations_locked();
             (
                 observations.candidates.iter().any(|candidate| {
                     candidate.account_id == account && candidate.provider_id == plugin

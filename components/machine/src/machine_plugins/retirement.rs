@@ -317,15 +317,18 @@ impl MachinePluginStore {
         referenced: &BTreeMap<String, BTreeSet<String>>,
         skip: &BTreeSet<String>,
     ) -> Result<Vec<crate::generation_retention::Outcome>> {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         let mut outcomes = Vec::new();
         if !self.root.exists() {
             return Ok(outcomes);
         }
         let root = self.root.clone();
-        let entries = tokio::task::spawn_blocking(move || read_store_plugin_dirs(&root))
-            .await
-            .context("uninstalled retention scan task failed")??;
+        let entries = Self::run_with_lifecycle(
+            &mut lifecycle,
+            "uninstalled retention scan task failed",
+            move || read_store_plugin_dirs(&root),
+        )
+        .await?;
         for (plugin_id, root) in entries {
             let generations = root.join("generations");
             if skip.contains(&plugin_id)
@@ -336,47 +339,52 @@ impl MachinePluginStore {
                 continue;
             }
             if root.join("active").symlink_metadata().is_ok() {
-                // Slot is active (possibly an excluded kind like Telemetry);
-                // finish any stranded tombstones without touching live gens.
                 let gens = generations.clone();
-                tokio::task::spawn_blocking(move || Self::sweep_existing_tombstones(&gens))
-                    .await
-                    .context("tombstone sweep task failed")??;
+                Self::run_with_lifecycle(
+                    &mut lifecycle,
+                    "tombstone sweep task failed",
+                    move || Self::sweep_existing_tombstones(&gens),
+                )
+                .await?;
                 continue;
             }
-            let mut keep: BTreeSet<String> = referenced
+            let keep: BTreeSet<String> = referenced
                 .get(&plugin_id)
                 .into_iter()
                 .flatten()
                 .map(|digest| digest.trim_start_matches("sha256:").to_owned())
                 .collect();
-            let mut retention = crate::generation_retention::Outcome {
+            let retention = crate::generation_retention::Outcome {
                 plugin_id: plugin_id.clone(),
                 ..crate::generation_retention::Outcome::default()
             };
-            let tombstones = self
+            let store = self.clone();
+            let pid = plugin_id.clone();
+            let gens_for_tombstone = generations.clone();
+            let guard = lifecycle
+                .take()
+                .context("Plugin store lifecycle lock lost")?;
+            let (tombstone_res, guard) = self
                 .code_runtimes
-                .with_generation_pins(&plugin_id, |code_pins| {
-                    let _profiles = self.auth_candidates.lock();
-                    keep.extend(self.retained_native_generations(&plugin_id)?);
-                    keep.extend(
-                        code_pins
-                            .iter()
-                            .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
+                .with_generation_pins(&plugin_id, move |code_pins| {
+                    let result = store.tombstone_non_browser_under_pins(
+                        &pid,
+                        &gens_for_tombstone,
+                        keep,
+                        code_pins,
+                        retention,
                     );
-                    self.tombstone_unkept_matching(
-                        &plugin_id,
-                        &generations,
-                        &keep,
-                        is_retainable_non_browser_kind,
-                        &mut retention,
-                    )
+                    Ok((result, guard))
                 })
                 .await?;
+            lifecycle = Some(guard);
+            let (tombstones, mut retention) = tombstone_res?;
             let root_for_remove = root.clone();
             let gens_for_remove = generations.clone();
-            let mut retention = tokio::task::spawn_blocking(
-                move || -> Result<crate::generation_retention::Outcome> {
+            let mut retention = Self::run_with_lifecycle(
+                &mut lifecycle,
+                "uninstalled retention removal task failed",
+                move || {
                     Self::remove_tombstones(&tombstones, &mut retention)?;
                     if read_link_name(&root_for_remove.join("rollback"))
                         .is_some_and(|name| !gens_for_remove.join(&name).exists())
@@ -386,8 +394,7 @@ impl MachinePluginStore {
                     Ok(retention)
                 },
             )
-            .await
-            .context("uninstalled retention removal task failed")??;
+            .await?;
             if !retention.retired.is_empty() {
                 retention.retained.sort();
                 retention.retired.sort();
@@ -396,13 +403,44 @@ impl MachinePluginStore {
         }
         let store = self.clone();
         let skip_owned = skip.clone();
+        let owned_lifecycle = lifecycle
+            .take()
+            .context("Plugin store lifecycle lock lost")?;
         let browser_outcomes = tokio::task::spawn_blocking(move || {
+            let _lifecycle = owned_lifecycle;
             store.retire_browser_and_cache_blocking(&skip_owned)
         })
         .await
         .context("browser and cache retention task failed")?;
         outcomes.extend(browser_outcomes);
         Ok(outcomes)
+    }
+
+    pub(super) fn tombstone_non_browser_under_pins(
+        &self,
+        plugin_id: &str,
+        generations: &Path,
+        mut keep: BTreeSet<String>,
+        code_pins: &BTreeSet<String>,
+        mut retention: crate::generation_retention::Outcome,
+    ) -> Result<(Vec<PathBuf>, crate::generation_retention::Outcome)> {
+        {
+            let _profiles = self.auth_candidates.lock();
+            keep.extend(self.retained_native_generations(plugin_id)?);
+        }
+        keep.extend(
+            code_pins
+                .iter()
+                .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
+        );
+        let tombstones = self.tombstone_unkept_matching(
+            plugin_id,
+            generations,
+            &keep,
+            is_retainable_non_browser_kind,
+            &mut retention,
+        )?;
+        Ok((tombstones, retention))
     }
 
     fn retire_browser_and_cache_blocking(

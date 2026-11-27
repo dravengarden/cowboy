@@ -11,7 +11,8 @@ use crate::workspace_extensions::{
     Extension, Failure, Identity, Operation, Request, Response, runtime,
 };
 
-static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static READS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
 
 #[derive(Debug, PartialEq, Eq)]
 struct InstalledDependency {
@@ -142,14 +143,14 @@ impl MachinePluginStore {
     }
 
     pub async fn extension_request(&self, request: Request) -> Response {
-        let Ok(_permit) = READS.try_acquire() else {
+        let Ok(permit) = std::sync::Arc::clone(&READS).try_acquire_owned() else {
             return Response::Unavailable {
                 code: Failure::Busy,
             };
         };
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            self.extension_request_inner(request),
+            self.extension_request_inner(request, permit),
         )
         .await
         {
@@ -187,18 +188,53 @@ impl MachinePluginStore {
         Ok(extensions)
     }
 
-    async fn extension_request_inner(&self, request: Request) -> Result<Response, Failure> {
+    async fn extension_contract_async(
+        &self,
+        identity: &Identity,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        error: Failure,
+    ) -> Result<
+        (
+            (
+                WorkspaceExtensionContract,
+                BTreeMap<String, InstalledDependency>,
+            ),
+            tokio::sync::OwnedSemaphorePermit,
+        ),
+        Failure,
+    > {
+        let lifecycle = std::sync::Arc::clone(&self.lifecycle).lock_owned().await;
+        let store = self.clone();
+        let id = identity.clone();
+        let (result, permit) = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            let result = store.extension_contract(&id).map_err(|_| error);
+            (result, permit)
+        })
+        .await
+        .map_err(|_| error)?;
+        Ok((result?, permit))
+    }
+
+    async fn extension_request_inner(
+        &self,
+        request: Request,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<Response, Failure> {
         let remotes = runtime::remotes(std::path::Path::new(&request.root))
             .await
             .unwrap_or_default();
         match request.operation {
             Operation::Inventory => {
-                let _guard = self.lifecycle.lock().await;
+                let lifecycle = std::sync::Arc::clone(&self.lifecycle).lock_owned().await;
                 let store = self.clone();
-                let extensions =
-                    tokio::task::spawn_blocking(move || store.inventory_extensions_blocking())
-                        .await
-                        .map_err(|_| Failure::ExtensionChanged)??;
+                let extensions = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    let _lifecycle = lifecycle;
+                    store.inventory_extensions_blocking()
+                })
+                .await
+                .map_err(|_| Failure::ExtensionChanged)??;
                 Ok(Response::Inventory {
                     extensions,
                     remotes,
@@ -218,11 +254,9 @@ impl MachinePluginStore {
                     .into_iter()
                     .find(|r| r.name == remote)
                     .ok_or(Failure::RepositoryUnavailable)?;
-                let (contract, dependencies) = {
-                    let _guard = self.lifecycle.lock().await;
-                    self.extension_contract(&identity)
-                        .map_err(|_| Failure::DependencyUnavailable)?
-                };
+                let ((contract, dependencies), permit) = self
+                    .extension_contract_async(&identity, permit, Failure::DependencyUnavailable)
+                    .await?;
                 let view = contract
                     .views
                     .iter()
@@ -253,10 +287,9 @@ impl MachinePluginStore {
                 };
                 // Do not hold the installation lock across a Git subprocess.
                 let current_remotes = runtime::remotes(std::path::Path::new(&request.root)).await?;
-                let _guard = self.lifecycle.lock().await;
-                let (_, current) = self
-                    .extension_contract(&identity)
-                    .map_err(|_| Failure::ExtensionChanged)?;
+                let ((_, current), _permit) = self
+                    .extension_contract_async(&identity, permit, Failure::ExtensionChanged)
+                    .await?;
                 if current != dependencies {
                     return Err(Failure::ExtensionChanged);
                 }

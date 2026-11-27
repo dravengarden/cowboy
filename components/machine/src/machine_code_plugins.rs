@@ -351,7 +351,7 @@ pub struct CodeRuntimeHost {
     retired_engines: Mutex<Vec<Weak<RunningCodeRuntime>>>,
     /// Coordinates generation selection with retention tombstoning without
     /// acquiring `routes` or per-worktree locks (which may be busy on 35s RPCs).
-    selection_gate: RwLock<()>,
+    selection_gate: Arc<RwLock<()>>,
     /// Generations selected by an in-flight `select() -> target()` call before
     /// the spawned engine is registered in `engines`.
     active_selections: Arc<parking_lot::Mutex<BTreeMap<(String, String), usize>>>,
@@ -465,20 +465,29 @@ impl CodeRuntimeHost {
     /// Never locks `routes`, per-worktree locks, `engines`, or
     /// `retired_engines`, so neither slow worktree RPCs nor cold Code startups
     /// can block generation retirement across Plugins.
-    pub async fn with_generation_pins<T>(
+    pub async fn with_generation_pins<T: Send + 'static>(
         &self,
         plugin_id: &str,
-        tombstone: impl FnOnce(&BTreeSet<String>) -> Result<T>,
+        tombstone: impl FnOnce(&BTreeSet<String>) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let _gate = self.selection_gate.write().await;
-        let active_selections = self.active_selections.lock();
+        let gate = Arc::clone(&self.selection_gate).write_owned().await;
         let mut pinned = self.retiring_processes.pinned_generations(plugin_id);
-        for ((pid, digest), count) in active_selections.iter() {
-            if pid == plugin_id && *count > 0 {
-                pinned.insert(digest.clone());
+        {
+            let active_selections = self.active_selections.lock();
+            for ((pid, digest), count) in active_selections.iter() {
+                if pid == plugin_id && *count > 0 {
+                    pinned.insert(digest.clone());
+                }
             }
         }
-        tombstone(&pinned)
+        // Hold the owned selection gate through the blocking tombstoning pass
+        // without holding synchronous mutexes or starving Tokio async workers.
+        tokio::task::spawn_blocking(move || {
+            let _gate = gate;
+            tombstone(&pinned)
+        })
+        .await
+        .context("generation pin retirement task failed")?
     }
 
     #[cfg(test)]
@@ -1707,27 +1716,34 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn select_pinned_runs_blocking_selection_off_tokio_worker_threads() {
         let root = PrivateRuntimeDirectory::create().unwrap();
-        let host = CodeRuntimeHost::default();
+        let host = Arc::new(CodeRuntimeHost::default());
         let plan = fixture_plan(&root.0, "non-blocking");
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (unblock_tx, unblock_rx) = std::sync::mpsc::sync_channel::<()>(0);
-        // On a 1-worker Tokio runtime, this task can only execute and unblock
-        // `select_pinned` if the selection closure runs on Tokio's blocking pool.
+        // Run both tasks on the runtime's single worker thread (not on the
+        // test's block_on thread). If `select_pinned` ran inline on the worker,
+        // `unblocker` could never be polled and `recv_timeout` would fail.
         let unblocker = tokio::spawn(async move {
             started_rx.await.unwrap();
             unblock_tx.send(()).unwrap();
         });
-        let (selection, pin) = tokio::time::timeout(
-            Duration::from_secs(5),
-            host.select_pinned("fixture-code", move || {
-                started_tx.send(()).unwrap();
-                unblock_rx.recv().unwrap();
-                Ok(CodeRuntimeSelection::Installed(plan))
-            }),
-        )
-        .await
-        .expect("select_pinned starved the sole Tokio worker thread")
-        .unwrap();
+        let host_for_select = Arc::clone(&host);
+        let selector = tokio::spawn(async move {
+            host_for_select
+                .select_pinned("fixture-code", move || {
+                    started_tx.send(()).unwrap();
+                    unblock_rx
+                        .recv_timeout(Duration::from_secs(2))
+                        .context("select_pinned starved the sole Tokio worker thread")?;
+                    Ok(CodeRuntimeSelection::Installed(plan))
+                })
+                .await
+        });
+        let (selection, pin) = tokio::time::timeout(Duration::from_secs(5), selector)
+            .await
+            .expect("selector task timed out")
+            .unwrap()
+            .unwrap();
         unblocker.await.unwrap();
         assert!(matches!(selection, CodeRuntimeSelection::Installed(_)));
         assert!(pin.is_some());

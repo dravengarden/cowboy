@@ -802,10 +802,12 @@ impl BrowserManager {
         };
         // The launcher replied: its inline copy has ended.
         if !outcome.copied {
-            self.retire_staging(&account_dir, generation, reservation);
+            self.retire_staging_async(account_dir, generation, reservation)
+                .await;
             bail!("launcher made no stop-time copy");
         }
-        self.publish_snapshot(instance, &account_dir, generation, reservation)?;
+        self.publish_snapshot_on_blocking(instance, account_dir, generation, reservation)
+            .await?;
         Ok(Some((generation, outcome.graceful)))
     }
 
