@@ -1,6 +1,7 @@
 // Executors for undo history steps, and the one entry point every undoable
 // change uses: recordUndo() stores the entry and shows the 3 s notice.
-import { dismissCalls } from "./managedCalls";
+import { CALLS_PAGE, dismissCalls, refreshCalls } from "./managedCalls";
+import { invalidateAnchoredCalls } from "./useBackgroundTasks";
 import { draftRepository } from "./documents/store";
 import { copyDocumentToSession, removeCopiedDraft, restoreItems } from "./store";
 import { showNotice } from "./documents/DocumentNotifications";
@@ -46,9 +47,16 @@ async function runStep(step: UndoStep): Promise<void> {
         ...step.attachments,
       ]);
       return;
-    case "restore_calls":
-      await dismissCalls(step.parent, step.ids, false);
+    case "restore_calls": {
+      const restored: string[] = [];
+      for (let i = 0; i < step.ids.length; i += CALLS_PAGE) {
+        const batch = await dismissCalls(step.parent, step.ids.slice(i, i + CALLS_PAGE), false);
+        restored.push(...batch);
+      }
+      invalidateAnchoredCalls(step.parent, restored.length > 0 ? restored : step.ids);
+      refreshCalls(step.parent);
       return;
+    }
   }
 }
 

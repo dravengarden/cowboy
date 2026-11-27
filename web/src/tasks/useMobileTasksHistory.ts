@@ -3,7 +3,7 @@
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
 import { acknowledgeTask, taskHash, taskKeyFromHash, type TaskSummary } from "../backgroundTasks";
 import { closeBackgroundTasks, inspectorState, openBackgroundTask, OPEN_BACKGROUND_TASKS_EVENT, selectBackgroundTask, useInspectorState } from "../backgroundTaskInspectorState";
-import { setActiveSessionId } from "../controlPlane";
+import { getActiveSessionId, setActiveSessionId, subscribeActiveSession } from "../controlPlane";
 import type { BackgroundTasks } from "../useBackgroundTasks";
 import { clearConsumedDeepLinks, consumeDeepLink, isDeepLinkConsumed } from "./taskEvents";
 import { defaultReaderMode, type TaskReaderContentMode } from "./TaskResultReader";
@@ -12,6 +12,7 @@ export type MobileLevel = "peek" | "reader" | "info";
 
 let nextMobileHistoryOpenId = 1;
 let activeChildSwitchToken = 0;
+const pendingCloseUnwindSessions = new Set<string>();
 
 interface MobileTasksHistoryEntry {
   openId: number;
@@ -123,11 +124,39 @@ function applyMobilePopState({
 /** Unwind all history entries belonging to `retiringOpenId` before switching to
  *  `childId`. Switches only after a matching popstate exits `retiringOpenId`,
  *  and expires harmlessly if newer navigation claims ownership. */
-function unwindAndSwitchSession(steps: number, retiringOpenId: number, childId: string): void {
+function unwindCloseHistory(sessionId: string, retiringOpenId: number, steps: number): void {
+  if (steps <= 0) return;
+  pendingCloseUnwindSessions.add(sessionId);
+  const onClosePop = (event: PopStateEvent): void => {
+    const dest = readHistoryState(event.state);
+    if (dest && dest.openId === retiringOpenId) return;
+    globalThis.removeEventListener("popstate", onClosePop);
+    pendingCloseUnwindSessions.delete(sessionId);
+    const landedHash = globalThis.location?.hash ?? "";
+    if (!taskKeyFromHash(landedHash)) clearConsumedDeepLinks(sessionId);
+  };
+  globalThis.addEventListener("popstate", onClosePop);
+  globalThis.history?.go(-steps);
+}
+
+function unwindAndSwitchSession(
+  parentSessionId: string,
+  steps: number,
+  retiringOpenId: number,
+  childId: string,
+): void {
   const token = ++activeChildSwitchToken;
+  let unsubscribeSession: (() => void) | null = null;
+  let onPopRef: ((event: PopStateEvent) => void) | null = null;
+  const cleanup = (): void => {
+    if (onPopRef) { globalThis.removeEventListener("popstate", onPopRef); onPopRef = null; }
+    if (unsubscribeSession) { unsubscribeSession(); unsubscribeSession = null; }
+  };
   const finish = (): void => {
+    cleanup();
     if (activeChildSwitchToken !== token) return;
     activeChildSwitchToken += 1;
+    if (getActiveSessionId() !== parentSessionId) return;
     const currentHash = globalThis.location?.hash ?? "";
     if (taskKeyFromHash(currentHash) || currentHash === "#tasks") {
       globalThis.history?.replaceState(globalThis.history.state, "", `${globalThis.location.pathname}${globalThis.location.search}`);
@@ -135,16 +164,22 @@ function unwindAndSwitchSession(steps: number, retiringOpenId: number, childId: 
     setActiveSessionId(childId);
   };
   if (steps <= 0) { finish(); return; }
+  unsubscribeSession = subscribeActiveSession(() => {
+    if (getActiveSessionId() !== parentSessionId) {
+      if (activeChildSwitchToken === token) activeChildSwitchToken += 1;
+      cleanup();
+    }
+  });
   const onPop = (event: PopStateEvent): void => {
-    if (activeChildSwitchToken !== token) {
-      globalThis.removeEventListener("popstate", onPop);
+    if (activeChildSwitchToken !== token || getActiveSessionId() !== parentSessionId) {
+      cleanup();
       return;
     }
     const dest = readHistoryState(event.state);
     if (dest && dest.openId === retiringOpenId) return;
-    globalThis.removeEventListener("popstate", onPop);
     finish();
   };
+  onPopRef = onPop;
   globalThis.addEventListener("popstate", onPop);
   globalThis.history?.go(-steps);
 }
@@ -172,7 +207,7 @@ function useMobileDeepLinkAndCommand(
   useEffect(() => {
     const rawHash = globalThis.location?.hash ?? "";
     const key = taskKeyFromHash(rawHash);
-    if (!key) { clearConsumedDeepLinks(sessionId); return; }
+    if (!key) { if (!open && !pendingCloseUnwindSessions.has(sessionId)) clearConsumedDeepLinks(sessionId); return; }
     if (open || inspectorState().sessionId === sessionId || isDeepLinkConsumed(sessionId, rawHash) || !byKey.has(key)) return;
     consumeDeepLink(sessionId, rawHash);
     openBackgroundTask(sessionId, key, "link");
@@ -204,6 +239,7 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
   useEffect(() => {
     if (!open) { openIdRef.current = 0; depthRef.current = 0; initializedRef.current = null; pendingPopRef.current = null; return; }
     activeChildSwitchToken += 1;
+    pendingCloseUnwindSessions.delete(sessionId);
     const target = state.key ? background.byKey.get(state.key) ?? null : null;
     const prev = initializedRef.current;
     if (prev && prev.revision === state.revision && prev.key === state.key && (prev.resolved || !target)) return;
@@ -237,6 +273,7 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
 
   const close = useCallback((): void => {
     activeChildSwitchToken += 1;
+    const retiringOpenId = openIdRef.current;
     const steps = depthRef.current;
     openIdRef.current = 0;
     depthRef.current = 0;
@@ -244,7 +281,7 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
     const rawHash = globalThis.location?.hash ?? "";
     if (taskKeyFromHash(rawHash)) consumeDeepLink(sessionId, rawHash);
     closeBackgroundTasks();
-    if (steps > 0) globalThis.history?.go(-steps);
+    unwindCloseHistory(sessionId, retiringOpenId, steps);
   }, [sessionId]);
 
   const openWorkerFromPeek = useCallback((key: string): void => {
@@ -314,7 +351,7 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
     const rawHash = globalThis.location?.hash ?? "";
     if (taskKeyFromHash(rawHash)) consumeDeepLink(sessionId, rawHash);
     closeBackgroundTasks();
-    unwindAndSwitchSession(steps, retiringOpenId, childId);
+    unwindAndSwitchSession(sessionId, steps, retiringOpenId, childId);
   }, [sessionId]);
 
   const currentOpenId = useCallback((): number => openIdRef.current, []);

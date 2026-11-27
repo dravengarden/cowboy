@@ -432,19 +432,20 @@ export function CallDetailView({
   desktop,
   onOpenChild,
   prefetched,
+  hideStop = false,
 }: {
   parent: string;
   call: ManagedCallSummary;
   desktop: boolean;
-  /** Absent when the child is already the opened session. */
   onOpenChild?: ((child: string) => void) | undefined;
   prefetched?: { detail: ManagedCallDetail | null; error: string | null } | undefined;
+  hideStop?: boolean | undefined;
 }): React.JSX.Element {
   const fetched = useManagedCall(prefetched ? null : parent, prefetched ? null : call.call_id, call.updated_at_ms);
   const { detail, error } = prefetched ?? fetched;
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
-  const stoppable = callActive(call.state) && !call.cancel_requested;
+  const stoppable = !hideStop && callActive(call.state) && !call.cancel_requested;
   const labels = Object.entries(call.labels);
   return (
     <Stack spacing={1.25} sx={{ minWidth: 0 }}>

@@ -12,12 +12,13 @@ import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } fr
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { DesktopTasksHeader } from "./DesktopTasksHeader";
+import { useExploreSessionState } from "./explore/exploreStore";
 import { callConversationId } from "./managedCalls";
 import { useSubagentTranscript } from "./SubagentTranscript";
 import type { BackgroundTasks } from "./useBackgroundTasks";
 import { MobileTasksSheet } from "./tasks/MobileTasksSheet";
 import { LegacyCallsSwitch } from "./tasks/TaskDiagnostics";
-import { clearConsumedDeepLinks, consumeDeepLink, consumePendingLocateTask, consumePendingOpenTaskOriginTool, focusTaskApprovalSurface, isDeepLinkConsumed, LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useDesktopTasksHostActive } from "./tasks/taskEvents";
+import { clearConsumedDeepLinks, consumeDeepLink, consumePendingLocateTask, consumePendingOpenTaskOriginTool, focusTaskApprovalSurface, isDeepLinkConsumed, LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, quoteTaskToPrompt, useDesktopTasksHostActive } from "./tasks/taskEvents";
 import { TaskResultReader } from "./tasks/TaskResultReader";
 import { TaskRoster } from "./tasks/TaskRoster";
 import { buildTaskForest, flattenTaskSections } from "./tasks/taskTree";
@@ -36,6 +37,7 @@ function StandaloneDesktopTasksContent({
   onSelect,
   onLocate,
   onAnswerApproval,
+  onQuoteRequest,
   onOpenTool,
   onClose,
 }: {
@@ -52,6 +54,7 @@ function StandaloneDesktopTasksContent({
   onSelect: (key: string) => void;
   onLocate: (key: string) => void;
   onAnswerApproval: () => void;
+  onQuoteRequest: () => void;
   onOpenTool?: ((toolKey: string) => void) | undefined;
   onClose: () => void;
 }): React.JSX.Element {
@@ -68,7 +71,7 @@ function StandaloneDesktopTasksContent({
         </Box>
         <Box sx={{ minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {selected && (
-            <TaskResultReader sessionId={sessionId} task={selected} background={background} subagentTranscript={subagentTranscript} desktop onAnswerApproval={onAnswerApproval} onLocate={selected.anchorSeq !== null ? (): void => onLocate(selected.key) : undefined} onOpenOriginTool={onOpenTool ? (toolKey): void => { onClose(); onOpenTool(toolKey); } : undefined} onQuoted={onClose} />
+            <TaskResultReader sessionId={sessionId} task={selected} background={background} subagentTranscript={subagentTranscript} desktop onAnswerApproval={onAnswerApproval} onLocate={selected.anchorSeq !== null ? (): void => onLocate(selected.key) : undefined} onOpenOriginTool={onOpenTool ? (toolKey): void => { onClose(); onOpenTool(toolKey); } : undefined} onQuoteRequest={onQuoteRequest} />
           )}
         </Box>
       </Box>
@@ -134,6 +137,15 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
     if (!target) return;
     requestAnimationFrame(() => { focusTaskApprovalSurface(sessionId, target); });
   }, [close, selected, sessionId]);
+  const handleQuote = useCallback((): void => {
+    if (!selected) return;
+    const rev = inspectorState().revision;
+    const reqKey = selected.key;
+    quoteTaskToPrompt(sessionId, selected, () => {
+      const cur = inspectorState();
+      if (cur.revision === rev && cur.sessionId === sessionId && cur.key === reqKey) close();
+    });
+  }, [close, selected, sessionId]);
 
   const keyContextRef = useRef<BackgroundTasksKeyContext>({ ownNode: null, selected: null, step: () => undefined, openConversation: () => undefined, locate: () => undefined, answerApproval: () => undefined, close: () => undefined });
   keyContextRef.current = { ownNode: inspectorRef.current, selected, step, openConversation: () => { if (selected?.call) setActiveSessionId(callConversationId(selected.call)); }, locate, answerApproval, close };
@@ -142,15 +154,18 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
   if (!open) return null;
   return createPortal(
     <Dialog open onClose={(event, reason): void => { if (!isImeBlockedEscape(event, reason)) close(); }} maxWidth={false} fullWidth disableScrollLock aria-labelledby="background-tasks-title" slots={{ transition: InstantModalTransition }} slotProps={desktopDialogSlotProps({ paperSx: { width: "calc(100vw - 24px)", maxWidth: "none", height: "calc(100dvh - 24px)", maxHeight: "none", m: 1.5, overflow: "hidden" } })}>
-      <StandaloneDesktopTasksContent sessionId={sessionId} background={background} ordered={ordered} selected={selected} selectedKey={selectedKey} hideEnded={hideEnded} collapsedKeys={collapsedKeys} inspectorRef={inspectorRef} onToggleHideEnded={(): void => setHideEnded((value) => !value)} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={select} onLocate={locate} onAnswerApproval={answerApproval} onOpenTool={onOpenTool} onClose={close} />
+      <StandaloneDesktopTasksContent sessionId={sessionId} background={background} ordered={ordered} selected={selected} selectedKey={selectedKey} hideEnded={hideEnded} collapsedKeys={collapsedKeys} inspectorRef={inspectorRef} onToggleHideEnded={(): void => setHideEnded((value) => !value)} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={select} onLocate={locate} onAnswerApproval={answerApproval} onQuoteRequest={handleQuote} onOpenTool={onOpenTool} onClose={close} />
     </Dialog>,
     document.body,
   );
 }
 
-export function BackgroundTasksInspector({ sessionId, desktop, background, onLocate, onOpenTool }: { sessionId: string; desktop: boolean; background: BackgroundTasks; onLocate?: ((key: string) => void) | undefined; onOpenTool?: ((toolKey: string) => void) | undefined }): React.JSX.Element | null {
+export function BackgroundTasksInspector({ sessionId, desktop, background, consumeReveals = true, onLocate, onOpenTool }: { sessionId: string; desktop: boolean; background: BackgroundTasks; consumeReveals?: boolean | undefined; onLocate?: ((key: string) => void) | undefined; onOpenTool?: ((toolKey: string) => void) | undefined }): React.JSX.Element | null {
   const desktopHostActive = useDesktopTasksHostActive(sessionId);
+  const projection = useExploreSessionState(sessionId).projection;
+  const canConsumeReveals = consumeReveals && projection !== "explore";
   useEffect(() => {
+    if (!canConsumeReveals) return undefined;
     const pendingLocate = consumePendingLocateTask(sessionId);
     if (pendingLocate) requestAnimationFrame(() => onLocate?.(pendingLocate));
     const pendingTool = consumePendingOpenTaskOriginTool(sessionId);
@@ -175,7 +190,7 @@ export function BackgroundTasksInspector({ sessionId, desktop, background, onLoc
       globalThis.removeEventListener(LOCATE_TASK_EVENT, handleLocate);
       globalThis.removeEventListener(OPEN_TASK_ORIGIN_TOOL_EVENT, handleOpenTool);
     };
-  }, [sessionId, onLocate, onOpenTool]);
+  }, [canConsumeReveals, sessionId, onLocate, onOpenTool]);
 
   if (!desktop) return <MobileTasksSheet sessionId={sessionId} background={background} onOpenTool={onOpenTool} />;
   if (desktopHostActive) return null;

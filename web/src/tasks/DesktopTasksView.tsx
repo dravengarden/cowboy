@@ -56,6 +56,87 @@ function DesktopTasksCompactStrip({
   );
 }
 
+function focusedRosterTask(
+  byKey: ReadonlyMap<string, TaskSummary>,
+  fallback: TaskSummary | null,
+): TaskSummary | null {
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const optionKey = activeEl?.closest<HTMLElement>("[data-desktop-region='tasks.roster'] [data-task-option]")?.dataset["taskOption"];
+  return (optionKey ? byKey.get(optionKey) : undefined) ?? fallback;
+}
+
+function DesktopTasksPanes({
+  sessionId,
+  wide,
+  showRosterPane,
+  showReaderPane,
+  effectiveMode,
+  selected,
+  background,
+  subagentTranscript,
+  summaryExtraActivity,
+  hideEnded,
+  collapsedKeys,
+  now,
+  stopTrigger,
+  legacySwitch,
+  onToggleHideEnded,
+  onToggleFold,
+  onSelect,
+  onModeChange,
+  onAnswerApproval,
+  onLocate,
+  onOpenOriginTool,
+  onOpenChildSession,
+  onQuoteRequest,
+  onStopTriggerConsumed,
+}: {
+  sessionId: string;
+  wide: boolean;
+  showRosterPane: boolean;
+  showReaderPane: boolean;
+  effectiveMode: TaskReaderViewMode;
+  selected: TaskSummary | null;
+  background: BackgroundTasks;
+  subagentTranscript: ReturnType<typeof useSubagentTranscript>;
+  summaryExtraActivity: boolean;
+  hideEnded: boolean;
+  collapsedKeys: ReadonlySet<string>;
+  now: number;
+  stopTrigger: { key: string; nonce: number } | null;
+  legacySwitch: React.JSX.Element;
+  onToggleHideEnded: () => void;
+  onToggleFold: (key: string) => void;
+  onSelect: (key: string) => void;
+  onModeChange: (next: TaskReaderViewMode) => void;
+  onAnswerApproval: (task: TaskSummary) => void;
+  onLocate: (task: TaskSummary) => void;
+  onOpenOriginTool: (toolKey: string) => void;
+  onOpenChildSession: (childId: string) => void;
+  onQuoteRequest: (task: TaskSummary) => void;
+  onStopTriggerConsumed: () => void;
+}): React.JSX.Element {
+  return (
+    <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
+      {showRosterPane && (
+        <Box data-desktop-region="tasks.roster" data-desktop-focus-default={!showReaderPane ? "true" : undefined} tabIndex={-1} sx={{ ...(wide ? { width: 236, flexShrink: 0, borderRight: 1, borderColor: "divider" } : { flex: 1 }), minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", outline: "none", ...desktopScrollbarSx }}>
+          <TaskRoster sessionId={sessionId} tasks={background.tasks} calls={background.calls} selectedKey={selected?.key ?? null} desktop hideEnded={hideEnded} onToggleHideEnded={onToggleHideEnded} collapsedKeys={collapsedKeys} onToggleFold={onToggleFold} onSelect={onSelect} onRefreshCalls={background.refreshCalls} now={now} />
+          <Box sx={{ flex: 1 }} />
+          {legacySwitch}
+          <ScrollEdges />
+        </Box>
+      )}
+      {showReaderPane && (
+        <Box data-desktop-region="tasks.reader" data-desktop-navigation={effectiveMode === "transcript" ? "scroll" : undefined} data-desktop-focus-default="true" tabIndex={-1} sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", outline: "none" }}>
+          {selected
+            ? <TaskResultReader sessionId={sessionId} task={selected} background={background} subagentTranscript={subagentTranscript} desktop mode={effectiveMode} onModeChange={onModeChange} onAnswerApproval={(): void => onAnswerApproval(selected)} onLocate={selected.anchorSeq !== null ? (): void => onLocate(selected) : undefined} onOpenOriginTool={onOpenOriginTool} onOpenChildSession={onOpenChildSession} onQuoteRequest={(): void => onQuoteRequest(selected)} stopTrigger={stopTrigger} onStopTriggerConsumed={onStopTriggerConsumed} extraInfoFooter={!wide ? legacySwitch : undefined} />
+            : <Box sx={{ p: 3, color: "text.secondary" }}><Typography variant="body2">{summaryExtraActivity ? "The agent reports background activity that is not listed as an individual task yet." : "No background tasks in this session."}</Typography></Box>}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 export function DesktopTasksView({
   sessionId,
   active,
@@ -99,12 +180,21 @@ export function DesktopTasksView({
     if (targetRegion) requestAnimationFrame(() => workspace.focusRegion(targetRegion));
   }, [active, showReaderPane, showRosterPane, workspace]);
 
-  const handleLocate = useCallback((): void => {
-    if (!selected || selected.anchorSeq === null) return;
+  const [stopTrigger, setStopTrigger] = useState<{ key: string; nonce: number } | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  const clearStopTrigger = useCallback((): void => setStopTrigger(null), []);
+  const focusedOrSelectedTask = useCallback(
+    (): TaskSummary | null => focusedRosterTask(background.byKey, selected),
+    [background.byKey, selected],
+  );
+
+  const handleLocateTask = useCallback((task: TaskSummary): void => {
+    if (task.anchorSeq === null) return;
     requestDesktopWorkView("conversation");
-    if (onLocate) onLocate(selected.key);
-    else dispatchLocateTask(sessionId, selected.key);
-  }, [onLocate, selected, sessionId]);
+    if (onLocate) onLocate(task.key);
+    else dispatchLocateTask(sessionId, task.key);
+  }, [onLocate, sessionId]);
   const handleOpenOriginTool = useCallback((toolKey: string): void => {
     requestDesktopWorkView("conversation");
     if (onOpenOriginTool) onOpenOriginTool(toolKey);
@@ -116,17 +206,18 @@ export function DesktopTasksView({
   }, [sessionId]);
   const handleAnswerApproval = useCallback((task: TaskSummary): void => { focusTaskApprovalSurface(sessionId, task); }, [sessionId]);
   const chooseAndFocus = useCallback((key: string): void => {
+    setStopTrigger(null);
     const wasCompactRoster = !wide && ctrl.compactShowRoster;
     ctrl.chooseTask(key);
     if (wasCompactRoster) requestAnimationFrame(() => workspace.focusRegion("tasks.reader"));
   }, [ctrl, wide, workspace]);
   const stepAndFocus = useCallback((delta: number): void => {
+    setStopTrigger(null);
     const wasCompactRoster = !wide && ctrl.compactShowRoster;
     ctrl.stepTask(delta);
     if (wasCompactRoster) requestAnimationFrame(() => workspace.focusRegion("tasks.reader"));
   }, [ctrl, wide, workspace]);
 
-  const [stopTrigger, setStopTrigger] = useState<{ key: string; nonce: number } | null>(null);
   const liveOwnerRef = useRef({ active, sessionId, key: selected?.key ?? null });
   liveOwnerRef.current = { active, sessionId, key: selected?.key ?? null };
   const revealReader = useCallback((): void => {
@@ -135,34 +226,47 @@ export function DesktopTasksView({
       requestAnimationFrame(() => workspace.focusRegion("tasks.reader"));
     }
   }, [ctrl, wide, workspace]);
-  const handleQuote = useCallback((): void => {
-    if (!selected) return;
+  const handleQuoteTask = useCallback((task: TaskSummary): void => {
     const reqSession = sessionId;
-    const reqKey = selected.key;
-    quoteTaskToPrompt(sessionId, selected, () => {
+    const reqKey = task.key;
+    quoteTaskToPrompt(sessionId, task, () => {
       const live = liveOwnerRef.current;
-      if (live.active && live.sessionId === reqSession && live.key === reqKey) {
-        requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+      const focusedKey = focusedOrSelectedTask()?.key ?? null;
+      if (mountedRef.current && live.active && live.sessionId === reqSession && (live.key === reqKey || focusedKey === reqKey)) {
+        requestAnimationFrame(() => {
+          if (mountedRef.current) workspace.focusRegion("prompt.composer");
+        });
       }
     });
-  }, [selected, sessionId, workspace]);
+  }, [focusedOrSelectedTask, sessionId, workspace]);
   const restoreFromInfo = (): void => {
-    if (!selected) return;
-    setDesktopMode(ctrl.readerMode && ctrl.readerMode.key === selected.key ? ctrl.readerMode.prev : fallbackMode);
+    if (selected) setDesktopMode(ctrl.readerMode && ctrl.readerMode.key === selected.key ? ctrl.readerMode.prev : fallbackMode);
+  };
+  const openModeForTask = (task: TaskSummary, mode: "info" | "transcript"): void => {
+    if (task.key !== selected?.key) {
+      ctrl.chooseTask(task.key);
+      ctrl.setReaderMode({ key: task.key, mode, prev: mode === "transcript" ? "transcript" : defaultReaderMode(task, false) });
+      revealReader();
+      return;
+    }
+    if (mode === "transcript" && !hasConversation) return;
+    revealReader();
+    if (mode === "info") { if (effectiveMode === "info" && showReaderPane) restoreFromInfo(); else setDesktopMode("info"); }
+    else setDesktopMode(effectiveMode === "transcript" && showReaderPane ? "result" : "transcript");
   };
   useDesktopTasksCommands({
     active,
-    selected,
-    hasConversation,
+    getTarget: focusedOrSelectedTask,
+    canTranscript: (task) => task.source === "call" || (task.source === "subagent" && (task.key === selected?.key ? hasConversation : Boolean(task.subagent))),
     effectiveMode,
     hideEnded: ctrl.hideEnded,
     stepTask: stepAndFocus,
-    toggleInfo: (): void => { if (!selected) return; revealReader(); if (effectiveMode === "info" && showReaderPane) restoreFromInfo(); else setDesktopMode("info"); },
-    toggleTranscript: (): void => { if (!selected || !hasConversation) return; revealReader(); setDesktopMode(effectiveMode === "transcript" && showReaderPane ? "result" : "transcript"); },
-    quote: handleQuote,
-    openChild: (): void => { if (selected?.source === "call" && selected.call) handleOpenChildSession(callConversationId(selected.call)); },
-    locate: handleLocate,
-    stop: (): void => { if (!selected?.canStop) return; revealReader(); setStopTrigger((prev) => ({ key: selected.key, nonce: (prev?.nonce ?? 0) + 1 })); },
+    toggleInfo: (task): void => openModeForTask(task, "info"),
+    toggleTranscript: (task): void => openModeForTask(task, "transcript"),
+    quote: handleQuoteTask,
+    openChild: (task): void => { if (task.source === "call" && task.call) handleOpenChildSession(callConversationId(task.call)); },
+    locate: handleLocateTask,
+    stop: (task): void => { if (!task.canStop) return; if (task.key !== selected?.key) ctrl.chooseTask(task.key); revealReader(); setStopTrigger((prev) => ({ key: task.key, nonce: (prev?.nonce ?? 0) + 1 })); },
     escape: (): void => { if (effectiveMode === "info") restoreFromInfo(); else if (ctrl.hideEnded) ctrl.setHideEnded(false); },
   });
 
@@ -172,25 +276,9 @@ export function DesktopTasksView({
   return (
     <Box ref={rootRef} data-desktop-tasks-view={sessionId} data-desktop-tasks-layout={wide ? "split" : "compact"} onKeyDown={handleKeyDown} sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {!wide && background.tasks.length > 0 && (
-        <DesktopTasksCompactStrip totalCount={background.tasks.length} visibleTasks={visibleTasks} selectedKey={selected?.key ?? null} showRoster={ctrl.compactShowRoster} onToggleRoster={(): void => { const next = !ctrl.compactShowRoster; ctrl.setCompactShowRoster(next); requestAnimationFrame(() => workspace.focusRegion(next ? "tasks.roster" : "tasks.reader")); }} onSelect={chooseAndFocus} />
+        <DesktopTasksCompactStrip totalCount={background.tasks.length} visibleTasks={visibleTasks} selectedKey={selected?.key ?? null} showRoster={ctrl.compactShowRoster} onToggleRoster={(): void => { setStopTrigger(null); const next = !ctrl.compactShowRoster; ctrl.setCompactShowRoster(next); requestAnimationFrame(() => workspace.focusRegion(next ? "tasks.roster" : "tasks.reader")); }} onSelect={chooseAndFocus} />
       )}
-      <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
-        {showRosterPane && (
-          <Box data-desktop-region="tasks.roster" data-desktop-focus-default={!showReaderPane ? "true" : undefined} tabIndex={-1} sx={{ ...(wide ? { width: 236, flexShrink: 0, borderRight: 1, borderColor: "divider" } : { flex: 1 }), minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", outline: "none", ...desktopScrollbarSx }}>
-            <TaskRoster sessionId={sessionId} tasks={background.tasks} calls={background.calls} selectedKey={selected?.key ?? null} desktop hideEnded={ctrl.hideEnded} onToggleHideEnded={(): void => ctrl.setHideEnded((value) => !value)} collapsedKeys={ctrl.collapsedKeys} onToggleFold={ctrl.toggleFold} onSelect={chooseAndFocus} onRefreshCalls={background.refreshCalls} now={ctrl.now} />
-            <Box sx={{ flex: 1 }} />
-            {legacySwitch}
-            <ScrollEdges />
-          </Box>
-        )}
-        {showReaderPane && (
-          <Box data-desktop-region="tasks.reader" data-desktop-focus-default="true" tabIndex={-1} sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", outline: "none" }}>
-            {selected
-              ? <TaskResultReader sessionId={sessionId} task={selected} background={background} subagentTranscript={subagentTranscript} desktop mode={effectiveMode} onModeChange={setDesktopMode} onAnswerApproval={(): void => handleAnswerApproval(selected)} onLocate={selected.anchorSeq !== null ? handleLocate : undefined} onOpenOriginTool={handleOpenOriginTool} onOpenChildSession={handleOpenChildSession} onQuoteRequest={handleQuote} stopTrigger={stopTrigger} extraInfoFooter={!wide ? legacySwitch : undefined} />
-              : <Box sx={{ p: 3, color: "text.secondary" }}><Typography variant="body2">{summary.extraActivity ? "The agent reports background activity that is not listed as an individual task yet." : "No background tasks in this session."}</Typography></Box>}
-          </Box>
-        )}
-      </Box>
+      <DesktopTasksPanes sessionId={sessionId} wide={wide} showRosterPane={showRosterPane} showReaderPane={showReaderPane} effectiveMode={effectiveMode} selected={selected} background={background} subagentTranscript={subagentTranscript} summaryExtraActivity={summary.extraActivity} hideEnded={ctrl.hideEnded} collapsedKeys={ctrl.collapsedKeys} now={ctrl.now} stopTrigger={stopTrigger} legacySwitch={legacySwitch} onToggleHideEnded={(): void => ctrl.setHideEnded((value) => !value)} onToggleFold={ctrl.toggleFold} onSelect={chooseAndFocus} onModeChange={setDesktopMode} onAnswerApproval={handleAnswerApproval} onLocate={handleLocateTask} onOpenOriginTool={handleOpenOriginTool} onOpenChildSession={handleOpenChildSession} onQuoteRequest={handleQuoteTask} onStopTriggerConsumed={clearStopTrigger} />
     </Box>
   );
 }

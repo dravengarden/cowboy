@@ -121,7 +121,7 @@ export function clearConsumedDeepLinks(sessionId: string, keepHash?: string | nu
     consumedDeepLinksBySession.delete(sessionId);
     return;
   }
-  for (const hash of [...set]) {
+  for (const hash of set) {
     if (hash !== keepHash) set.delete(hash);
   }
   if (set.size === 0) consumedDeepLinksBySession.delete(sessionId);
@@ -248,11 +248,14 @@ export function focusTaskApprovalSurface(sessionId: string, task: TaskSummary): 
     const surface = document.querySelector<HTMLElement>(selector);
     if (!surface) continue;
     if (focusControlIn(surface)) return true;
-    // Collapsed Mobile approval pill: expand it by sticking to bottom, then verify the exact match still exists.
+    // Collapsed Mobile approval pill: capture exact request identity before expanding,
+    // then verify the same request is still active on the expanded surface.
+    const capturedRequest = surface.dataset["approvalRequest"] ?? null;
     requestStickToBottom(sessionId);
     requestAnimationFrame(() => {
       const expanded = document.querySelector<HTMLElement>(selector);
-      if (expanded && focusControlIn(expanded)) return;
+      const sameRequest = capturedRequest === null || expanded?.dataset["approvalRequest"] === capturedRequest;
+      if (expanded && sameRequest && focusControlIn(expanded)) return;
       notify("This approval request has changed or is no longer active.", "info");
     });
     return true;

@@ -539,14 +539,11 @@ export function DetentSheet(
   // then animate in. Opt-in maxHeight sheets also observe height changes so a
   // growing peek sheet never dismisses using its stale initial height.
   const measureGeomRef = useRef<(() => void) | null>(null);
-  const pendingResizeRef = useRef(false);
-  const flushPendingResize = useCallback((): void => {
-    if (!pendingResizeRef.current) return;
-    pendingResizeRef.current = false;
-    measureGeomRef.current?.();
-  }, []);
+  const refreshOptInGeom = useCallback((): void => {
+    if (!isCover && maxHeight) measureGeomRef.current?.();
+  }, [isCover, maxHeight]);
   useEffect(() => {
-    if (!open) { animatedRef.current = false; pendingResizeRef.current = false; measureGeomRef.current = null; return; }
+    if (!open) { animatedRef.current = false; measureGeomRef.current = null; return; }
     const measureGeom = (): { detents: number[]; closedPx: number } => {
       const closedPx = sheetRef.current?.offsetHeight ?? MAX_FRACTION * globalThis.innerHeight;
       const h = globalThis.innerHeight;
@@ -559,8 +556,7 @@ export function DetentSheet(
     let ro: ResizeObserver | null = null;
     if (!isCover && maxHeight && sheetRef.current && typeof ResizeObserver !== "undefined") {
       ro = new ResizeObserver(() => {
-        if (!animatedRef.current) return;
-        if (dragRef.current) { pendingResizeRef.current = true; return; }
+        if (!animatedRef.current || dragRef.current) return;
         measureGeom();
       });
       ro.observe(sheetRef.current);
@@ -583,7 +579,7 @@ export function DetentSheet(
       if (rafRef.current !== 0) { globalThis.cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
     };
   }, [open, paint, sign, isCover, peekDetent, haptic, animateOnOpen, maxHeight]);
-  const dismiss = useDetentDismiss({ open, onClose, paint, signRef, geomRef, onBeforeDismiss: flushPendingResize });
+  const dismiss = useDetentDismiss({ open, onClose, paint, signRef, geomRef, onBeforeDismiss: refreshOptInGeom });
 
   const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
@@ -618,7 +614,7 @@ export function DetentSheet(
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) return;
-    flushPendingResize();
+    refreshOptInGeom();
     const s = signRef.current;
     const { detents, closedPx } = geomRef.current;
     const last = d.samples.at(-1);
@@ -648,7 +644,7 @@ export function DetentSheet(
       }
     });
     paint(detents[best] ?? 0, true);
-  }, [dismiss, flushPendingResize, paint]);
+  }, [dismiss, paint, refreshOptInGeom]);
 
   const onPointerUp = useCallback((): void => finishDrag(true), [finishDrag]);
   // iOS can cancel a captured pointer when a system gesture or interruption

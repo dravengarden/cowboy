@@ -3019,6 +3019,7 @@ export function Transcript({
         sessionId={sessionId}
         desktop={desktopNavigation}
         background={background}
+        consumeReveals={visibleItemKeys === undefined}
         onLocate={locateTask}
         onOpenTool={openTool}
       />

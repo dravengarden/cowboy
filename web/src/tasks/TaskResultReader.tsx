@@ -106,7 +106,7 @@ function TaskReaderHeader({
   const verdict = task.call ? callVerdictLabel(task.call) : null;
   const modelMeta = task.call ? callModelLabel(task.call) : task.subagent?.model ?? null;
   return (
-    <Box data-task-reader-header sx={{ px: desktop ? 1.5 : 1.75, py: desktop ? 0.85 : 1, borderBottom: 1, borderColor: "divider", flexShrink: 0, display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+    <Box data-task-reader-header sx={(theme) => ({ px: desktop ? 1.5 : 1.75, py: desktop ? 0.85 : 1, borderBottom: 1, borderColor: "divider", flexShrink: 0, display: "flex", alignItems: "center", gap: 1, minWidth: 0, ...(!desktop ? { bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.8 : 0.86), backdropFilter: "blur(20px) saturate(180%)", WebkitBackdropFilter: "blur(20px) saturate(180%)", zIndex: 1 } : {}) })}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
           <Typography variant={desktop ? "subtitle2" : "subtitle1"} noWrap sx={{ fontWeight: 700, minWidth: 0 }}>{task.title}</Typography>
@@ -245,7 +245,7 @@ function TaskReaderInfoPanel({
   return (
     <Box data-task-detail={task.key} data-task-info-panel sx={{ minWidth: 0 }}>
       {task.source === "call" && task.call
-        ? <CallDetailView parent={sessionId} call={task.call} desktop={desktop} onOpenChild={onOpenChild} prefetched={callQuery} />
+        ? <CallDetailView parent={sessionId} call={task.call} desktop={desktop} onOpenChild={onOpenChild} prefetched={callQuery} hideStop />
         : task.source === "subagent" && task.subagent
         ? <SubagentDetail subagent={task.subagent} resumed={task.subagent.revision > 1 && task.subagent.terminalSeq !== null} />
         : <Typography variant="body2" color="text.secondary">{task.subtitle || "Pending call approval request."}</Typography>}
@@ -275,11 +275,12 @@ export interface TaskResultReaderProps {
   onQuoteRequest?: (() => void) | undefined;
   onOpenChildSession?: ((childSessionId: string) => void) | undefined;
   stopTrigger?: { key: string; nonce: number } | null | undefined;
+  onStopTriggerConsumed?: (() => void) | undefined;
   extraInfoFooter?: React.ReactNode;
   bottomInset?: string | undefined;
 }
 
-export function TaskResultReader({ sessionId, task, background, subagentTranscript, desktop, mode, onModeChange, onAnswerApproval, onLocate, onOpenOriginTool, onQuoted, onQuoteRequest, onOpenChildSession, stopTrigger, extraInfoFooter, bottomInset }: TaskResultReaderProps): React.JSX.Element {
+export function TaskResultReader({ sessionId, task, background, subagentTranscript, desktop, mode, onModeChange, onAnswerApproval, onLocate, onOpenOriginTool, onQuoted, onQuoteRequest, onOpenChildSession, stopTrigger, onStopTriggerConsumed, extraInfoFooter, bottomInset }: TaskResultReaderProps): React.JSX.Element {
   const hasConversation = task.source === "call" || (task.source === "subagent" && subagentTranscript.observed);
   const controlled = mode !== undefined;
   const [internalMode, setInternalMode] = useState<{ key: string; mode: TaskReaderViewMode }>(() => ({ key: task.key, mode: defaultReaderMode(task, subagentTranscript.observed) }));
@@ -297,7 +298,7 @@ export function TaskResultReader({ sessionId, task, background, subagentTranscri
   const callId = task.source === "call" && task.call ? task.call.call_id : null;
   const callRev = task.source === "call" && task.call ? task.call.updated_at_ms : 0;
   const callQuery = useManagedCall(sessionId, callId, callRev);
-  const callLoaded = callId === null || callQuery.detail !== null || callQuery.error !== null;
+  const callReady = callId === null || (callQuery.detail !== null && callQuery.detail.call_id === callId) || callQuery.error !== null;
   useEffect(() => {
     if (callQuery.detail && callId && callQuery.detail.call_id === callId) rememberCallDetail(sessionId, callQuery.detail);
   }, [sessionId, callId, callQuery.detail]);
@@ -321,19 +322,23 @@ export function TaskResultReader({ sessionId, task, background, subagentTranscri
     if (!stopTrigger || stopTrigger.key !== task.key || stopTrigger.nonce === handledStopNonce.current) return;
     handledStopNonce.current = stopTrigger.nonce;
     stopGuard.trigger();
-  }, [stopTrigger, task.key, stopGuard]);
+    onStopTriggerConsumed?.();
+  }, [stopTrigger, task.key, stopGuard, onStopTriggerConsumed]);
 
   const resultScrollRef = useRef<HTMLDivElement>(null);
   const infoScrollRef = useRef<HTMLDivElement>(null);
+  const restoredPaneRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const node = activeMode === "result" ? resultScrollRef.current : activeMode === "info" ? infoScrollRef.current : null;
-    if (!node) return;
-    const saved = savedTaskReaderScroll(sessionId, `${task.key}:${activeMode}`);
-    if (saved > 0 || callLoaded) node.scrollTop = saved;
-  }, [sessionId, task.key, activeMode, callLoaded]);
+    if (!node || !callReady) { restoredPaneRef.current = null; return; }
+    const paneKey = `${sessionId}\u0000${task.key}\u0000${activeMode}`;
+    if (restoredPaneRef.current === paneKey) return;
+    node.scrollTop = savedTaskReaderScroll(sessionId, `${task.key}:${activeMode}`);
+    restoredPaneRef.current = paneKey;
+  }, [sessionId, task.key, activeMode, callReady]);
 
   const recordScroll = (pane: "result" | "info", top: number): void => {
-    if (!callLoaded && top === 0 && savedTaskReaderScroll(sessionId, `${task.key}:${pane}`) > 0) return;
+    if (!callReady || restoredPaneRef.current !== `${sessionId}\u0000${task.key}\u0000${pane}`) return;
     rememberTaskReaderScroll(sessionId, `${task.key}:${pane}`, top);
   };
 

@@ -442,6 +442,38 @@ export const CALLS_PAGE = 100;
 
 /** One Call outside the listed page: `null` only on authoritative evidence that
  *  its row should go (dismissed, or no longer in the ledger). */
+export function projectCallSummaryFromDetail(
+  raw: ManagedCallDetail & Partial<ManagedCallSummary>,
+): ManagedCallSummary {
+  const structured = object(raw.result?.structured);
+  const verdict = raw.verdict ?? (typeof structured?.verdict === "string" ? structured.verdict : undefined);
+  const findingCount = raw.finding_count ??
+    (Array.isArray(structured?.findings) ? structured.findings.length : undefined);
+  const reusedFrom = raw.reused_from ?? raw.result?.reused_from?.call_id ?? null;
+  const reusedChild = raw.reused_child_session_id ?? raw.result?.reused_from?.child_session_id ?? null;
+  const {
+    events: _events,
+    request: _request,
+    prompt_excerpt: _promptExcerpt,
+    result: _result,
+    ...summaryFields
+  } = raw as ManagedCallDetail & Partial<ManagedCallSummary> & {
+    events?: unknown;
+    request?: unknown;
+    prompt_excerpt?: unknown;
+  };
+  return {
+    ...summaryFields,
+    has_result: Boolean(raw.has_result || raw.result != null),
+    cancel_requested: Boolean(raw.cancel_requested || raw.cancel_requested_at_ms != null),
+    reused_from: reusedFrom,
+    reused_child_session_id: reusedChild,
+    usage: raw.usage ?? raw.result?.usage ?? null,
+    ...(verdict === undefined ? {} : { verdict }),
+    ...(findingCount === undefined ? {} : { finding_count: findingCount }),
+  };
+}
+
 export async function fetchAnchoredCall(
   parent: string,
   call: string,
@@ -451,9 +483,12 @@ export async function fetchAnchoredCall(
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Call unavailable (${String(response.status)})`);
-  const body = await response.json() as { call: ManagedCallSummary & { result?: unknown }; dismissed?: boolean };
+  const body = await response.json() as {
+    call: ManagedCallDetail & Partial<ManagedCallSummary>;
+    dismissed?: boolean;
+  };
   if (body.dismissed === true) return null;
-  return { ...body.call, has_result: body.call.has_result ?? (body.call.result != null) };
+  return projectCallSummaryFromDetail(body.call);
 }
 
 export async function fetchCall(
@@ -513,6 +548,11 @@ const EMPTY_CALLS: CallsSnapshot = { calls: [], observedAt: null, error: null };
 // One poll per parent, shared by every surface that shows its calls (the
 // background-tasks bar, transcript anchors, the inspector, the legacy dock).
 const callFeeds = new Map<string, CallsFeed>();
+
+/** Read the latest cached call summary for synchronous stop revalidation. */
+export function cachedCallSummary(parent: string, callId: string): ManagedCallSummary | null {
+  return callFeeds.get(parent)?.snapshot.calls.find((c) => c.call_id === callId) ?? null;
+}
 
 function publishFeed(feed: CallsFeed, next: Partial<CallsSnapshot>): void {
   feed.snapshot = { ...feed.snapshot, ...next };

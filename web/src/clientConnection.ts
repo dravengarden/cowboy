@@ -79,7 +79,41 @@ export function createClientConnection() {
     if (result === "ready") await reload(result);
     else globalThis.location.replace(clientUpdateNavigationUrl(globalThis.location.href, Date.now()));
   };
+  const ready = store.connectionReady;
+  const lost = store.connectionLost;
+  store.connectionReady = () => {
+    connectionWasReady = true;
+    bumpConnectionGeneration();
+    ready();
+  };
+  store.connectionLost = () => {
+    if (connectionWasReady) {
+      connectionWasReady = false;
+      bumpConnectionGeneration();
+    }
+    return lost();
+  };
   return store;
+}
+
+let connectionGen = 0;
+let connectionWasReady = false;
+const connectionGenListeners = new Set<() => void>();
+
+function bumpConnectionGeneration(): void {
+  connectionGen += 1;
+  for (const listener of connectionGenListeners) listener();
+}
+
+export function connectionGeneration(): number {
+  return connectionGen;
+}
+
+export function subscribeConnectionGeneration(listener: () => void): () => void {
+  connectionGenListeners.add(listener);
+  return (): void => {
+    connectionGenListeners.delete(listener);
+  };
 }
 
 export const conn = createClientConnection();

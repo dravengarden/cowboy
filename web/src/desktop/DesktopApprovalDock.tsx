@@ -125,6 +125,7 @@ export function DesktopPermissionDock({
       kind="permission"
       sessionId={sessionId}
       approvalTarget={item.subagentId ? `subagent:${item.subagentId}` : `permission:${item.requestId}`}
+      approvalRequest={`${item.requestId}:${String(item.seq)}`}
       region={item.elicitation ? "conversation.approval" : undefined}
       promptKey={`permission:${item.requestId}:${String(item.seq)}`}
       tone={question ? "primary" : "warning"}
@@ -214,6 +215,7 @@ function CallApprovalDock({
       kind="call"
       sessionId={sessionId}
       approvalTarget={`approval:${approval.request_ids?.join(",") ?? String(approval.prompt_revision ?? 0)}`}
+      approvalRequest={`${String(approval.prompt_revision ?? 0)}:${(approval.request_ids ?? []).join(",")}`}
       promptKey={`call:${String(approval.prompt_revision ?? "")}:${String(approval.requests)}:${(approval.request_ids ?? []).join(",")}`}
       tone="primary"
       icon={<AccountTree sx={{ fontSize: desktopSize(16) }} />}
@@ -278,6 +280,7 @@ function ApprovalDock({
   kind,
   sessionId,
   approvalTarget,
+  approvalRequest,
   region,
   promptKey,
   tone,
@@ -293,6 +296,7 @@ function ApprovalDock({
   kind: "permission" | "call";
   sessionId: string;
   approvalTarget: string;
+  approvalRequest: string;
   region?: string | undefined;
   promptKey: string;
   tone: Tone;
@@ -314,6 +318,7 @@ function ApprovalDock({
       data-desktop-approval-dock={kind}
       data-approval-session={sessionId}
       data-approval-target={approvalTarget}
+      data-approval-request={approvalRequest}
       data-desktop-region={region}
       tabIndex={region ? -1 : undefined}
       sx={(theme) => ({

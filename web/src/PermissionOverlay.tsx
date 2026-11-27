@@ -94,6 +94,7 @@ export function PermissionOverlay({
       data-permission-overlay
       data-approval-session={sessionId}
       data-approval-target={item.subagentId ? `subagent:${item.subagentId}` : `permission:${item.requestId}`}
+      data-approval-request={`${item.requestId}:${String(item.seq)}`}
       data-composer-stack-slot="status"
       {...answerKeyboard.props}
       sx={{

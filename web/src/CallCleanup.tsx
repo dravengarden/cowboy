@@ -2,7 +2,8 @@ import { ScrollEdges } from "@cowboy/app-shell";
 import { Button, Checkbox, FormControlLabel, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { ConfirmSheet } from "./Sheet";
-import { callActive, callModelLabel, callTitle, dismissCalls, type ManagedCallSummary, startedLabel } from "./managedCalls";
+import { CALLS_PAGE, callActive, callModelLabel, callTitle, dismissCalls, type ManagedCallSummary, startedLabel } from "./managedCalls";
+import { invalidateAnchoredCalls } from "./useBackgroundTasks";
 import { recordUndo } from "./undoActions";
 
 /** Selection is frozen when opening: newly finished calls are never swept up. */
@@ -19,19 +20,24 @@ export function CallCleanup({ parent, calls, onChange }: {
   const clear = async (ids: string[]): Promise<void> => {
     setBusy(true);
     setError(null);
+    const changed: string[] = [];
     try {
-      const changed = await dismissCalls(parent, ids, true);
+      for (let i = 0; i < ids.length; i += CALLS_PAGE) {
+        const batch = await dismissCalls(parent, ids.slice(i, i + CALLS_PAGE), true);
+        changed.push(...batch);
+      }
+      setCandidates(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not clear calls");
+    } finally {
       if (changed.length > 0) {
         recordUndo(
           changed.length === 1 ? "1 call cleared" : `${String(changed.length)} calls cleared`,
           [{ kind: "restore_calls", parent, ids: changed }],
         );
+        invalidateAnchoredCalls(parent, changed);
+        onChange();
       }
-      setCandidates(null);
-      onChange();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not clear calls");
-    } finally {
       setBusy(false);
     }
   };

@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import { buildTaskSummaries, callKey, subagentKey } from "../backgroundTasks.ts";
-import type { ManagedCallSummary } from "../managedCalls.ts";
+import { type ManagedCallDetail, type ManagedCallSummary, projectCallSummaryFromDetail } from "../managedCalls.ts";
 import type { Subagent } from "../subagents.ts";
 import {
   buildTaskForest,
@@ -14,6 +14,7 @@ import {
   taskTabSummary,
   taskTimeLabel,
 } from "./taskTree.ts";
+import { stopGrantKey } from "./useBoundStopConfirm.ts";
 
 function subagent(overrides: Partial<Subagent> = {}): Subagent {
   return {
@@ -349,4 +350,49 @@ test("compareTaskOrder distinguishes Unicode keys that collate equally", () => {
   const forward = [a!, b!].sort(compareTaskOrder).map((t) => t.key);
   const reversed = [b!, a!].sort(compareTaskOrder).map((t) => t.key);
   assertEquals(forward, reversed);
+});
+
+test("projectCallSummaryFromDetail preserves full ManagedCallSummary metadata and normalizes has_result", () => {
+  const detail: ManagedCallDetail = {
+    ...call({
+      call_id: "c-reuse",
+      state: "completed",
+      has_result: false,
+      verdict: "needs_attention",
+      finding_count: 3,
+      reused_from: "c-prev",
+      reused_child_session_id: "child-prev",
+      cancel_requested: false,
+      usage: {
+        uncached_input_tokens: 10,
+        cached_input_tokens: 5,
+        output_tokens: 20,
+        total_tokens: 35,
+        reasoning_tokens: 4,
+      },
+    }),
+    result: { text: "Found 3 issues", structured: null, truncated: false, artifacts: [] },
+    events: [],
+    prompt_excerpt: "Review",
+  };
+  const summary = projectCallSummaryFromDetail(detail);
+  assertEquals(summary.has_result, true);
+  assertEquals(summary.reused_from, "c-prev");
+  assertEquals(summary.reused_child_session_id, "child-prev");
+  assertEquals(summary.verdict, "needs_attention");
+  assertEquals(summary.finding_count, 3);
+  assertEquals(summary.usage?.total_tokens, 35);
+  assertEquals("events" in summary, false);
+});
+
+test("stopGrantKey invalidates when connection generation advances across reconnects", () => {
+  const [task] = buildTaskSummaries({
+    subagents: [{ subagent: subagent({ id: "s1", revision: 4, observedSeq: 12 }), anchorSeq: 12, reconciledBy: "live", reconciledAt: 100 }],
+    calls: [],
+    approval: null,
+    pending: [],
+  });
+  const g1 = stopGrantKey("sess-1", task!, true, 0, 1);
+  const g2 = stopGrantKey("sess-1", task!, true, 0, 2);
+  assertEquals(g1 !== null && g2 !== null && g1 !== g2, true);
 });

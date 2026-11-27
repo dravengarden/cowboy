@@ -58,7 +58,7 @@ export function setActiveSessionId(id: string | null): void {
   for (const listener of activeSessionListeners) listener();
 }
 
-function subscribeActiveSession(listener: () => void): () => void {
+export function subscribeActiveSession(listener: () => void): () => void {
   activeSessionListeners.add(listener);
   return () => activeSessionListeners.delete(listener);
 }

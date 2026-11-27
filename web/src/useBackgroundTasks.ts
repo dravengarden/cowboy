@@ -168,6 +168,14 @@ function settleStops(tasks: readonly TaskSummary[], states: ReadonlyMap<string, 
 const EMPTY_CALLS: ManagedCallSummary[] = [];
 const NO_CALL_IDS: ReadonlySet<string> = new Set();
 
+const anchoredInvalidationListeners = new Set<(parent: string, ids?: readonly string[]) => void>();
+
+/** Invalidate cached anchored Calls after Clear / Undo dismissal so terminal
+ *  entries beyond the first ledger page re-check their dismissed status. */
+export function invalidateAnchoredCalls(parent: string, ids?: readonly string[]): void {
+  for (const listener of anchoredInvalidationListeners) listener(parent, ids);
+}
+
 /** Anchored Calls the first ledger page does not list. Absence from a full
  *  page proves nothing, so each is read by id: only a dismissal or a 404 removes
  *  its row. A shorter page is the whole ledger and needs no read. */
@@ -206,6 +214,24 @@ function useAnchoredCalls(
   }, [sessionId, missing, known, observedAt]);
   useEffect(() => {
     setKnown(new Map());
+  }, [sessionId]);
+  useEffect(() => {
+    const onInvalidate = (parent: string, ids?: readonly string[]): void => {
+      if (parent !== sessionId) return;
+      attempted.current = new CallReadEpoch();
+      setKnown((previous) => {
+        if (previous.size === 0) return previous;
+        if (!ids || ids.length === 0) return new Map();
+        const next = new Map(previous);
+        let changed = false;
+        for (const id of ids) {
+          if (next.delete(id)) changed = true;
+        }
+        return changed ? next : previous;
+      });
+    };
+    anchoredInvalidationListeners.add(onInvalidate);
+    return () => { anchoredInvalidationListeners.delete(onInvalidate); };
   }, [sessionId]);
   return useMemo(() => {
     if (missing.length === 0) return { calls: EMPTY_CALLS, unresolved: NO_CALL_IDS };
@@ -312,8 +338,9 @@ export function useBackgroundTasks(
     const now = Date.now();
     settleStops(tasks, stopStates, now);
     let earliestRemaining = Number.POSITIVE_INFINITY;
-    for (const stop of stopStates.values()) {
-      if (stop.outcome === "stopping") {
+    for (const task of tasks) {
+      const stop = stopStates.get(task.key);
+      if (stop?.outcome === "stopping") {
         earliestRemaining = Math.min(earliestRemaining, Math.max(0, STOP_TIMEOUT_MS - (now - stop.at)));
       }
     }

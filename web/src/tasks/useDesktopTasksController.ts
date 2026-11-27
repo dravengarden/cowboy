@@ -21,17 +21,17 @@ export interface DesktopModeState {
 
 export interface DesktopTasksCommandActions {
   active: boolean;
-  selected: TaskSummary | null;
-  hasConversation: boolean;
+  getTarget: () => TaskSummary | null;
+  canTranscript: (task: TaskSummary) => boolean;
   effectiveMode: TaskReaderViewMode;
   hideEnded: boolean;
   stepTask: (delta: number) => void;
-  toggleInfo: () => void;
-  toggleTranscript: () => void;
-  quote: () => void;
-  openChild: () => void;
-  locate: () => void;
-  stop: () => void;
+  toggleInfo: (task: TaskSummary) => void;
+  toggleTranscript: (task: TaskSummary) => void;
+  quote: (task: TaskSummary) => void;
+  openChild: (task: TaskSummary) => void;
+  locate: (task: TaskSummary) => void;
+  stop: (task: TaskSummary) => void;
   escape: () => void;
 }
 
@@ -44,6 +44,7 @@ export function useDesktopTasksCommands(actions: DesktopTasksCommandActions): vo
   const commands = useMemo((): DesktopCommand[] => {
     const a = (): DesktopTasksCommandActions => latest.current;
     const ready = (): boolean => a().active;
+    const target = (): TaskSummary | null => a().getTarget();
     const scoped = (id: string, shortcut: string, title: string, run: () => void, when?: () => boolean): DesktopCommand => ({
       id,
       title,
@@ -55,14 +56,14 @@ export function useDesktopTasksCommands(actions: DesktopTasksCommandActions): vo
       run,
     });
     return [
-      scoped("tasks.previous", "[", "Previous task", () => a().stepTask(-1), () => a().selected !== null),
-      scoped("tasks.next", "]", "Next task", () => a().stepTask(1), () => a().selected !== null),
-      scoped("tasks.info", "I", "Toggle task info", () => a().toggleInfo(), () => a().selected !== null),
-      scoped("tasks.transcript", "T", "Toggle Result / Transcript", () => a().toggleTranscript(), () => a().selected !== null && a().hasConversation),
-      scoped("tasks.quote", "S", "Quote task to Prompt", () => a().quote(), () => a().selected !== null),
-      scoped("tasks.openSession", "O", "Open Call as session", () => a().openChild(), () => a().selected?.source === "call" && Boolean(a().selected?.call)),
-      scoped("tasks.locate", "Shift+L", "Locate task in Conversation", () => a().locate(), () => a().selected !== null && a().selected?.anchorSeq !== null),
-      scoped("tasks.stop", "X", "Stop selected task", () => a().stop(), () => Boolean(a().selected?.canStop)),
+      scoped("tasks.previous", "[", "Previous task", () => a().stepTask(-1), () => target() !== null),
+      scoped("tasks.next", "]", "Next task", () => a().stepTask(1), () => target() !== null),
+      scoped("tasks.info", "I", "Toggle task info", () => { const t = target(); if (t) a().toggleInfo(t); }, () => target() !== null),
+      scoped("tasks.transcript", "T", "Toggle Result / Transcript", () => { const t = target(); if (t) a().toggleTranscript(t); }, () => { const t = target(); return t !== null && a().canTranscript(t); }),
+      scoped("tasks.quote", "S", "Quote task to Prompt", () => { const t = target(); if (t) a().quote(t); }, () => target() !== null),
+      scoped("tasks.openSession", "O", "Open Call as session", () => { const t = target(); if (t) a().openChild(t); }, () => { const t = target(); return t?.source === "call" && Boolean(t.call); }),
+      scoped("tasks.locate", "Shift+L", "Locate task in Conversation", () => { const t = target(); if (t) a().locate(t); }, () => { const t = target(); return t !== null && t.anchorSeq !== null; }),
+      scoped("tasks.stop", "X", "Stop selected task", () => { const t = target(); if (t) a().stop(t); }, () => Boolean(target()?.canStop)),
       scoped("tasks.escape", "Escape", "Close info or clear filter", () => a().escape(), () => a().effectiveMode === "info" || a().hideEnded),
     ];
   }, []);
