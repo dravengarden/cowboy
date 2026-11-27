@@ -22,6 +22,11 @@ import { syncVimCursorOwnership } from "./vimCursorOwnership";
 import { connectVimRegisterController } from "./vimRegister";
 import { getVimConfigSource, subscribeVimConfigSource } from "../../vimSetting";
 import { parseVimConfig } from "./vimConfig";
+import {
+  getInsertEscapeConfig,
+  ImeInsertEscapeTracker,
+} from "./imeInsertEscape";
+import { clearNativeCompositionHold } from "../commands/keyIntent";
 import { DESKTOP_EDITOR_INSERT_EVENT } from "../editorInsert";
 
 /** `␣I` (editorInsert.ts): the first Vim editor of the region the leader
@@ -130,11 +135,13 @@ export function createImeAutoInsertVim(): {
   // compositionend. Vim may change mode in that window, but Cowboy must not
   // move focus or stabilize the caret until the browser commits marked text.
   let composing = false;
-  // The command-sink plugin owns the actual focus-exit normalization. Native
-  // composition handlers live at higher precedence, so bridge compositionend
-  // back to that plugin instead of treating a transient blur as an ended IME
-  // transaction. There is one bridge per editor runtime.
-  let finishPendingFocusExit: (() => void) | null = null;
+  interface CompositionBridge {
+    onCompositionStart: () => void;
+    onCompositionUpdate: (data: string) => void;
+    onCompositionEnd: (data: string) => boolean;
+    onCompositionSettled: () => void;
+  }
+  const bridges = new WeakMap<EditorView, CompositionBridge>();
   // A structural Vim insert command may queue DOM-caret repair for a line that
   // does not exist yet. The first physical key of a native IME reaches the
   // contenteditable before `compositionstart` on macOS. Treat ANY subsequent
@@ -148,20 +155,32 @@ export function createImeAutoInsertVim(): {
       const cm = getCM(view);
       const state = cm?.state?.vim;
       setImeComposing(!!cm && !!state && !state.insertMode);
-      if (!cm || !state || state.insertMode) return false;
-      const region = view.dom.closest<HTMLElement>("[data-desktop-region]");
-      if (region && region.dataset.desktopFocused !== "true") return false;
-      // Visual/operator-pending interpret `i` as part of a command. Esc first
-      // normalizes every non-insert state and clears partial commands. It is
-      // harmless in plain Normal mode.
-      Vim.handleKey(cm, "<Esc>", "user");
-      Vim.handleKey(cm, "i", "user");
+      if (cm && state && !state.insertMode) {
+        const region = view.dom.closest<HTMLElement>("[data-desktop-region]");
+        if (!region || region.dataset.desktopFocused === "true") {
+          // Visual/operator-pending interpret `i` as part of a command. Esc first
+          // normalizes every non-insert state and clears partial commands.
+          Vim.handleKey(cm, "<Esc>", "user");
+          Vim.handleKey(cm, "i", "user");
+        }
+      }
+      bridges.get(view)?.onCompositionStart();
       return false; // Never cancel the native composition.
     },
-    compositionend: (): boolean => {
+    compositionupdate: (event, view): boolean => {
+      bridges.get(view)?.onCompositionUpdate(event.data ?? "");
+      return false;
+    },
+    compositionend: (event, view): boolean => {
       composing = false;
+      const bridge = bridges.get(view);
+      if (bridge?.onCompositionEnd(event.data ?? "")) {
+        clearImeStatus();
+        clearNativeCompositionHold();
+        return false;
+      }
       setImeCommitted();
-      finishPendingFocusExit?.();
+      bridge?.onCompositionSettled();
       return false;
     },
     blur: (): boolean => {
@@ -182,6 +201,15 @@ export function createImeAutoInsertVim(): {
     private modeHandler: (() => void) | null = null;
     private pendingFocusExit = false;
     private originalOpenDialog: NonNullable<ReturnType<typeof getCM>>["openDialog"] | null = null;
+    private readonly imeEscape = new ImeInsertEscapeTracker();
+    private imeAnchor: { from: number; tailLen: number; replaced: string } | null = null;
+    private pendingImeEscape: {
+      anchor: { from: number; tailLen: number; replaced: string };
+      committedData: string;
+      retried: boolean;
+      abortTimer: number | null;
+      timer: number | null;
+    } | null = null;
 
     constructor(readonly view: EditorView) {
       this.sink = document.createElement("div");
@@ -210,7 +238,7 @@ export function createImeAutoInsertVim(): {
       // Capture runs before CodeMirror's input pipeline. In particular, the
       // first pinyin key can precede compositionstart, so composition guards
       // alone cannot protect a queued Selection rewrite.
-      view.contentDOM.addEventListener("keydown", this.onNativeInput, true);
+      view.contentDOM.addEventListener("keydown", this.onContentKeyDown, true);
       view.contentDOM.addEventListener("beforeinput", this.onNativeInput, true);
       // Hand Normal-mode focus to the sink from the native focus event, not
       // from CodeMirror's focusChanged update. CM6 reports focus changes from a
@@ -223,7 +251,12 @@ export function createImeAutoInsertVim(): {
       view.contentDOM.addEventListener("focus", this.onContentFocus);
       view.dom.addEventListener("focusout", this.onFocusOut);
       view.dom.append(this.sink);
-      finishPendingFocusExit = this.onCompositionSettled;
+      bridges.set(view, {
+        onCompositionStart: this.onImeCompositionStart,
+        onCompositionUpdate: this.onImeCompositionUpdate,
+        onCompositionEnd: this.onImeCompositionEnd,
+        onCompositionSettled: this.onCompositionSettled,
+      });
       queueMicrotask(() => this.connect());
     }
 
@@ -236,9 +269,14 @@ export function createImeAutoInsertVim(): {
       // Never rewrite native focus/Selection while an active composition is
       // being torn down. The editor DOM is leaving anyway.
       if (!composing && !this.view.composing) this.normalizeVimState();
-      if (finishPendingFocusExit === this.onCompositionSettled) {
-        finishPendingFocusExit = null;
+      if (this.pendingImeEscape?.abortTimer !== null && this.pendingImeEscape?.abortTimer !== undefined) {
+        globalThis.clearTimeout(this.pendingImeEscape.abortTimer);
       }
+      if (this.pendingImeEscape?.timer !== null && this.pendingImeEscape?.timer !== undefined) {
+        globalThis.clearTimeout(this.pendingImeEscape.timer);
+      }
+      this.pendingImeEscape = null;
+      bridges.delete(this.view);
       if (this.cm && this.modeHandler) {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
@@ -246,7 +284,7 @@ export function createImeAutoInsertVim(): {
       this.sink.removeEventListener("focus", this.onSinkFocus);
       this.sink.removeEventListener("blur", this.onSinkBlur);
       this.sink.removeEventListener("keydown", this.onKeyDown);
-      this.view.contentDOM.removeEventListener("keydown", this.onNativeInput, true);
+      this.view.contentDOM.removeEventListener("keydown", this.onContentKeyDown, true);
       this.view.contentDOM.removeEventListener("beforeinput", this.onNativeInput, true);
       this.view.contentDOM.removeEventListener("focus", this.onContentFocus);
       this.view.dom.removeEventListener("focusout", this.onFocusOut);
@@ -433,6 +471,9 @@ export function createImeAutoInsertVim(): {
     }
 
     private readonly onKeyDown = (event: KeyboardEvent): void => {
+      // If a Normal key arrives immediately after an IME `jj` escape, flush
+      // the pending cleanup synchronously so the key runs in Normal right away.
+      if (this.pendingImeEscape) this.finalizeImeEscape();
       // This sink is non-editable and cannot own marked text. macOS may still
       // report isComposing/229 for physical Normal-mode keys under a CJK input
       // source, so trust the editor's real composition lifecycle instead.
@@ -480,6 +521,137 @@ export function createImeAutoInsertVim(): {
       // after that command has run, so it leaves Insert focus alone.
       if (!this.cm) this.connect();
       else this.focusSinkIfNormal();
+    };
+
+    private captureDocAnchor(): { from: number; tailLen: number; replaced: string } {
+      const sel = this.view.state.selection.main;
+      return {
+        from: sel.from,
+        tailLen: this.view.state.doc.length - sel.to,
+        replaced: this.view.state.sliceDoc(sel.from, sel.to),
+      };
+    }
+
+    private beginImeEscapeAbort(): void {
+      if (this.pendingImeEscape) return;
+      const anchor = this.imeAnchor ?? this.captureDocAnchor();
+      this.imeAnchor = null;
+      // Defer the focus move past the current event turn: blurring synchronously
+      // inside `compositionupdate` (or a Process/229 keydown whose SetComposition
+      // is still on the C++ stack) makes Chromium refocus `contentDOM` during the
+      // paired `beforeinput`/`input` and leave the composition stuck open.
+      const pending = {
+        anchor,
+        committedData: "",
+        retried: false,
+        abortTimer: null as number | null,
+        timer: globalThis.setTimeout(() => this.finalizeImeEscape(), 180),
+      };
+      this.pendingImeEscape = pending;
+      pending.abortTimer = globalThis.setTimeout(() => {
+        pending.abortTimer = null;
+        if (this.pendingImeEscape !== pending || !this.view.dom.isConnected) return;
+        this.view.contentDOM.blur();
+        this.sink.focus({ preventScroll: true });
+      }, 0);
+    }
+
+    private scheduleImeEscapeFinalize(): void {
+      const pending = this.pendingImeEscape;
+      if (!pending) return;
+      if (pending.timer !== null) globalThis.clearTimeout(pending.timer);
+      pending.timer = globalThis.setTimeout(() => this.finalizeImeEscape(), 0);
+    }
+
+    private finalizeImeEscape(): void {
+      const pending = this.pendingImeEscape;
+      if (!pending) return;
+      if (pending.abortTimer !== null) {
+        globalThis.clearTimeout(pending.abortTimer);
+        pending.abortTimer = null;
+      }
+      if (pending.timer !== null) {
+        globalThis.clearTimeout(pending.timer);
+        pending.timer = null;
+      }
+      const deleteTo = this.view.state.doc.length - pending.anchor.tailLen;
+      if (
+        !pending.retried &&
+        pending.committedData.length > 0 &&
+        deleteTo === pending.anchor.from &&
+        pending.anchor.replaced.length === 0
+      ) {
+        pending.retried = true;
+        requestAnimationFrame(() => this.finalizeImeEscape());
+        return;
+      }
+      this.pendingImeEscape = null;
+      this.imeEscape.reset();
+      this.imeAnchor = null;
+      composing = false;
+      if (deleteTo >= pending.anchor.from && deleteTo <= this.view.state.doc.length) {
+        const targetPos = pending.anchor.from + pending.anchor.replaced.length;
+        this.view.dispatch({
+          changes: { from: pending.anchor.from, to: deleteTo, insert: pending.anchor.replaced },
+          selection: { anchor: targetPos },
+          userEvent: "input",
+        });
+      }
+      if (!this.cm) this.connect();
+      if (this.cm?.state?.vim?.insertMode) {
+        Vim.handleKey(this.cm, "<Esc>", "user");
+      }
+      clearImeStatus();
+      clearNativeCompositionHold();
+      this.syncFocusToMode();
+    }
+
+    private readonly onContentKeyDown = (event: KeyboardEvent): void => {
+      this.onNativeInput();
+      if (!this.cm) this.connect();
+      if (!this.cm?.state?.vim?.insertMode || this.pendingImeEscape) return;
+      const { sequences, timeoutMs } = getInsertEscapeConfig();
+      const action = this.imeEscape.onKeyDown(
+        event,
+        composing || this.view.composing,
+        sequences,
+        timeoutMs,
+      );
+      if (action === "arm") {
+        this.imeAnchor = this.captureDocAnchor();
+      } else if (action === "escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.beginImeEscapeAbort();
+      }
+    };
+
+    private readonly onImeCompositionStart = (): void => {
+      if (this.pendingImeEscape) return;
+      if (this.imeEscape.onCompositionStart()) {
+        if (!this.imeAnchor) this.imeAnchor = this.captureDocAnchor();
+      } else {
+        this.imeAnchor = null;
+      }
+    };
+
+    private readonly onImeCompositionUpdate = (data: string): void => {
+      if (!this.cm?.state?.vim?.insertMode || this.pendingImeEscape) return;
+      const { sequences, timeoutMs } = getInsertEscapeConfig();
+      if (this.imeEscape.onCompositionUpdate(data, sequences, timeoutMs) === "escape") {
+        this.beginImeEscapeAbort();
+      }
+    };
+
+    private readonly onImeCompositionEnd = (data: string): boolean => {
+      this.imeEscape.onCompositionEnd();
+      if (!this.pendingImeEscape) {
+        this.imeAnchor = null;
+        return false;
+      }
+      this.pendingImeEscape.committedData = data;
+      this.scheduleImeEscapeFinalize();
+      return true;
     };
 
     private readonly onNativeInput = (): void => {

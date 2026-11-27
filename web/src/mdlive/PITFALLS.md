@@ -3368,3 +3368,22 @@ through to unexpected blank lines, syntax selection, or deleting the current
 line. `composerDefaultKeymap` filters out those three chords only; all other
 CM6 navigation, selection, history, IME, caret, and live-preview extensions are
 unchanged, and this does not affect physical iPhone issue #69.
+
+### 2026-11-27 Desktop Vim Insert escape (`jj`) under CJK IME (`desktop/vim/imeInsertEscape.ts`)
+
+Under macOS CJK input methods (WeType, Pinyin), pressing physical `j` twice in
+Insert mode starts a native composition (`j` → `j'j`) before JS `keydown` can
+prevent it, so `@replit/codemirror-vim` never receives the letters. Desktop-only
+`ImeInsertEscapeTracker` (shared by `imeAutoInsertVim.ts` for CodeMirror and
+`inputVim.ts` for native inputs) tracks physical letter keys and normalized
+composition text (`j'j` → `jj`) from the start of a fresh composition. Any
+non-prefix key (`ji`, `w…`, Backspace, candidate pick) or pause past
+`timeoutlen` disqualifies the composition so ordinary Chinese pinyin stays
+intact. When a configured `inoremap <seq> <Esc>` completes, CodeMirror blurs
+`contentDOM` into its non-editable Vim Normal sink (`inputVim` sets `readOnly`
+and bounces focus), waits for `compositionend` and CM6's DOM flush, restores
+the exact pre-composition slice `[from, doc.length - tailLen]`, exits Insert
+via `<Esc>`, and clears `nativeCompositionEndedAt` so the next Normal key works
+immediately. Mobile/iOS touch editors do not load this module, and physical
+iPhone issue #69 is untouched; macOS WeType/Pinyin live spot-check still
+depends on the host OS IME beyond CDP `Input.imeSetComposition`.

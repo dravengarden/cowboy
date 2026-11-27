@@ -732,7 +732,7 @@ try {
     await prefix();
     check((await mode()) === "command", "Mod+K arms the leader from Insert");
     await key("Escape");
-    await checkDefaultVimJj(key, until, check, editorText);
+    await checkDefaultVimJj(page, key, until, check, editorText);
     results.push(`${mac ? "⌘K" : "Alt+K"} arms leader; default jj exits Insert`);
 
     // 5. ' labels the focused list; a label moves the cursor.

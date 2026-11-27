@@ -185,12 +185,8 @@ export async function checkInputVim(): Promise<string> {
     );
     // Default Vim config enables `jj` to leave Insert without reaching for Esc.
     const beforeJj = text(first);
-    check(
-      !press("j", { isComposing: true }) && mode(first) === "insert",
-      "j during IME composition stays in Insert",
-    );
-    check(!press("j"), "first j types into the field");
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    check(!press("j"), "first j types into the field");
     setter.call(first, `${beforeJj}j`);
     first.dispatchEvent(new Event("input", { bubbles: true }));
     first.setSelectionRange(first.value.length, first.value.length);
@@ -199,6 +195,34 @@ export async function checkInputVim(): Promise<string> {
     check(
       mode(first) === "normal" && text(first) === beforeJj,
       "jj removes the typed j and enters Normal",
+    );
+    // CJK IME: fresh `j` -> `j'j` composition aborts and enters Normal without leftover text;
+    // normal pinyin (`j` -> `ji`) stays in Insert and commits cleanly.
+    press("A");
+    check(mode(first) === "insert", "A re-enters Insert for IME escape check");
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, bubbles: true, cancelable: true }));
+    first.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+    setter.call(first, `${beforeJj}j`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "j" }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyI", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    setter.call(first, `${beforeJj}ji`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "ji" }));
+    first.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "ji" }));
+    setter.call(first, beforeJj);
+    first.dispatchEvent(new Event("input", { bubbles: true }));
+    first.setSelectionRange(first.value.length, first.value.length);
+    check(mode(first) === "insert", "pinyin ji stays in Insert");
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, bubbles: true, cancelable: true }));
+    first.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+    setter.call(first, `${beforeJj}j`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "j" }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    setter.call(first, `${beforeJj}j'j`);
+    first.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "j'j" }));
+    await tick();
+    check(
+      mode(first) === "normal" && text(first) === beforeJj,
+      "CJK IME jj aborts j'j composition cleanly and enters Normal",
     );
     // Textarea: j/k move lines.
     const notes = field("notes");

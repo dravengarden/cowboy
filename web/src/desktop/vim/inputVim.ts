@@ -16,12 +16,13 @@
 // arms, the Draft title returns to its body.
 
 import { useEffect, useState } from "react";
-import { getVimConfigSource, getVimSetting } from "../../vimSetting";
+import { getVimSetting } from "../../vimSetting";
+import { InsertEscapeMatcher } from "./vimConfig";
 import {
-  InsertEscapeMatcher,
-  insertEscapeSequences,
-  parseVimConfig,
-} from "./vimConfig";
+  getInsertEscapeConfig,
+  ImeInsertEscapeTracker,
+} from "./imeInsertEscape";
+import { clearNativeCompositionHold } from "../commands/keyIntent";
 import { workspaceCommandKey } from "../commands/workspaceCommandKey";
 import { readVimRegister, writeVimRegister } from "./vimRegister";
 import {
@@ -57,8 +58,23 @@ interface FieldState {
   lastFind: { kind: "f" | "F" | "t" | "T"; char: string } | null;
 }
 
+interface FieldImeAnchor {
+  readonly value: string;
+  readonly from: number;
+}
+interface PendingFieldImeEscape {
+  readonly anchor: FieldImeAnchor;
+  abortTimer: number | null;
+  timer: number | null;
+}
+
 const states = new WeakMap<Field, FieldState>();
 const escapeMatchers = new WeakMap<Field, InsertEscapeMatcher>();
+const imeTrackers = new WeakMap<Field, ImeInsertEscapeTracker>();
+const imeAnchors = new WeakMap<Field, FieldImeAnchor>();
+const pendingImeEscapes = new WeakMap<Field, PendingFieldImeEscape>();
+const composingFields = new WeakSet<Field>();
+let suppressBlurField: Field | null = null;
 const modeListeners = new Set<() => void>();
 
 function notifyInputVimMode(): void {
@@ -70,20 +86,75 @@ export function subscribeInputVimMode(listener: () => void): () => void {
   modeListeners.add(listener);
   return () => modeListeners.delete(listener);
 }
-let escapeConfig: { source: string; sequences: string[]; timeoutMs: number } | null = null;
 
-/** The user's insert escape sequences (`inoremap jj <Esc>`), parsed once per edit. */
-function insertEscapes(): { sequences: string[]; timeoutMs: number } {
-  const source = getVimConfigSource();
-  if (escapeConfig?.source !== source) {
-    const config = parseVimConfig(source);
-    escapeConfig = {
-      source,
-      sequences: insertEscapeSequences(config),
-      timeoutMs: config.timeoutMs,
-    };
+function imeTracker(field: Field): ImeInsertEscapeTracker {
+  let tracker = imeTrackers.get(field);
+  if (!tracker) {
+    tracker = new ImeInsertEscapeTracker();
+    imeTrackers.set(field, tracker);
   }
-  return escapeConfig;
+  return tracker;
+}
+
+function finalizeFieldImeEscape(field: Field): void {
+  const pending = pendingImeEscapes.get(field);
+  if (!pending) return;
+  const abortPending = pending.abortTimer !== null;
+  if (pending.abortTimer !== null) globalThis.clearTimeout(pending.abortTimer);
+  if (pending.timer !== null) globalThis.clearTimeout(pending.timer);
+  pendingImeEscapes.delete(field);
+  imeAnchors.delete(field);
+  imeTrackers.get(field)?.reset();
+  composingFields.delete(field);
+  if (!field.isConnected) return;
+  const ownsFocus = document.activeElement === field || document.activeElement === document.body;
+  if (abortPending && ownsFocus) {
+    suppressBlurField = field;
+    if (!field.readOnly) {
+      field.setAttribute(OWNED_READONLY, "");
+      field.readOnly = true;
+    }
+    field.blur();
+    field.focus({ preventScroll: true });
+    suppressBlurField = null;
+  }
+  setValue(field, pending.anchor.value);
+  const at = pending.anchor.from;
+  enterInputNormal(
+    field,
+    at > lineStart(pending.anchor.value, at) ? at - 1 : at,
+  );
+  clearNativeCompositionHold();
+  if (ownsFocus && document.activeElement !== field) {
+    field.focus({ preventScroll: true });
+  }
+}
+
+function abortFieldImeForEscape(field: Field): void {
+  if (pendingImeEscapes.has(field)) return;
+  const anchor = imeAnchors.get(field) ?? {
+    value: field.value,
+    from: field.selectionStart ?? 0,
+  };
+  imeAnchors.delete(field);
+  const pending: PendingFieldImeEscape = {
+    anchor,
+    abortTimer: null,
+    timer: globalThis.setTimeout(() => finalizeFieldImeEscape(field), 180),
+  };
+  pendingImeEscapes.set(field, pending);
+  pending.abortTimer = globalThis.setTimeout(() => {
+    pending.abortTimer = null;
+    if (pendingImeEscapes.get(field) !== pending || !field.isConnected) return;
+    suppressBlurField = field;
+    if (!field.readOnly) {
+      field.setAttribute(OWNED_READONLY, "");
+      field.readOnly = true;
+    }
+    field.blur();
+    field.focus({ preventScroll: true });
+    suppressBlurField = null;
+  }, 0);
 }
 
 function escapeMatcher(field: Field): InsertEscapeMatcher {
@@ -293,7 +364,7 @@ export function handleInputVimKey(event: KeyboardEvent): boolean {
     if (!escape) {
       // `inoremap jj <Esc>`: earlier keys of the sequence were typed into the
       // field; the completing key removes them and leaves Insert, as in Vim.
-      const { sequences, timeoutMs } = insertEscapes();
+      const { sequences, timeoutMs } = getInsertEscapeConfig();
       const char = sequences.length > 0 ? typedCharacter(event) : null;
       const matcher = escapeMatcher(field);
       if (char === null) {
@@ -536,16 +607,84 @@ export function installInputVim(): () => void {
       notifyInputVimMode();
     }
   };
+  const onImeKeyDown = (event: KeyboardEvent): void => {
+    const field = inputVimField(event.target);
+    if (!field || field.getAttribute(MODE) === "normal") return;
+    if (pendingImeEscapes.has(field)) {
+      finalizeFieldImeEscape(field);
+      return;
+    }
+    const { sequences, timeoutMs } = getInsertEscapeConfig();
+    const action = imeTracker(field).onKeyDown(
+      event,
+      composingFields.has(field),
+      sequences,
+      timeoutMs,
+    );
+    if (action === "arm") {
+      imeAnchors.set(field, { value: field.value, from: field.selectionStart ?? 0 });
+    } else if (action === "escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      abortFieldImeForEscape(field);
+    }
+  };
+  const onCompositionStart = (event: CompositionEvent): void => {
+    const field = inputVimField(event.target);
+    if (!field || field.getAttribute(MODE) === "normal") return;
+    composingFields.add(field);
+    if (pendingImeEscapes.has(field)) return;
+    if (imeTracker(field).onCompositionStart()) {
+      if (!imeAnchors.has(field)) {
+        imeAnchors.set(field, { value: field.value, from: field.selectionStart ?? 0 });
+      }
+    } else {
+      imeAnchors.delete(field);
+    }
+  };
+  const onCompositionUpdate = (event: CompositionEvent): void => {
+    const field = inputVimField(event.target);
+    if (!field || field.getAttribute(MODE) === "normal" || pendingImeEscapes.has(field)) return;
+    const { sequences, timeoutMs } = getInsertEscapeConfig();
+    if (imeTracker(field).onCompositionUpdate(event.data ?? "", sequences, timeoutMs) === "escape") {
+      abortFieldImeForEscape(field);
+    }
+  };
+  const onCompositionEnd = (event: CompositionEvent): void => {
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+    composingFields.delete(field);
+    imeTrackers.get(field)?.onCompositionEnd();
+    const pending = pendingImeEscapes.get(field);
+    if (!pending) {
+      imeAnchors.delete(field);
+      return;
+    }
+    clearNativeCompositionHold();
+    if (pending.timer !== null) globalThis.clearTimeout(pending.timer);
+    pending.timer = globalThis.setTimeout(() => finalizeFieldImeEscape(field), 0);
+  };
   const onFocusOut = (event: FocusEvent): void => {
     const field = event.target;
     if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+    if (field === suppressBlurField) return;
     const hadMode = field.hasAttribute(MODE);
     if (field.hasAttribute(OWNED_READONLY)) {
       field.readOnly = false;
       field.removeAttribute(OWNED_READONLY);
     }
     field.removeAttribute(MODE);
+    const pending = pendingImeEscapes.get(field);
+    if (pending) {
+      if (pending.abortTimer !== null) globalThis.clearTimeout(pending.abortTimer);
+      if (pending.timer !== null) globalThis.clearTimeout(pending.timer);
+      pendingImeEscapes.delete(field);
+      setValue(field, pending.anchor.value);
+    }
     escapeMatchers.get(field)?.reset();
+    imeTrackers.get(field)?.reset();
+    imeAnchors.delete(field);
+    composingFields.delete(field);
     if (hadMode) notifyInputVimMode();
     const current = states.get(field);
     if (current) {
@@ -568,11 +707,19 @@ export function installInputVim(): () => void {
   document.addEventListener("focusout", onFocusOut, true);
   document.addEventListener("mouseup", onMouseUp, true);
   document.addEventListener("copy", syncCopiedSelectionToVimRegister, true);
+  document.addEventListener("keydown", onImeKeyDown, true);
+  document.addEventListener("compositionstart", onCompositionStart, true);
+  document.addEventListener("compositionupdate", onCompositionUpdate, true);
+  document.addEventListener("compositionend", onCompositionEnd, true);
   return () => {
     document.removeEventListener("focusin", onFocusIn, true);
     document.removeEventListener("focusout", onFocusOut, true);
     document.removeEventListener("mouseup", onMouseUp, true);
     document.removeEventListener("copy", syncCopiedSelectionToVimRegister, true);
+    document.removeEventListener("keydown", onImeKeyDown, true);
+    document.removeEventListener("compositionstart", onCompositionStart, true);
+    document.removeEventListener("compositionupdate", onCompositionUpdate, true);
+    document.removeEventListener("compositionend", onCompositionEnd, true);
   };
 }
 

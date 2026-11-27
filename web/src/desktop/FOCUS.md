@@ -163,7 +163,10 @@ Settings → Workflow → Vim config holds a vimrc subset per device
 (`vim/vimConfig.ts`, `cowboy:vim-config`): `map`/`noremap` and their
 `n`/`v`/`x`/`i`/`o` variants, plus `set timeoutlen=<ms>` (default 1000,
 like Vim). Default config is `inoremap jj <Esc>` so `jj` leaves Insert out of
-the box; "Leave Insert" switches between `Esc`, `jj`, `jk` and `kj`. CodeMirror editors apply every mapping through codemirror-vim;
+the box—including under active CJK IMEs where a fresh `j` → `j'j` composition
+is aborted cleanly while normal pinyin (`ji`, `wo'j'j`, or pauses past
+`timeoutlen`) stays untouched. "Leave Insert" switches between `Esc`, `jj`,
+`jk` and `kj`. CodeMirror editors apply every mapping through codemirror-vim;
 native text fields honour typed Insert escape sequences only, removing the
 already-typed prefix as Vim does. Unsupported lines are listed with their
 line numbers and skipped.
