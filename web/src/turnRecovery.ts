@@ -54,23 +54,46 @@ export function turnFailureTelemetry(
 }
 
 /** The proxy's closed prefix of a prompt the agent refused before running it
- *  (Antigravity: images while its `ask_question` awaits an answer), and the
- *  evidence class it always carries. Nothing ran. */
+ *  (Antigravity: images while its `ask_question` awaits an answer). */
 const REFUSED_INPUT_PREFIX = "antigravity_prompt_rejected:";
-const REFUSED_INPUT_EVIDENCE = '"not_dispatched"';
 
 /** What the reader does next after refused input: only a text reply unblocks
- *  the agent. The card makes no claim about Drafts; when the Controller
- *  restored the message, the Drafts list shows it. */
+ *  the agent, which takes the next message as its answer. */
 export const REFUSED_INPUT_HINT =
   "Answer the agent's question in text first; it takes your next message as " +
   "the answer, so Cowboy offers no Continue here.";
 
+function plainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Whether a failed turn's detail is input the agent refused before running
- *  it: the proxy's prefix with its `not_dispatched` evidence, as the
- *  Provider's error rule matches it. The transport continuation must never be
- *  offered there: the agent would read it as the answer to its question. */
+ *  it: the proxy's complete, self-consistent result, checked as the
+ *  Controller checks it (`account_controls::is_prompt_rejection`): the code
+ *  repeated in `cowboy.prompt_rejected`, no violation or possible effect, and
+ *  `not_dispatched` evidence with its barrier, one prompt receipt and no
+ *  dispatch, success, retry or refusal. The transport continuation must never
+ *  be offered there: the agent would read it as the answer to its question. */
 export function isRefusedInput(detail: string | null): boolean {
-  return detail != null && detail.startsWith(REFUSED_INPUT_PREFIX) &&
-    detail.includes(REFUSED_INPUT_EVIDENCE);
+  if (detail == null || !detail.startsWith(REFUSED_INPUT_PREFIX)) return false;
+  const split = detail.indexOf(": ");
+  if (split < 0) return false;
+  const code = detail.slice(REFUSED_INPUT_PREFIX.length, split);
+  let data: unknown;
+  try {
+    data = JSON.parse(detail.slice(split + 2));
+  } catch {
+    return false;
+  }
+  if (!plainObject(data) || !plainObject(data.cowboy)) return false;
+  const cowboy = data.cowboy;
+  const backend = cowboy.antigravity_backend;
+  return code.length > 0 && cowboy.prompt_rejected === code &&
+    cowboy.policy_violation === undefined &&
+    cowboy.uncertain_effect === undefined &&
+    plainObject(backend) && backend.class === "not_dispatched" &&
+    backend.barrier === true && backend.prompts === 1 &&
+    backend.dispatches === 0 && backend.successes === 0 &&
+    backend.transient === 0 && Array.isArray(backend.refusals) &&
+    backend.refusals.length === 0;
 }

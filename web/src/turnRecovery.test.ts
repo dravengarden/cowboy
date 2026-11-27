@@ -76,19 +76,40 @@ test("the card knows which session it is offering to continue", () => {
 
 test("refused input asks for a text answer, never offers the continuation", () => {
   // sess-1795343291454: images sent while Antigravity awaited an answer.
-  const proven = "antigravity_prompt_rejected:image_answer: " +
-    '{"cowboy": {"antigravity_backend": {"class": "not_dispatched"}}}';
-  assert(isRefusedInput(proven));
-  // The bare prefix is not the proxy's result.
-  assertEquals(isRefusedInput("antigravity_prompt_rejected:image_answer"), false);
-  assertEquals(
-    isRefusedInput("antigravity_backend_refusal:rate_limited: {}"),
-    false,
-  );
-  assertEquals(isRefusedInput("worker exited"), false);
-  assertEquals(isRefusedInput(null), false);
-  // Whether a Draft exists is the Controller's outcome, not the card's.
-  assertEquals(REFUSED_INPUT_HINT.includes("Drafts"), false);
+  const backend = {
+    class: "not_dispatched",
+    successes: 0,
+    barrier: true,
+    prompts: 1,
+    dispatches: 0,
+    transient: 0,
+    refusals: [],
+  };
+  const detail = (cowboy: unknown, code = "image_answer"): string =>
+    `antigravity_prompt_rejected:${code}: ` +
+    JSON.stringify({ message: "Antigravity is waiting.", cowboy }, null, 2);
+  const proven = { prompt_rejected: "image_answer", antigravity_backend: backend };
+  assert(isRefusedInput(detail(proven)));
+  // Only the proxy's complete, self-consistent result counts, as the
+  // Controller requires it.
+  for (
+    const unproven of [
+      "antigravity_prompt_rejected:image_answer",
+      "antigravity_prompt_rejected:image_answer: {not json",
+      detail({ antigravity_backend: backend }),
+      detail(proven, "other"),
+      detail({ ...proven, policy_violation: "search_web" }),
+      detail({ ...proven, uncertain_effect: "fs/writeFile" }),
+      detail({ ...proven, antigravity_backend: { class: "not_dispatched" } }),
+      detail({ ...proven, antigravity_backend: { ...backend, dispatches: 1 } }),
+      detail({ ...proven, antigravity_backend: { ...backend, refusals: [{}] } }),
+      "antigravity_backend_refusal:rate_limited: {}",
+      "worker exited",
+      null,
+    ]
+  ) {
+    assertEquals(isRefusedInput(unproven), false, String(unproven));
+  }
   assert(REFUSED_INPUT_HINT.includes("in text"));
   // The card hides Continue for refused input: its text would answer the
   // agent's pending question.

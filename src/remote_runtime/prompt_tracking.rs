@@ -20,42 +20,6 @@ use crate::runtime_wire::RuntimeEvent;
 use super::Shared;
 
 const MAX_IN_FLIGHT_PROMPTS: usize = 2048;
-/// Owner prompts with attachments kept until their turn ends, so one the
-/// agent refused before running it returns to Drafts as sent. Only running
-/// turns hold one, within a count and a byte budget; an evicted or retired
-/// turn is simply not restored.
-const MAX_TURN_PROMPTS: usize = 64;
-const MAX_TURN_PROMPT_BYTES: usize = 64 * 1024 * 1024;
-
-/// The Owner prompt one turn dispatched, kept for refused-input recovery.
-#[derive(Debug)]
-pub(super) struct TurnPrompt {
-    pub(super) command_id: String,
-    pub(super) cmid: Option<String>,
-    pub(super) content: Vec<serde_json::Value>,
-    bytes: usize,
-}
-
-/// Whether a dispatched prompt may come back as a Draft: the Owner's, with a
-/// non-text block (the only refusal so far, `image_answer`, needs an image).
-fn recoverable(entry: &InFlightPrompt) -> bool {
-    entry.origin.as_ref().is_some_and(DeliveryOrigin::is_owner)
-        && entry.content.iter().any(|block| {
-            block
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind != "text")
-        })
-}
-
-fn payload_bytes(content: &[serde_json::Value]) -> usize {
-    content
-        .iter()
-        .flat_map(|block| ["data", "text"].map(|key| block.get(key)))
-        .filter_map(|value| value.and_then(serde_json::Value::as_str))
-        .map(str::len)
-        .sum()
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct InFlightPrompt {
@@ -71,11 +35,6 @@ pub(super) struct InFlightPrompt {
 pub(super) struct InFlightPrompts {
     entries: HashMap<String, InFlightPrompt>,
     order: VecDeque<String>,
-    /// `(session_id, turn_id)` -> the recoverable prompt dispatched for that
-    /// turn, kept past its echo and taken once by the turn's `TurnEnded`.
-    turns: HashMap<(String, String), TurnPrompt>,
-    turn_order: VecDeque<(String, String)>,
-    turn_bytes: usize,
 }
 
 impl InFlightPrompts {
@@ -89,55 +48,12 @@ impl InFlightPrompts {
             }
         }
         self.order.push_back(command_id.clone());
-        let bytes = payload_bytes(&entry.content);
-        if recoverable(&entry) && bytes <= MAX_TURN_PROMPT_BYTES {
-            let turn = (entry.session_id.clone(), entry.turn_id.clone());
-            self.take_turn(&turn.0, &turn.1);
-            self.turn_bytes += bytes;
-            self.turns.insert(
-                turn.clone(),
-                TurnPrompt {
-                    command_id: command_id.clone(),
-                    cmid: entry.cmid.clone(),
-                    content: entry.content.clone(),
-                    bytes,
-                },
-            );
-            self.turn_order.push_back(turn);
-            while self.turn_order.len() > MAX_TURN_PROMPTS
-                || self.turn_bytes > MAX_TURN_PROMPT_BYTES
-            {
-                let Some(oldest) = self.turn_order.front().cloned() else {
-                    break;
-                };
-                self.take_turn(&oldest.0, &oldest.1);
-            }
-        }
         self.entries.insert(command_id, entry);
     }
 
-    /// The recoverable prompt this Controller dispatched for a turn, once.
-    pub(super) fn take_turn(&mut self, session_id: &str, turn_id: &str) -> Option<TurnPrompt> {
-        let key = (session_id.to_owned(), turn_id.to_owned());
-        let entry = self.turns.remove(&key)?;
-        self.turn_order.retain(|turn| turn != &key);
-        self.turn_bytes -= entry.bytes;
-        Some(entry)
-    }
-
-    /// A command rejected, parked, requeued or returned undelivered never ran
-    /// as its turn: its recovery copy goes with it, so a late ending cannot
-    /// park the same prompt a second time.
     pub(super) fn take_command(&mut self, command_id: &str) -> Option<InFlightPrompt> {
         let entry = self.entries.remove(command_id)?;
         self.order.retain(|id| id != command_id);
-        if self
-            .turns
-            .get(&(entry.session_id.clone(), entry.turn_id.clone()))
-            .is_some_and(|turn| turn.command_id == command_id)
-        {
-            self.take_turn(&entry.session_id, &entry.turn_id);
-        }
         Some(entry)
     }
 
@@ -189,19 +105,9 @@ impl InFlightPrompts {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn turn_of(&self, command_id: &str) -> Option<String> {
-        self.entries
-            .get(command_id)
-            .map(|entry| entry.turn_id.clone())
-    }
-
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.order.clear();
-        self.turns.clear();
-        self.turn_order.clear();
-        self.turn_bytes = 0;
     }
 }
 
@@ -252,33 +158,11 @@ pub(super) fn prepare_sent_prompt(
 /// salvage emits `UndeliveredPrompt` after `TurnStarted`.
 pub(super) fn observe_worker_event(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
     match event {
-        RuntimeEvent::TurnEnded {
-            turn_id,
-            stop_reason,
-            ..
-        } => {
-            let dispatched = {
-                let mut prompts = shared.in_flight_prompts.lock();
-                prompts.retire_turn(session_id, turn_id);
-                prompts.take_turn(session_id, turn_id)
-            };
-            // The Owner's prompt the agent refused before running it (the
-            // proxy's proven rejection) returns to Drafts as the Owner wrote
-            // it: without the context Cowboy generated at dispatch.
-            if let Some(prompt) = dispatched
-                && crate::account_controls::is_prompt_rejection(stop_reason)
-            {
-                let content: Vec<serde_json::Value> = crate::session_context::without_preamble(
-                    &shared.hub,
-                    session_id,
-                    prompt.cmid.as_deref(),
-                    prompt.content,
-                )
-                .into_iter()
-                .filter(|block| !crate::context_rollover::is_renewal_block(block))
-                .collect();
-                shared.hub.restore_rejected_prompt(session_id, content);
-            }
+        RuntimeEvent::TurnEnded { turn_id, .. } => {
+            shared
+                .in_flight_prompts
+                .lock()
+                .retire_turn(session_id, turn_id);
         }
         RuntimeEvent::Update {
             update,
