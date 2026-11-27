@@ -1146,6 +1146,7 @@ fn complete_url_elicitation(state: &ClientState, elicitation_id: &str) -> bool {
         return false;
     };
     state.elicitations.lock().remove(&request_id);
+    state.pending_tools.lock().remove(&request_id);
     let _ = tx.send(Some(ELICITATION_ACCEPT.to_owned()));
     state.sink.push(
         &state.session_id,
@@ -1329,7 +1330,9 @@ mod subagents;
 
 #[path = "acp_subagent_routing.rs"]
 mod subagent_routing;
-use subagent_routing::{publish_subagents, route_subagent_notification};
+use subagent_routing::{
+    publish_subagents, route_subagent_notification, track_elicitation_tool, track_permission_tool,
+};
 
 #[path = "acp_model_usage.rs"]
 mod model_usage;
@@ -1471,6 +1474,83 @@ mod startup_mode_tests {
         assert_eq!(
             serde_json::to_value(elicitation_response(Some("accept"))).unwrap(),
             serde_json::json!({ "action": "accept" })
+        );
+    }
+
+    #[test]
+    fn antigravity_ask_question_form_elicitation_round_trips_through_acp() {
+        // Exact wire shape emitted by `agy` 1.5.14 `buildQuestionElicitation`:
+        // single-select (`oneOf`), multi-select (`items.anyOf`), companion
+        // `qN_other` free-form string, and free-form-only question; `required`
+        // is omitted.
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "sessionId": "agy-sess-1",
+                "toolCallId": "call_2211613383716556954",
+                "mode": "form",
+                "message": "The agent has 3 questions.",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "q1": {
+                            "type": "string",
+                            "title": "Copy format?",
+                            "oneOf": [
+                                { "const": "1", "title": "(Recommended) HTML + plain" },
+                                { "const": "2", "title": "Plain only" }
+                            ]
+                        },
+                        "q1_other": {
+                            "type": "string",
+                            "title": "Other",
+                            "description": "Optional free-form answer to: Copy format?"
+                        },
+                        "q2": {
+                            "type": "array",
+                            "title": "Surfaces?",
+                            "items": {
+                                "anyOf": [
+                                    { "const": "1", "title": "Mobile" },
+                                    { "const": "2", "title": "Desktop" }
+                                ]
+                            }
+                        },
+                        "q2_other": {
+                            "type": "string",
+                            "title": "Other",
+                            "description": "Optional free-form answer to: Surfaces?"
+                        },
+                        "q3_other": {
+                            "type": "string",
+                            "title": "Any extra notes?"
+                        }
+                    }
+                }
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("42", &request);
+        assert_eq!(tool_call["toolCallId"], "call_2211613383716556954");
+        assert_eq!(tool_call["title"], "The agent has 3 questions.");
+        assert_eq!(tool_call["_cowboy"]["elicitation"]["mode"], "form");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["properties"]["q2"]["items"]["anyOf"]
+                [1]["const"],
+            "2"
+        );
+        assert_eq!(options[0]["optionId"], "accept");
+        assert_eq!(options[1]["optionId"], "decline");
+
+        let answer = r#"accept:{"q1":"1","q2":["1","2"],"q3_other":"keep it fast"}"#;
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some(answer))).unwrap(),
+            serde_json::json!({
+                "action": "accept",
+                "content": { "q1": "1", "q2": ["1", "2"], "q3_other": "keep it fast" }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("decline"))).unwrap(),
+            serde_json::json!({ "action": "decline" })
         );
     }
 
@@ -2692,6 +2772,7 @@ struct ClientState {
     /// request id that presents each one. `elicitation/complete` resolves the
     /// request it names here.
     url_elicitations: Mutex<HashMap<String, String>>,
+    pending_tools: Mutex<HashMap<String, (String, String)>>,
     /// Serialize `session/prompt` RPCs while leaving the outer command loop
     /// responsive to Cancel, permission answers, and config changes.
     prompt_lock: tokio::sync::Mutex<()>,
@@ -3019,6 +3100,7 @@ async fn agent_main(
         pending: Mutex::new(HashMap::new()),
         elicitations: Mutex::new(HashSet::new()),
         url_elicitations: Mutex::new(HashMap::new()),
+        pending_tools: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
         last_prompt_terminal_reply: AtomicBool::new(false),
@@ -3145,6 +3227,7 @@ async fn agent_main(
 
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 perm_state.pending.lock().insert(request_id.clone(), tx);
+                track_permission_tool(&perm_state, &request_id, &req);
                 perm_state.sink.push(
                     &perm_state.session_id,
                     Event::PermissionRequest {
@@ -3167,6 +3250,7 @@ async fn agent_main(
                         chosen = rx => chosen.unwrap_or(None),
                         () = cancellation.cancelled() => {
                             cancelled_state.pending.lock().remove(&cancelled_request_id);
+                            cancelled_state.pending_tools.lock().remove(&cancelled_request_id);
                             cancelled_state.sink.push(
                                 &cancelled_state.session_id,
                                 Event::PermissionResolved {
@@ -3217,6 +3301,7 @@ async fn agent_main(
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 elicit_state.pending.lock().insert(request_id.clone(), tx);
                 elicit_state.elicitations.lock().insert(request_id.clone());
+                track_elicitation_tool(&elicit_state, &request_id, &req);
                 if let ElicitationMode::Url(url) = &req.mode {
                     elicit_state
                         .url_elicitations
@@ -3239,6 +3324,7 @@ async fn agent_main(
                         () = cancellation.cancelled() => {
                             cancelled_state.pending.lock().remove(&request_id);
                             cancelled_state.elicitations.lock().remove(&request_id);
+                            cancelled_state.pending_tools.lock().remove(&request_id);
                             forget_url_elicitation(&cancelled_state, &request_id);
                             cancelled_state.sink.push(
                                 &cancelled_state.session_id,
@@ -4902,6 +4988,7 @@ async fn run_session(
                 request_id,
                 option_id,
             } => {
+                state.pending_tools.lock().remove(&request_id);
                 if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }

@@ -1,8 +1,10 @@
 import { Close, Refresh, SettingsOutlined } from "@mui/icons-material";
 import { Box, Button, CircularProgress } from "@mui/material";
 import {
+  FLOATING_CONTROLS_BOTTOM,
   type MobileSheetAction,
   MobileSheetActionGroup,
+  readerBottomEdge,
 } from "@cowboy/app-shell";
 import { createPortal } from "react-dom";
 import { openAppSettings } from "../../appSettings";
@@ -95,9 +97,12 @@ export function ReviewNavigationActions({
       component="nav"
       aria-label={label}
       data-review-navigation-actions="sidebar"
-      sx={{
+      sx={(theme) => ({
+        ...readerBottomEdge(theme),
+        position: "relative",
         flexShrink: 0,
-        pb: "max(env(safe-area-inset-bottom, 0px), 12px)",
+        pt: 0.5,
+        pb: FLOATING_CONTROLS_BOTTOM,
         display: "flex",
         justifyContent: "flex-start",
         px: 0.75,
@@ -106,7 +111,7 @@ export function ReviewNavigationActions({
           width: "auto",
           flex: "0 0 auto",
         },
-      }}
+      })}
     >
       <MobileSheetActionGroup
         actions={[...items, {

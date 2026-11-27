@@ -5,7 +5,10 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use agent_client_protocol::schema::v1::{SessionNotification, SessionUpdate};
+use agent_client_protocol::schema::v1::{
+    CreateElicitationRequest, ElicitationMode, RequestPermissionRequest, SessionNotification,
+    SessionUpdate,
+};
 
 use super::{ClientState, observed_at_ms, report_background_tasks};
 use crate::agent_model::Event;
@@ -46,6 +49,12 @@ pub(super) fn route_subagent_notification(
     };
     publish_subagents(state, routed.snapshots);
     if !routed.root {
+        if update["sessionUpdate"] == "tool_call_update"
+            && matches!(update["status"].as_str(), Some("completed" | "failed"))
+            && let Some(tool_id) = update["toolCallId"].as_str()
+        {
+            retire_child_tool_requests(state, session, tool_id);
+        }
         // A working child proves the turn is alive even while the parent is
         // silent: the watchdog must not cancel a parent that waits on it, and
         // a prompt whose child already acted must never be replayed.
@@ -76,4 +85,75 @@ pub(super) fn publish_subagents(state: &ClientState, snapshots: Vec<serde_json::
     let mut activity = state.activity.lock();
     activity.working_subagents = working;
     report_background_tasks(state, &mut activity);
+}
+
+pub(super) fn track_permission_tool(
+    state: &ClientState,
+    request_id: &str,
+    req: &RequestPermissionRequest,
+) {
+    state.pending_tools.lock().insert(
+        request_id.to_owned(),
+        (
+            req.session_id.0.to_string(),
+            req.tool_call.tool_call_id.0.to_string(),
+        ),
+    );
+}
+
+pub(super) fn track_elicitation_tool(
+    state: &ClientState,
+    request_id: &str,
+    req: &CreateElicitationRequest,
+) {
+    if let Some(session) = super::elicitation_session_id(req)
+        && let Some(tool_id) = match &req.mode {
+            ElicitationMode::Form(form) => super::elicitation_tool_call_id(&form.scope),
+            ElicitationMode::Url(url) => super::elicitation_tool_call_id(&url.scope),
+            _ => None,
+        }
+    {
+        state
+            .pending_tools
+            .lock()
+            .insert(request_id.to_owned(), (session.to_owned(), tool_id));
+    }
+}
+
+/// Retire any pending permission or elicitation request tied to `(child_session_id,
+/// tool_call_id)` when the child's terminal `tool_call_update` is diverted out
+/// of the root timeline. Emits `PermissionResolved` and cancels the waiting
+/// responder without disturbing parent or sibling-child requests.
+pub(super) fn retire_child_tool_requests(
+    state: &ClientState,
+    child_session_id: &str,
+    tool_call_id: &str,
+) {
+    let matched: Vec<String> = {
+        let mut tools = state.pending_tools.lock();
+        let ids: Vec<String> = tools
+            .iter()
+            .filter(|(_, (sid, tid))| sid == child_session_id && tid == tool_call_id)
+            .map(|(req_id, _)| req_id.clone())
+            .collect();
+        for id in &ids {
+            tools.remove(id);
+        }
+        ids
+    };
+    for request_id in matched {
+        let tx = state.pending.lock().remove(&request_id);
+        state.elicitations.lock().remove(&request_id);
+        super::forget_url_elicitation(state, &request_id);
+        if let Some(tx) = tx {
+            let _ = tx.send(None);
+            state.sink.push(
+                &state.session_id,
+                Event::PermissionResolved {
+                    request_id,
+                    option_id: None,
+                },
+            );
+        }
+    }
 }

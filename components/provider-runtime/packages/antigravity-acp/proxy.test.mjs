@@ -9,6 +9,7 @@ import {
   PROMPT_REJECTED_PREFIX,
   REFUSAL_PREFIX,
   stripTier,
+  supportsFormElicitation,
   TURN_ERROR_CODE,
   TURN_ERROR_TEXT,
   VIOLATION_PREFIX,
@@ -2577,4 +2578,931 @@ test("refusal error replies still attach barrier-bounded antigravity_cache_diagn
   assert.equal(err.data.cowboy.antigravity_cache_diagnostics.schema, 1);
   assert.equal(err.data.cowboy.antigravity_cache_diagnostics.usage_updates, 1);
   assert.equal(err.data.cowboy.antigravity_cache_diagnostics.start_context_used, 12000);
+});
+
+test("initialize advertises form-only elicitation for ordinary sessions when the client supports it", async () => {
+  assert.equal(supportsFormElicitation({ elicitation: { form: {} } }), true);
+  assert.equal(supportsFormElicitation({ elicitation: { form: true } }), true);
+  assert.equal(supportsFormElicitation({ elicitation: { form: false } }), false);
+  assert.equal(supportsFormElicitation({ elicitation: { form: null } }), false);
+  assert.equal(supportsFormElicitation({ elicitation: { url: {} } }), false);
+  assert.equal(supportsFormElicitation({}), false);
+
+  const ordinary = harness();
+  await ordinary.proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+        elicitation: { form: {}, url: {} },
+      },
+    }),
+  );
+  assert.deepEqual(ordinary.agent[0].params.clientCapabilities, {
+    fs: { readTextFile: false, writeTextFile: false },
+    terminal: false,
+    elicitation: { form: {} },
+  });
+
+  const managed = harness({ managed: true });
+  await managed.proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: { form: {}, url: {} },
+      },
+    }),
+  );
+  assert.deepEqual(managed.agent[0].params.clientCapabilities, {
+    fs: { readTextFile: false, writeTextFile: false },
+    terminal: false,
+  });
+});
+
+test("form elicitation/create forwards under a proxy worker ID, redacts tier, and routes accept/decline/cancel", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {}, url: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-elicit" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-elicit", prompt: [] }));
+
+  const agyForm = {
+    sessionId: "s-elicit",
+    toolCallId: "call_ask_1",
+    mode: "form",
+    message: "The agent has 2 questions.",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        q1: {
+          type: "string",
+          title: "Format?",
+          oneOf: [
+            { const: "1", title: "HTML + plain" },
+            { const: "2", title: "Plain only" },
+          ],
+        },
+        q1_other: {
+          type: "string",
+          title: "Other",
+          description: "Optional free-form answer to: Format?",
+        },
+        q2: {
+          type: "array",
+          title: "Surfaces?",
+          items: {
+            anyOf: [
+              { const: "1", title: "Mobile" },
+              { const: "2", title: "Desktop" },
+            ],
+          },
+        },
+      },
+    },
+    // Spoofed top-level fields and raw account tier must not leave the proxy.
+    url: "https://evil.example/phish",
+    elicitationId: "spoof",
+    requestId: 77,
+    _meta: { antigravity: { tier: { id: "g1-ultra", name: "Ultra" } }, keep: true },
+  };
+  await proxy.fromAgent(request(50, "elicitation/create", agyForm));
+  const forwarded = client.at(-1);
+  assert.equal(forwarded.method, "elicitation/create");
+  assert.notEqual(forwarded.id, 50);
+  assert.deepEqual(forwarded.params, {
+    sessionId: "s-elicit",
+    toolCallId: "call_ask_1",
+    mode: "form",
+    message: "The agent has 2 questions.",
+    requestedSchema: agyForm.requestedSchema,
+    _meta: { keep: true },
+  });
+
+  // Switching session mode while an ask_question form is open must NOT dismiss it.
+  await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s-elicit", modeId: "plan" }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { currentModeId: "plan" } });
+  assert.equal(
+    client.filter((m) => m.method === "$/cancel_request").length,
+    0,
+    "mode switch keeps form elicitation open",
+  );
+
+  // Valid accept with content routes back under agy's original ID.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded.id,
+    result: { action: "accept", content: { q1: "1", q2: ["1", "2"] } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 50,
+    result: { action: "accept", content: { q1: "1", q2: ["1", "2"] } },
+  });
+
+  // Decline routes cleanly (never an RPC error that triggers agy's chat fallback).
+  await proxy.fromAgent(
+    request(51, "elicitation/create", {
+      sessionId: "s-elicit",
+      mode: "form",
+      message: "Another question",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  const forwarded51 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded51.id,
+    result: { action: "decline" },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 51,
+    result: { action: "decline" },
+  });
+
+  // Malformed or errored worker replies fail closed to { action: "cancel" }.
+  for (const [agyId, workerReply] of [
+    [52, { error: { code: -32603, message: "boom" } }],
+    [53, { result: { action: "bogus" } }],
+    [54, { result: { action: "accept", content: ["not-an-object"] } }],
+    [55, { result: { outcome: { outcome: "selected", optionId: "allow" } } }],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-elicit",
+        mode: "form",
+        message: "Q",
+        requestedSchema: { type: "object", properties: {} },
+      }),
+    );
+    const fwd = client.at(-1);
+    await proxy.fromClient({ jsonrpc: "2.0", id: fwd.id, ...workerReply });
+    assert.deepEqual(agent.at(-1), {
+      jsonrpc: "2.0",
+      id: agyId,
+      result: { action: "cancel" },
+    });
+  }
+});
+
+test("elicitation/create fails closed for non-form modes, managed calls, inactive turns, and cancels cleanly", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-guard" } });
+
+  // No active turn -> cancelled without reaching worker.
+  await proxy.fromAgent(
+    request(60, "elicitation/create", {
+      sessionId: "s-guard",
+      mode: "form",
+      message: "Out of turn",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 60, result: { action: "cancel" } });
+  assert.equal(client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-guard", prompt: [] }));
+
+  // URL mode, invalid params, unknown session -> cancelled.
+  for (const [agyId, params] of [
+    [
+      61,
+      {
+        sessionId: "s-guard",
+        mode: "url",
+        url: "https://example.com",
+        elicitationId: "u1",
+        message: "Sign in",
+      },
+    ],
+    [
+      62,
+      {
+        sessionId: "",
+        mode: "form",
+        message: "m",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    ],
+    [
+      63,
+      {
+        sessionId: "s-unknown",
+        mode: "form",
+        message: "m",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    ],
+    [
+      64,
+      {
+        sessionId: "s-guard",
+        mode: "form",
+        message: 123,
+        requestedSchema: { type: "object", properties: {} },
+      },
+    ],
+    [65, { sessionId: "s-guard", mode: "form", message: "m", requestedSchema: null }],
+    [
+      650,
+      {
+        sessionId: "s-guard",
+        mode: "form",
+        message: "m",
+        requestedSchema: { type: "string", properties: {} },
+      },
+    ],
+    [
+      651,
+      {
+        sessionId: "s-guard",
+        mode: "form",
+        message: "m",
+        requestedSchema: { type: "object", properties: null },
+      },
+    ],
+    [
+      66,
+      {
+        sessionId: "s-guard",
+        mode: "form",
+        toolCallId: 42,
+        message: "m",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    ],
+    [
+      660,
+      {
+        sessionId: "s-guard",
+        mode: "form",
+        toolCallId: "",
+        message: "m",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    ],
+  ]) {
+    await proxy.fromAgent(request(agyId, "elicitation/create", params));
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+  assert.equal(client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // `$/cancel_request` from agy retires the worker prompt, settles the original
+  // elicitation once with `{ action: "cancel" }`, and ignores any late worker reply.
+  await proxy.fromAgent(
+    request(67, "elicitation/create", {
+      sessionId: "s-guard",
+      mode: "form",
+      message: "Wait",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  const fwd67 = client.at(-1);
+  const agentCountBeforeCancelNotif = agent.length;
+  await proxy.fromAgent({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 67 } });
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "$/cancel_request",
+    params: { requestId: fwd67.id },
+  });
+  assert.equal(agent.length, agentCountBeforeCancelNotif + 1);
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 67, result: { action: "cancel" } });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd67.id,
+    result: { action: "accept", content: {} },
+  });
+  assert.equal(
+    agent.length,
+    agentCountBeforeCancelNotif + 1,
+    "late worker reply emits no second response",
+  );
+
+  // Duplicate live native ID retires the existing elicitation and sends a single cancel.
+  await proxy.fromAgent(
+    request(68, "elicitation/create", {
+      sessionId: "s-guard",
+      mode: "form",
+      message: "First",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  const fwd68 = client.at(-1);
+  await proxy.fromAgent(
+    request(68, "elicitation/create", {
+      sessionId: "s-guard",
+      mode: "form",
+      message: "Duplicate",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "$/cancel_request",
+    params: { requestId: fwd68.id },
+  });
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 68, result: { action: "cancel" } });
+
+  // Client `session/cancel` retires a pending elicitation with `$/cancel_request` + `{ action: "cancel" }`.
+  await proxy.fromAgent(
+    request(69, "elicitation/create", {
+      sessionId: "s-guard",
+      mode: "form",
+      message: "Cancel me",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  const fwd69 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s-guard" },
+  });
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === fwd69.id),
+    "worker notified of retired elicitation",
+  );
+  assert.ok(
+    agent.some((m) => m.id === 69 && m.result?.action === "cancel"),
+    "agy received { action: 'cancel' } on session/cancel",
+  );
+
+  // Proxy without client elicitation.form capability cancels any unsolicited elicitation/create.
+  const noCap = harness();
+  await noCap.proxy.fromClient(
+    request(1, "initialize", { protocolVersion: 1, clientCapabilities: {} }),
+  );
+  await noCap.proxy.fromClient(request(2, "session/prompt", { sessionId: "s-nc", prompt: [] }));
+  await noCap.proxy.fromAgent(
+    request(70, "elicitation/create", {
+      sessionId: "s-nc",
+      mode: "form",
+      message: "Q",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.deepEqual(noCap.agent.at(-1), { jsonrpc: "2.0", id: 70, result: { action: "cancel" } });
+  assert.equal(noCap.client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // Managed session never forwards elicitation/create.
+  const mgd = harness({ managed: true });
+  await mgd.proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await mgd.proxy.fromAgent(
+    request(71, "elicitation/create", {
+      sessionId: "s-mgd",
+      mode: "form",
+      message: "Q",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.deepEqual(mgd.agent.at(-1), { jsonrpc: "2.0", id: 71, result: { action: "cancel" } });
+  assert.equal(mgd.client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // Stale buffered elicitation replay (pre-turn arrival) and closing proxy cancel cleanly.
+  const stale = harness();
+  await stale.proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await stale.proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await stale.proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-stale" } });
+  const preTurnArrival = { turn: undefined, attempt: undefined };
+  await stale.proxy.fromClient(request(3, "session/prompt", { sessionId: "s-stale", prompt: [] }));
+  await stale.proxy.fromAgent(
+    request(72, "elicitation/create", {
+      sessionId: "s-stale",
+      mode: "form",
+      message: "Buffered",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+    { arrival: preTurnArrival },
+  );
+  assert.deepEqual(stale.agent.at(-1), { jsonrpc: "2.0", id: 72, result: { action: "cancel" } });
+  assert.equal(stale.client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  stale.proxy.beginShutdown();
+  await stale.proxy.fromAgent(
+    request(73, "elicitation/create", {
+      sessionId: "s-stale",
+      mode: "form",
+      message: "Closing",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.deepEqual(stale.agent.at(-1), { jsonrpc: "2.0", id: 73, result: { action: "cancel" } });
+});
+
+test("elicitation/create validates schema renderability, accepted content, and non-string mode safely (R1)", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-schema" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-schema", prompt: [] }));
+
+  // Non-string mode with non-callable toString must NOT throw and must emit exactly one cancel.
+  const beforeEvilMode = agent.length;
+  await proxy.fromAgent(
+    request(80, "elicitation/create", {
+      sessionId: "s-schema",
+      mode: { toString: null },
+      message: "Evil mode",
+      requestedSchema: { type: "object", properties: {} },
+    }),
+  );
+  assert.equal(agent.length, beforeEvilMode + 1);
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 80, result: { action: "cancel" } });
+
+  // Unrenderable / invalid schemas cancel before allocating a worker ID.
+  for (const [agyId, requestedSchema] of [
+    [81, { type: "object", properties: {}, required: ["q1"] }],
+    [82, { type: "object", properties: { q1: { type: "object" } }, required: ["q1"] }],
+    [83, { type: "object", properties: { q1: { type: "array", items: {} } } }],
+    [84, { type: "object", properties: { q1: { type: "string", oneOf: [] } } }],
+    [85, { type: "object", properties: { q1: { type: "string" } }, required: [123] }],
+    [86, { type: "object", properties: { q1: { type: "integer", minimum: 5, maximum: 2 } } }],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-schema",
+        mode: "form",
+        message: "Bad schema",
+        requestedSchema,
+      }),
+    );
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+  assert.equal(client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // Valid schema with single, multi, optional text, and integer; partial optional answers succeed.
+  const multiSchema = {
+    type: "object",
+    properties: {
+      q1: {
+        type: "string",
+        title: "Approach",
+        oneOf: [
+          { const: "1", title: "A" },
+          { const: "2", title: "B" },
+        ],
+      },
+      q1_other: { type: "string", title: "Other" },
+      q2: {
+        type: "array",
+        title: "Surfaces",
+        items: {
+          anyOf: [
+            { const: "1", title: "Mobile" },
+            { const: "2", title: "Desktop" },
+          ],
+        },
+      },
+      count: { type: "integer", title: "Count" },
+    },
+  };
+  await proxy.fromAgent(
+    request(87, "elicitation/create", {
+      sessionId: "s-schema",
+      mode: "form",
+      message: "Partial ok",
+      requestedSchema: multiSchema,
+    }),
+  );
+  const fwd87 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd87.id,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 87,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+
+  // Invalid answers against multiSchema fail closed to { action: "cancel" }.
+  for (const [agyId, content] of [
+    [88, { q2: "1" }],
+    [89, { q2: ["1", "99"] }],
+    [90, { q1: "99" }],
+    [91, { unknown_key: "x" }],
+    [92, { count: 1.5 }],
+    [93, { q2: ["1", "1"] }],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-schema",
+        mode: "form",
+        message: "Validate answer",
+        requestedSchema: multiSchema,
+      }),
+    );
+    const fwd = client.at(-1);
+    await proxy.fromClient({ jsonrpc: "2.0", id: fwd.id, result: { action: "accept", content } });
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+
+  // Required field enforcement: missing content or blank required string fails closed.
+  const reqSchema = {
+    type: "object",
+    properties: { q1: { type: "string", title: "Reason" } },
+    required: ["q1"],
+  };
+  for (const [agyId, result] of [
+    [94, { action: "accept" }],
+    [95, { action: "accept", content: {} }],
+    [96, { action: "accept", content: { q1: "   " } }],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-schema",
+        mode: "form",
+        message: "Required",
+        requestedSchema: reqSchema,
+      }),
+    );
+    const fwd = client.at(-1);
+    await proxy.fromClient({ jsonrpc: "2.0", id: fwd.id, result });
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+});
+
+test("mixed duplicate live native IDs retire the worker prompt once with a universal JSON-RPC error (R1)", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-dup" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-dup", prompt: [] }));
+
+  const validForm = {
+    sessionId: "s-dup",
+    mode: "form",
+    message: "Q",
+    requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+  };
+  const permParams = {
+    sessionId: "s-dup",
+    toolCall: { toolCallId: "ask_1", name: "ask_question" },
+    options: [
+      { optionId: "yes", name: "Yes", kind: "allow_once" },
+      { optionId: "no", name: "No", kind: "reject_once" },
+    ],
+  };
+
+  // 1. Live form followed by unsupported method on the same ID.
+  await proxy.fromAgent(request(101, "elicitation/create", validForm));
+  const fwd101 = client.at(-1);
+  const before101 = agent.length;
+  await proxy.fromAgent(request(101, "fs/read_text_file", { path: "/etc/passwd" }));
+  assert.equal(agent.length, before101 + 1);
+  assert.equal(agent.at(-1).id, 101);
+  assert.equal(agent.at(-1).error?.code, -32600);
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "$/cancel_request",
+    params: { requestId: fwd101.id },
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd101.id,
+    result: { action: "accept", content: { q1: "hi" } },
+  });
+  assert.equal(agent.length, before101 + 1, "original form cannot send a second reply");
+
+  // 2. Live permission followed by elicitation/create on the same ID.
+  await proxy.fromAgent(request(102, "session/request_permission", permParams));
+  const fwd102 = client.at(-1);
+  const before102 = agent.length;
+  await proxy.fromAgent(request(102, "elicitation/create", validForm));
+  assert.equal(agent.length, before102 + 1);
+  assert.equal(agent.at(-1).id, 102);
+  assert.equal(agent.at(-1).error?.code, -32600);
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "$/cancel_request",
+    params: { requestId: fwd102.id },
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd102.id,
+    result: { outcome: { outcome: "selected", optionId: "yes" } },
+  });
+  assert.equal(agent.length, before102 + 1);
+
+  // 3. Live elicitation/create followed by session/request_permission on the same ID.
+  await proxy.fromAgent(request(103, "elicitation/create", validForm));
+  const fwd103 = client.at(-1);
+  const before103 = agent.length;
+  await proxy.fromAgent(request(103, "session/request_permission", permParams));
+  assert.equal(agent.length, before103 + 1);
+  assert.equal(agent.at(-1).id, 103);
+  assert.equal(agent.at(-1).error?.code, -32600);
+  assert.deepEqual(client.at(-1), {
+    jsonrpc: "2.0",
+    method: "$/cancel_request",
+    params: { requestId: fwd103.id },
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd103.id,
+    result: { action: "accept", content: { q1: "hi" } },
+  });
+  assert.equal(agent.length, before103 + 1);
+});
+
+test("reopening a session and uncertain workspace effects retire and fence open forms (R1)", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-reopen" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-reopen", prompt: [] }));
+
+  const validForm = {
+    sessionId: "s-reopen",
+    mode: "form",
+    message: "Q",
+    requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+  };
+  await proxy.fromAgent(request(110, "elicitation/create", validForm));
+  const fwd110 = client.at(-1);
+
+  // Reopening the session via session/load retires the open form immediately.
+  await proxy.fromClient(
+    request(4, "session/load", { sessionId: "s-reopen", cwd: "/work/repo", mcpServers: [] }),
+  );
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === fwd110.id),
+    "session/load cancels open form in worker",
+  );
+  assert.ok(
+    agent.some((m) => m.id === 110 && m.result?.action === "cancel"),
+    "session/load cancels open form to agy",
+  );
+  const agentAfterReopen = agent.length;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd110.id,
+    result: { action: "accept", content: { q1: "late" } },
+  });
+  assert.equal(agent.length, agentAfterReopen, "late answer after reopen is ignored");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: {} });
+
+  // Uncertain workspace effect retires open forms, rejects new forms, and cancels in-flight replies.
+  await proxy.fromAgent(request(111, "elicitation/create", validForm));
+  const fwd111 = client.at(-1);
+  proxy.lost("s-reopen", "process/start");
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === fwd111.id),
+    "lost effect retires open form",
+  );
+  assert.ok(
+    agent.some((m) => m.id === 111 && m.result?.action === "cancel"),
+    "lost effect cancels open form to agy",
+  );
+  const formsBeforeUncertain = client.filter((m) => m.method === "elicitation/create").length;
+  await proxy.fromAgent(request(112, "elicitation/create", validForm));
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 112, result: { action: "cancel" } });
+  assert.equal(
+    client.filter((m) => m.method === "elicitation/create").length,
+    formsBeforeUncertain,
+    "new form after uncertain effect never reaches worker",
+  );
+
+  // Direct reply check if turn.uncertain is latched while an elicitation is already in flight.
+  const unc = harness();
+  await unc.proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await unc.proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await unc.proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-unc" } });
+  await unc.proxy.fromClient(request(3, "session/prompt", { sessionId: "s-unc", prompt: [] }));
+  await unc.proxy.fromAgent(
+    request(113, "elicitation/create", { ...validForm, sessionId: "s-unc" }),
+  );
+  const fwd113 = unc.client.at(-1);
+  unc.proxy.turns.get("s-unc").uncertain = "fs/writeFile";
+  await unc.proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd113.id,
+    result: { action: "accept", content: { q1: "should-cancel" } },
+  });
+  assert.deepEqual(unc.agent.at(-1), { jsonrpc: "2.0", id: 113, result: { action: "cancel" } });
+});
+
+test("elicitation enforces reopen fencing, string bounds on choices, Unicode code-point counts, impossible schemas, and __proto__ keys (R2)", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-r2" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-r2", prompt: [] }));
+
+  // Impossible schemas reject before forwarding to worker.
+  for (const [agyId, requestedSchema] of [
+    [
+      201,
+      {
+        type: "object",
+        properties: { q: { type: "array", items: { enum: ["a", "b"] }, minItems: 3 } },
+        required: ["q"],
+      },
+    ],
+    [
+      202,
+      {
+        type: "object",
+        properties: { q: { type: "string", oneOf: [{ const: "long" }], maxLength: 2 } },
+        required: ["q"],
+      },
+    ],
+    [
+      203,
+      {
+        type: "object",
+        properties: { q: { type: "integer", minimum: 1.2, maximum: 1.8 } },
+        required: ["q"],
+      },
+    ],
+    [
+      204,
+      {
+        type: "object",
+        properties: { q: { type: "string", maxLength: 0 } },
+        required: ["q"],
+      },
+    ],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-r2",
+        mode: "form",
+        message: "Impossible",
+        requestedSchema,
+      }),
+    );
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+  assert.equal(client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // String bounds apply to choice fields AND count Unicode code points (emoji = 1 code point).
+  const unicodeSchema = {
+    type: "object",
+    properties: {
+      choice: {
+        type: "string",
+        oneOf: [
+          { const: "😀", title: "One emoji" },
+          { const: "😀😁", title: "Two emoji" },
+        ],
+        maxLength: 1,
+      },
+      note: { type: "string", maxLength: 1 },
+    },
+  };
+  await proxy.fromAgent(
+    request(205, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Unicode ok",
+      requestedSchema: unicodeSchema,
+    }),
+  );
+  const fwd205 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd205.id,
+    result: { action: "accept", content: { choice: "😀", note: "😀" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 205,
+    result: { action: "accept", content: { choice: "😀", note: "😀" } },
+  });
+
+  // Choice violating maxLength fails closed to cancel.
+  await proxy.fromAgent(
+    request(206, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Choice too long",
+      requestedSchema: unicodeSchema,
+    }),
+  );
+  const fwd206 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd206.id,
+    result: { action: "accept", content: { choice: "😀😁" } },
+  });
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 206, result: { action: "cancel" } });
+
+  // Own "__proto__" field is preserved in serialized accepted reply.
+  await proxy.fromAgent(
+    request(207, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Proto field",
+      requestedSchema: {
+        type: "object",
+        properties: JSON.parse('{"__proto__":{"type":"string"}}'),
+        required: ["__proto__"],
+      },
+    }),
+  );
+  const fwd207 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd207.id,
+    result: { action: "accept", content: JSON.parse('{"__proto__":"kept"}') },
+  });
+  assert.equal(
+    JSON.stringify(agent.at(-1).result),
+    '{"action":"accept","content":{"__proto__":"kept"}}',
+  );
+
+  // Pending mode switch still allows form admission and acceptance.
+  await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s-r2", modeId: "plan" }));
+  await proxy.fromAgent(
+    request(208, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "During mode switch",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    }),
+  );
+  const fwd208 = client.at(-1);
+  assert.equal(fwd208.method, "elicitation/create");
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd208.id,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 208,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { currentModeId: "plan" } });
+
+  // Pending session reopen (session/load in flight) fences NEW form admission until reopen settles.
+  await proxy.fromClient(
+    request(5, "session/load", { sessionId: "s-r2", cwd: "/work/repo", mcpServers: [] }),
+  );
+  const countBeforeReopenForm = client.filter((m) => m.method === "elicitation/create").length;
+  await proxy.fromAgent(
+    request(209, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "During pending reopen",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    }),
+  );
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 209, result: { action: "cancel" } });
+  assert.equal(
+    client.filter((m) => m.method === "elicitation/create").length,
+    countBeforeReopenForm,
+    "new form during pending session/load must not reach worker",
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
 });

@@ -1,4 +1,4 @@
-import { MessageWithFork } from "./MessageForkAction";
+import { MessageWithActions } from "./MessageActions";
 import type { TurnForkPoint } from "./turnForkPoints";
 import { NoticeRow } from "./NoticeRow";
 import { ScrollEdges } from "@cowboy/app-shell";
@@ -999,7 +999,7 @@ export const ItemView = memo(function ItemView({
     case "message": {
       const isStreaming = !!streaming && item.role === "assistant";
       const bubble = <MessageBubble role={item.role} chunks={item.chunks} streaming={isStreaming} origin={item.origin} cmid={item.cmid} provider={provider} providerVersion={providerVersion} providerDigest={providerDigest} desktop={desktop} />;
-      return readOnly ? bubble : <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop} forkPoint={forkPoint}>{bubble}</MessageWithFork>;
+      return <MessageWithActions item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop} readOnly={readOnly} forkPoint={readOnly ? undefined : forkPoint}>{bubble}</MessageWithActions>;
     }
     case "thought":
       return (

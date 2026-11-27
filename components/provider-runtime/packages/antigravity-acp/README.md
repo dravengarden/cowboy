@@ -40,17 +40,27 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 - Client requests: `initialize`, `session/new|load|resume|prompt|cancel|
   set_mode|set_model|set_config_option`; notification `session/cancel`.
   Everything else (`authenticate`, `logout`, unknown) is refused with
-  `-32601`. `initialize` never offers client `fs` or `terminal`.
-- Agent requests: only `session/request_permission`, and only for the facade
-  tools, `ask_question` and the web built-ins (`search_web`,
-  `read_url_content` for http(s) URLs, `view_content_chunk`; see the design's
-  "Web search and URL reading"); any other tool's request is rejected by the proxy
-  without reaching the worker. A facade tool's request is approved by the
-  proxy itself (Cowboy's default, like Claude's `bypassPermissions`) unless
-  the worker selected `agy`'s `plan` mode; only then, and for
-  `ask_question`, does it reach the owner. Agent notifications: only
-  `session/update`, whose facade tool calls (and a permission request's) are
-  shown as native ones: kind, title, target path and an edit's diff.
+  `-32601`. `initialize` never offers client `fs`, `terminal`, or URL
+  elicitation; in ordinary sessions where the worker advertised
+  `clientCapabilities.elicitation.form`, it forwards `elicitation: { form: {} }`
+  so `agy` presents `ask_question` as a live ACP form inside the turn rather
+  than falling back to chat mode.
+- Agent requests: only `session/request_permission` and form-mode
+  `elicitation/create`. Permissions are allowed only for the facade tools,
+  `ask_question` and the web built-ins (`search_web`, `read_url_content` for
+  http(s) URLs, `view_content_chunk`; see the design's "Web search and URL
+  reading"); any other tool's request is rejected by the proxy without
+  reaching the worker. A facade tool's request is approved by the proxy itself
+  (Cowboy's default, like Claude's `bypassPermissions`) unless the worker
+  selected `agy`'s `plan` mode; only then, and for `ask_question`, does it
+  reach the owner. Form `elicitation/create` is forwarded only in ordinary
+  sessions where the worker advertised form elicitation, inside a known live
+  turn, under a unique worker request ID with tier redaction and explicit
+  field allow-listing; non-form modes (`url`), managed calls, inactive turns,
+  and malformed replies cancel cleanly (`{ action: "cancel" }`). Agent
+  notifications: only `session/update`, whose facade tool calls (and a
+  permission request's) are shown as native ones: kind, title, target path and
+  an edit's diff.
 - Account plan: the `_meta.antigravity.tier` of a `session/new|load|resume`
   result (`agy` 1.5.9: `{name: "Antigravity Starter Quota", id: "free-tier",
   upgradeUri}`) becomes the proxy's plan `{id, name}` when `id` is a slug of

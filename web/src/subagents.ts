@@ -330,3 +330,12 @@ export function requestingSubagent(toolCall: unknown): string | null {
   const title = (subagent as { title?: unknown }).title;
   return typeof title === "string" && title.trim() ? title.trim() : "Subagent";
 }
+
+/** Session-scoped key for matching a permission/elicitation `toolCallId` to a
+ *  terminal `tool_call_update` without letting a parent completion hide a child form. */
+export function scopedToolKey(target: unknown, id: string | null): string | null {
+  if (!id) return null;
+  if (requestingSubagent(target) === null) return `r:${id}`;
+  const sid = requestingSubagentId(target);
+  return sid !== null ? `c:${sid}:${id}` : null;
+}

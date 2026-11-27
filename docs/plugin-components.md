@@ -88,6 +88,32 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.162.0 advances `claude-deepseek` to `3.1.103` and
+`codex-deepseek` to `3.1.102`: sets `deepseek_cache_protection` default
+preference to `false` (opt-in paid keepalive, strictly independent from
+idle context renewal) and updates cache-protection option copy accordingly.
+All pinned components and other Providers are unchanged from 3.161.0.
+
+Component release 3.161.0 records provider-runtime 1.3.38, whose
+`cowboy-antigravity-acp` 1.0.32 advertises form-only ACP elicitation
+(`clientCapabilities.elicitation = { form: {} }`) in ordinary sessions when
+the worker declares form elicitation and relays `elicitation/create`
+(`mode: "form"` only) under a proxy worker ID so `agy` 1.5.14 presents
+`ask_question` as a live in-turn form instead of falling back to chat mode
+(which left a pending question after `EndTurn` and rejected follow-up prompts
+carrying images). Non-form modes (including `url`), managed calls, inactive
+turns, and malformed payloads cancel cleanly (`{ action: "cancel" }`).
+Antigravity 0.2.42 pins it; the other six Providers pinning provider-runtime
+advance one patch version.
+
+Component release 3.160.0 records `app-shell` 1.1.46: unifies all Mobile
+floating control islands (`FloatingActionIsland`, `SheetContextSummary`) onto
+a calm Cowboy frosted-matte surface (`floatingIslandSurfaceSx`, removing the
+radial glare orb and stacked pseudo-element blur), extends `readerBottomEdge`
+to accept sheet surface colors, and restores a centered drag grabber pill on
+non-fullscreen `DetentSheet` surfaces. It is a Web-only component; no Plugin
+pins it, so every Plugin and the closure are unchanged.
+
 Component release 3.159.0 records `state-sync-idb` 1.8.6: adds atomic
 `retireOutboxIf` conditional outbox deletion for Trash purge recovery so a
 stale cleanup can never discard newer cross-tab pending mutations. It is a
@@ -1212,7 +1238,3 @@ replica paths remain capability-specific state, not an extension lifecycle.
 - `cowboy.provider-runtime` `1.3.37` (`cowboy-antigravity-acp` `1.0.31`): add content-free per-step backend timing and usage-update diagnostics in `evidence.mjs` and `proxy.mjs` for worker `wait_cache` projection.
 - `codex` `3.6.43`: opt into `COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1`, fail-closed effective OTel policy inspection across layers, and dynamic `otel.headers_helper`.
 - Companion agent providers pinning `cowboy.provider-runtime` advanced by one patch version.
-
-### `3.160.0`
-
-- `claude-deepseek` `3.1.102` and `codex-deepseek` `3.1.101`: set `deepseek_cache_protection` default preference to `false` (opt-in paid keepalive, strictly independent from idle context renewal) and update cache-protection option copy accordingly.

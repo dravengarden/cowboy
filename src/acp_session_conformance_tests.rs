@@ -131,6 +131,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         pending: Mutex::new(HashMap::new()),
         elicitations: Mutex::new(HashSet::new()),
         url_elicitations: Mutex::new(HashMap::new()),
+        pending_tools: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
@@ -2369,4 +2370,81 @@ async fn a_stop_racing_a_governed_refusal_keeps_the_refusal() {
             "Cancelled"
         );
     }
+}
+
+#[test]
+fn child_terminal_tool_update_retires_only_matching_child_request() {
+    let (state, sink) = fixture_state(false);
+
+    let announce = |child_id: &str| {
+        serde_json::from_value::<agent_client_protocol::schema::v1::SessionNotification>(json!({
+            "sessionId": SESSION,
+            "update": {
+                "sessionUpdate": "subagent_update",
+                "sessionId": child_id,
+                "title": child_id,
+                "status": "running"
+            }
+        }))
+        .unwrap()
+    };
+    route_subagent_notification(&state, &announce("child-1"));
+    route_subagent_notification(&state, &announce("child-2"));
+
+    let (tx_c1, mut rx_c1) = tokio::sync::oneshot::channel();
+    let (tx_c2, mut rx_c2) = tokio::sync::oneshot::channel();
+    let (tx_root, mut rx_root) = tokio::sync::oneshot::channel();
+    state.pending.lock().insert("req-c1".into(), tx_c1);
+    state.pending.lock().insert("req-c2".into(), tx_c2);
+    state.pending.lock().insert("req-root".into(), tx_root);
+    state.elicitations.lock().insert("req-c1".into());
+    state.elicitations.lock().insert("req-c2".into());
+    state
+        .pending_tools
+        .lock()
+        .insert("req-c1".into(), ("child-1".into(), "call_1".into()));
+    state
+        .pending_tools
+        .lock()
+        .insert("req-c2".into(), ("child-2".into(), "call_1".into()));
+    state
+        .pending_tools
+        .lock()
+        .insert("req-root".into(), (SESSION.to_owned(), "call_1".into()));
+
+    let child_done: agent_client_protocol::schema::v1::SessionNotification =
+        serde_json::from_value(json!({
+            "sessionId": "child-1",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_1",
+                "status": "completed"
+            }
+        }))
+        .unwrap();
+    assert!(!route_subagent_notification(&state, &child_done));
+
+    assert_eq!(rx_c1.try_recv().ok(), Some(None));
+    assert!(rx_c2.try_recv().is_err());
+    assert!(rx_root.try_recv().is_err());
+    assert!(!state.pending.lock().contains_key("req-c1"));
+    assert!(state.pending.lock().contains_key("req-c2"));
+    assert!(state.pending.lock().contains_key("req-root"));
+    assert!(!state.elicitations.lock().contains("req-c1"));
+
+    let resolved: Vec<String> = sink
+        .hub
+        .history_page(SESSION, u64::MAX)
+        .unwrap()
+        .0
+        .into_iter()
+        .filter_map(|env| match env.event {
+            Event::PermissionResolved {
+                request_id,
+                option_id: None,
+            } => Some(request_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resolved, vec!["req-c1".to_owned()]);
 }

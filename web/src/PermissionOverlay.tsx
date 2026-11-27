@@ -8,6 +8,7 @@ import { usePermissionResponse } from "./permissionResponse";
 import {
   elicitationChoiceOf,
   ElicitationFields,
+  permissionFallbackChoices,
   useElicitationForm,
 } from "./ElicitationFields";
 import { requestStickToBottom, useSticky } from "./stickyStore";
@@ -78,13 +79,9 @@ export function PermissionOverlay({
   // An elicitation draws its own form and Submit/Decline (or Done/Decline);
   // a tool permission keeps the agent's options.
   const form = useElicitationForm(item.requestId, item.elicitation, respond);
-  const choices = item.elicitation ? form.choices : item.options.map((option) => ({
-    id: option.optionId,
-    label: option.name,
-    reject: option.kind.startsWith("reject"),
-    disabled: false,
-    run: () => respond(option.optionId),
-  }));
+  const choices = item.elicitation
+    ? form.choices
+    : permissionFallbackChoices(item.options, item.invalidElicitation, respond);
   const busyChoice = item.elicitation
     ? elicitationChoiceOf(response.optionId)
     : response.optionId;

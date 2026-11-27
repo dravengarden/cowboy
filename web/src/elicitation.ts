@@ -35,6 +35,12 @@ export interface ElicitationField {
   /** A free-text note that only matters when its question picked "Other". */
   noteFor: string | null;
   defaultValue: ElicitationValue | undefined;
+  minLength?: number | undefined;
+  maxLength?: number | undefined;
+  minimum?: number | undefined;
+  maximum?: number | undefined;
+  minItems?: number | undefined;
+  maxItems?: number | undefined;
 }
 
 export type ElicitationValue = string | boolean | string[];
@@ -105,14 +111,205 @@ function autoResolutionOf(request: Record<string, unknown>): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function codePointLength(value: string): number {
+  let count = 0;
+  for (const _ of value) count += 1;
+  return count;
+}
+
+/** Whether `toolCall` carries a Cowboy elicitation payload (valid or invalid). */
+export function hasElicitationPayload(toolCall: unknown): boolean {
+  return record(record(record(toolCall)?.["_cowboy"])?.["elicitation"]) !== null;
+}
+
+/** Parse an optional numeric bound; `null` indicates a malformed declared value. */
+function parseBound(value: unknown, integer: boolean, min = -Infinity): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) return null;
+  if (integer && !Number.isInteger(value)) return null;
+  return value;
+}
+
+function lengthWithin(
+  value: string,
+  minLength: number | undefined,
+  maxLength: number | undefined,
+): boolean {
+  const len = codePointLength(value);
+  return (minLength === undefined || len >= minLength) &&
+    (maxLength === undefined || len <= maxLength);
+}
+
+function stringFitsBounds(field: ElicitationField, value: string): boolean {
+  const len = codePointLength(value);
+  if (field.minLength !== undefined && len < field.minLength) return false;
+  if (field.maxLength !== undefined && len > field.maxLength) return false;
+  return true;
+}
+
+function defineOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+type FieldParseResult =
+  | { status: "ok"; field: ElicitationField }
+  | { status: "omit" }
+  | { status: "invalid" };
+
+interface FieldBase {
+  id: string;
+  title: string;
+  description: string | null;
+  required: boolean;
+  secret: boolean;
+  noteFor: string | null;
+}
+
+function stringFieldOf(
+  base: FieldBase,
+  schema: Record<string, unknown>,
+  required: boolean,
+): FieldParseResult {
+  const minLength = parseBound(schema["minLength"], true, 0);
+  const maxLength = parseBound(schema["maxLength"], true, 0);
+  if (minLength === null || maxLength === null) return { status: "invalid" };
+  if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) {
+    return { status: "invalid" };
+  }
+  const rawDefault = typeof schema["default"] === "string" ? schema["default"] : undefined;
+  const hasChoices = schema["oneOf"] !== undefined || schema["enum"] !== undefined;
+  if (hasChoices) {
+    const rawChoices = choicesOf(schema["oneOf"], schema["enum"]);
+    if (rawChoices.length === 0) return { status: "invalid" };
+    // Filter out choices that violate declared length bounds so an optional
+    // choice can never trap the user with a permanently disabled Submit.
+    const validChoices = rawChoices.filter((c) => lengthWithin(c.value, minLength, maxLength));
+    if (validChoices.length === 0) return required ? { status: "invalid" } : { status: "omit" };
+    const fallback = rawDefault !== undefined && validChoices.some((c) => c.value === rawDefault)
+      ? rawDefault
+      : undefined;
+    return {
+      status: "ok",
+      field: {
+        ...base,
+        kind: "single",
+        choices: validChoices,
+        defaultValue: fallback,
+        ...(minLength !== undefined ? { minLength } : {}),
+        ...(maxLength !== undefined ? { maxLength } : {}),
+      },
+    };
+  }
+  if (required && maxLength === 0) return { status: "invalid" };
+  const fallback = rawDefault !== undefined && lengthWithin(rawDefault, minLength, maxLength)
+    ? rawDefault
+    : undefined;
+  return {
+    status: "ok",
+    field: {
+      ...base,
+      kind: "text",
+      choices: [],
+      defaultValue: fallback,
+      ...(minLength !== undefined ? { minLength } : {}),
+      ...(maxLength !== undefined ? { maxLength } : {}),
+    },
+  };
+}
+
+function arrayFieldOf(
+  base: FieldBase,
+  schema: Record<string, unknown>,
+  required: boolean,
+): FieldParseResult {
+  const items = record(schema["items"]);
+  const choices = choicesOf(items?.["anyOf"] ?? items?.["oneOf"], items?.["enum"]);
+  if (choices.length === 0) return { status: "invalid" };
+  const minItems = parseBound(schema["minItems"], true, 0);
+  const maxItems = parseBound(schema["maxItems"], true, 0);
+  if (minItems === null || maxItems === null) return { status: "invalid" };
+  if (minItems !== undefined && maxItems !== undefined && minItems > maxItems) {
+    return { status: "invalid" };
+  }
+  const distinct = new Set(choices.map((c) => c.value));
+  if (minItems !== undefined && minItems > distinct.size) return { status: "invalid" };
+  if (required && maxItems !== undefined && maxItems < Math.max(1, minItems ?? 0)) {
+    return { status: "invalid" };
+  }
+  const rawDefault = Array.isArray(schema["default"])
+    ? schema["default"].filter((v): v is string => typeof v === "string" && distinct.has(v))
+    : undefined;
+  const uniqueDefault = rawDefault ? [...new Set(rawDefault)] : undefined;
+  const fallback = uniqueDefault !== undefined &&
+      (minItems === undefined || uniqueDefault.length >= minItems) &&
+      (maxItems === undefined || uniqueDefault.length <= maxItems)
+    ? uniqueDefault
+    : undefined;
+  return {
+    status: "ok",
+    field: {
+      ...base,
+      kind: "multi",
+      choices,
+      defaultValue: fallback,
+      ...(minItems !== undefined ? { minItems } : {}),
+      ...(maxItems !== undefined ? { maxItems } : {}),
+    },
+  };
+}
+
+function numberFieldOf(
+  base: FieldBase,
+  kind: "number" | "integer",
+  schema: Record<string, unknown>,
+): FieldParseResult {
+  const minimum = parseBound(schema["minimum"], false);
+  const maximum = parseBound(schema["maximum"], false);
+  if (minimum === null || maximum === null) return { status: "invalid" };
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    return { status: "invalid" };
+  }
+  if (
+    kind === "integer" &&
+    minimum !== undefined &&
+    maximum !== undefined &&
+    Math.ceil(minimum) > Math.floor(maximum)
+  ) {
+    return { status: "invalid" };
+  }
+  const rawDefault = typeof schema["default"] === "number" &&
+      Number.isFinite(schema["default"]) &&
+      (kind !== "integer" || Number.isInteger(schema["default"])) &&
+      (minimum === undefined || schema["default"] >= minimum) &&
+      (maximum === undefined || schema["default"] <= maximum)
+    ? String(schema["default"])
+    : undefined;
+  return {
+    status: "ok",
+    field: {
+      ...base,
+      kind,
+      choices: [],
+      defaultValue: rawDefault,
+      ...(minimum !== undefined ? { minimum } : {}),
+      ...(maximum !== undefined ? { maximum } : {}),
+    },
+  };
+}
+
 function fieldOf(
   id: string,
   schema: Record<string, unknown>,
   required: boolean,
-): ElicitationField | null {
+): FieldParseResult {
   const meta = record(schema["_meta"]);
   const codex = record(meta?.["codex"]);
-  const base = {
+  const base: FieldBase = {
     id,
     title: text(schema["title"]) ?? id,
     description: text(schema["description"]),
@@ -123,48 +320,29 @@ function fieldOf(
       : null,
   };
   switch (schema["type"]) {
-    case "string": {
-      const choices = choicesOf(schema["oneOf"], schema["enum"]);
-      const fallback = typeof schema["default"] === "string" ? schema["default"] : undefined;
-      return {
-        ...base,
-        kind: choices.length > 0 ? "single" : "text",
-        choices,
-        defaultValue: fallback,
-      };
-    }
-    case "array": {
-      const items = record(schema["items"]);
-      const choices = choicesOf(items?.["anyOf"] ?? items?.["oneOf"], items?.["enum"]);
-      if (choices.length === 0) return null;
-      const fallback = Array.isArray(schema["default"])
-        ? schema["default"].filter((value): value is string => typeof value === "string")
-        : undefined;
-      return { ...base, kind: "multi", choices, defaultValue: fallback };
-    }
+    case "string":
+      return stringFieldOf(base, schema, required);
+    case "array":
+      return arrayFieldOf(base, schema, required);
     case "boolean":
       return {
-        ...base,
-        kind: "boolean",
-        choices: [],
-        defaultValue: typeof schema["default"] === "boolean" ? schema["default"] : undefined,
+        status: "ok",
+        field: {
+          ...base,
+          kind: "boolean",
+          choices: [],
+          defaultValue: typeof schema["default"] === "boolean" ? schema["default"] : undefined,
+        },
       };
     case "number":
     case "integer":
-      return {
-        ...base,
-        kind: schema["type"],
-        choices: [],
-        defaultValue: typeof schema["default"] === "number"
-          ? String(schema["default"])
-          : undefined,
-      };
+      return numberFieldOf(base, schema["type"], schema);
     default:
-      return null;
+      return required ? { status: "invalid" } : { status: "omit" };
   }
 }
 
-/** The elicitation a permission request carries, if it is one. */
+/** The elicitation a permission request carries, if it is one and is valid. */
 export function elicitationOf(toolCall: unknown): Elicitation | null {
   const request = record(record(record(toolCall)?.["_cowboy"])?.["elicitation"]);
   if (!request) return null;
@@ -175,23 +353,31 @@ export function elicitationOf(toolCall: unknown): Elicitation | null {
   }
   if (request["mode"] !== "form") return null;
   const schema = record(request["requestedSchema"]);
-  const properties = record(schema?.["properties"]) ?? {};
-  const required = new Set(
-    Array.isArray(schema?.["required"])
-      ? schema["required"].filter((id): id is string => typeof id === "string")
-      : [],
-  );
+  if (!schema) return null;
+  if (schema["type"] !== undefined && schema["type"] !== "object") return null;
+  const properties = record(schema["properties"]);
+  if (!properties) return null;
+  const required = new Set<string>();
+  if (schema["required"] !== undefined) {
+    if (!Array.isArray(schema["required"])) return null;
+    for (const id of schema["required"]) {
+      if (typeof id !== "string" || id.length === 0) return null;
+      required.add(id);
+    }
+  }
   const fields: ElicitationField[] = [];
+  const fieldIds = new Set<string>();
   for (const [id, property] of Object.entries(properties)) {
     const field = record(property);
-    if (!field) continue;
+    if (!field) return null;
     const parsed = fieldOf(id, field, required.has(id));
-    // A required field Cowboy cannot render makes the form unanswerable here.
-    if (!parsed) {
-      if (required.has(id)) return null;
-      continue;
-    }
-    fields.push(parsed);
+    if (parsed.status === "invalid") return null;
+    if (parsed.status === "omit") continue;
+    fields.push(parsed.field);
+    fieldIds.add(id);
+  }
+  for (const id of required) {
+    if (!fieldIds.has(id)) return null;
   }
   return { mode: "form", message, fields, autoResolutionMs: autoResolutionOf(request) };
 }
@@ -218,34 +404,66 @@ export function initialElicitationValues(
 ): ElicitationValues {
   const values: ElicitationValues = {};
   for (const field of fields) {
-    if (field.defaultValue !== undefined) values[field.id] = field.defaultValue;
-    else if (field.kind === "multi") values[field.id] = [];
-    else if (field.kind === "boolean") values[field.id] = false;
-    else values[field.id] = "";
+    if (field.defaultValue !== undefined) defineOwn(values, field.id, field.defaultValue);
+    else if (field.kind === "single") continue;
+    else if (field.kind === "multi") defineOwn(values, field.id, []);
+    else if (field.kind === "boolean") defineOwn(values, field.id, false);
+    else defineOwn(values, field.id, "");
   }
   return values;
 }
 
-function answered(field: ElicitationField, value: ElicitationValue | undefined): boolean {
-  if (field.kind === "boolean") return typeof value === "boolean";
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value !== "string" || value.trim() === "") return false;
-  if (field.kind === "number") return Number.isFinite(Number(value));
-  if (field.kind === "integer") return Number.isInteger(Number(value));
-  return true;
+function ownValue(values: ElicitationValues, id: string): ElicitationValue | undefined {
+  return Object.hasOwn(values, id) ? values[id] : undefined;
 }
 
-/** Whether every required field has a valid answer and no optional number is
- *  malformed. */
+function answered(field: ElicitationField, value: ElicitationValue | undefined): boolean {
+  if (field.kind === "boolean") return typeof value === "boolean";
+  if (field.kind === "multi") {
+    if (!Array.isArray(value) || value.length === 0) return false;
+    if (field.minItems !== undefined && value.length < field.minItems) return false;
+    if (field.maxItems !== undefined && value.length > field.maxItems) return false;
+    const allowed = new Set(field.choices.map((c) => c.value));
+    const seen = new Set<string>();
+    for (const item of value) {
+      if (typeof item !== "string" || !allowed.has(item) || seen.has(item)) return false;
+      seen.add(item);
+    }
+    return true;
+  }
+  if (field.kind === "single") {
+    if (typeof value !== "string") return false;
+    if (!field.choices.some((c) => c.value === value)) return false;
+    return stringFitsBounds(field, value);
+  }
+  if (typeof value !== "string" || value.trim() === "") return false;
+  if (field.kind === "number" || field.kind === "integer") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return false;
+    if (field.kind === "integer" && !Number.isInteger(n)) return false;
+    if (field.minimum !== undefined && n < field.minimum) return false;
+    if (field.maximum !== undefined && n > field.maximum) return false;
+    return true;
+  }
+  return stringFitsBounds(field, value);
+}
+
+/** Whether every required field has a valid answer and no provided optional
+ *  answer violates its schema bounds. */
 export function elicitationComplete(
   fields: readonly ElicitationField[],
   values: ElicitationValues,
 ): boolean {
   return fields.every((field) => {
-    const value = values[field.id];
+    const value = ownValue(values, field.id);
     if (field.required) return answered(field, value);
-    if ((field.kind === "number" || field.kind === "integer") &&
-      typeof value === "string" && value.trim() !== "") {
+    if (field.kind === "multi") {
+      return !Array.isArray(value) || value.length === 0 || answered(field, value);
+    }
+    if (field.kind === "single") {
+      return value === undefined || answered(field, value);
+    }
+    if (typeof value === "string" && value.trim() !== "") {
       return answered(field, value);
     }
     return true;
@@ -253,21 +471,21 @@ export function elicitationComplete(
 }
 
 /** The option id that accepts the form with these values. Empty optional
- *  answers are omitted, as the schema allows. */
+ *  answers are omitted, as the schema allows. Choices are serialized verbatim. */
 export function elicitationAnswer(
   fields: readonly ElicitationField[],
   values: ElicitationValues,
 ): string {
   const content: Record<string, string | number | boolean | string[]> = {};
   for (const field of fields) {
-    const value = values[field.id];
+    const value = ownValue(values, field.id);
     if (!answered(field, value)) continue;
     if (field.kind === "number" || field.kind === "integer") {
-      content[field.id] = Number(value);
+      defineOwn(content, field.id, Number(value));
     } else if (typeof value === "string") {
-      content[field.id] = field.kind === "text" ? value : value.trim();
+      defineOwn(content, field.id, value);
     } else if (value !== undefined) {
-      content[field.id] = value;
+      defineOwn(content, field.id, value);
     }
   }
   return Object.keys(content).length === 0 && fields.length === 0

@@ -261,6 +261,7 @@ const CONVERSATION: ShortcutRow[] = [
   { keys: ["gg"], title: "Jump to the oldest loaded message" },
   { keys: ["Shift+G"], title: "Jump to latest and enable Following" },
   { keys: ["F"], title: "Toggle automatic Following" },
+  { keys: ["y", "Shift+Y"], title: "Copy the message in view / Copy as Markdown" },
   { keys: ["V"], title: "Switch the Conversation between History and Explore" },
   { keys: ["Tab / Shift+Tab"], title: "Select the next / previous expandable widget" },
   { keys: ["H/L"], title: "Close / open the selected widget" },

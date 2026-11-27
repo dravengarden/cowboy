@@ -10,6 +10,7 @@ pub(super) struct PendingActions(BTreeMap<String, Request>);
 struct Request {
     question: Option<bool>,
     child: bool,
+    subagent_id: Option<String>,
     tool: Option<String>,
 }
 
@@ -53,6 +54,10 @@ impl PendingActions {
                         child: tool_call
                             .pointer("/_cowboy/subagent")
                             .is_some_and(serde_json::Value::is_object),
+                        subagent_id: tool_call
+                            .pointer("/_cowboy/subagent/sessionId")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned),
                         tool: tool_call["toolCallId"].as_str().map(str::to_owned),
                     },
                 );
@@ -70,8 +75,27 @@ impl PendingActions {
                     && matches!(update["status"].as_str(), Some("completed" | "failed"))
                     && let Some(tool) = update["toolCallId"].as_str()
                 {
-                    self.0
-                        .retain(|_, request| request.tool.as_deref() != Some(tool));
+                    let update_child = update
+                        .pointer("/_cowboy/subagent")
+                        .is_some_and(serde_json::Value::is_object);
+                    let update_subagent_id = update
+                        .pointer("/_cowboy/subagent/sessionId")
+                        .and_then(serde_json::Value::as_str);
+                    self.0.retain(|_, request| {
+                        if request.tool.as_deref() != Some(tool) {
+                            return true;
+                        }
+                        match (request.child, update_child) {
+                            (false, false) => false,
+                            (true, true) => {
+                                match (request.subagent_id.as_deref(), update_subagent_id) {
+                                    (Some(a), Some(b)) => a != b,
+                                    _ => true,
+                                }
+                            }
+                            _ => true,
+                        }
+                    });
                 }
                 if update["sessionUpdate"] == "context_cleared" {
                     self.0.clear();
@@ -87,6 +111,7 @@ impl PendingActions {
             self.0.entry(id.clone()).or_insert(Request {
                 question: None,
                 child: true,
+                subagent_id: None,
                 tool: None,
             });
         }
@@ -217,6 +242,73 @@ mod tests {
             detail: None,
         });
         assert!(pending.summary().is_empty());
+    }
+
+    #[test]
+    fn session_attention_parent_tool_completion_keeps_child_form() {
+        let mut pending = PendingActions::default();
+        pending.observe(&request(
+            "child-q",
+            json!({
+                "toolCallId": "call_1",
+                "_cowboy": {
+                    "subagent": {"sessionId": "child-1", "title": "Helper"},
+                    "elicitation": {"mode": "form"}
+                }
+            }),
+        ));
+        pending.observe(&request(
+            "child-q2",
+            json!({
+                "toolCallId": "call_1",
+                "_cowboy": {
+                    "subagent": {"sessionId": "child-2", "title": "Other Helper"},
+                    "elicitation": {"mode": "form"}
+                }
+            }),
+        ));
+        pending.observe(&request(
+            "parent-p",
+            json!({"toolCallId": "call_1", "title": "Parent tool"}),
+        ));
+        assert_eq!(
+            pending.summary(),
+            SessionAttention {
+                approvals: 1,
+                questions: 2,
+                other: 0,
+            }
+        );
+        // Parent tool completion with the same session-local toolCallId clears
+        // only the parent's request and keeps both child forms pending.
+        pending.observe(&Event::Update {
+            update: json!({"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed"}),
+        });
+        assert_eq!(
+            pending.summary(),
+            SessionAttention {
+                approvals: 0,
+                questions: 2,
+                other: 0,
+            }
+        );
+        // A child-scoped completion clears only that matching child.
+        pending.observe(&Event::Update {
+            update: json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_1",
+                "status": "completed",
+                "_cowboy": {"subagent": {"sessionId": "child-1"}}
+            }),
+        });
+        assert_eq!(
+            pending.summary(),
+            SessionAttention {
+                approvals: 0,
+                questions: 1,
+                other: 0,
+            }
+        );
     }
 
     #[test]

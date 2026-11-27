@@ -886,10 +886,16 @@ query and force release of "Controller account controls (step 5a)" and the
   restores keep earlier image bytes in the page like pasted images do; the
   owner always sees the restored message before sending it. A Controller-side Draft restore was
   reviewed and withdrawn: restored attachments could push a session's pending
-  snapshot past its persistence limit, among other edge cases. With `agy` 1.5.14 the pending question need not reach the
-  owner as a permission request: in sess-1795343291454 the `ask_question`
-  `tool_call` stayed `pending`, the turn ended `EndTurn`, and the next
-  prompt was taken as its answer. The raise is one transaction compared with
+  snapshot past its persistence limit, among other edge cases. With `agy` 1.5.14, when `clientCapabilities.elicitation.form` is not
+  advertised, `ask_question` falls back to chat mode: in sess-1795343291454
+  the `ask_question` `tool_call` stayed `pending`, the turn ended `EndTurn`,
+  and the next prompt was taken as its answer (rejecting images locally).
+  The proxy now advertises form-only `elicitation: { form: {} }` in ordinary
+  sessions when the worker declares form elicitation and relays
+  `elicitation/create` (`mode: "form"` only) so `agy` presents `ask_question`
+  as a live ACP form inside the turn; `LOCAL_REJECTIONS` (`image_answer`) and
+  Web `Back to Prompt` remain as defensive fallbacks for clients without form
+  elicitation or pre-existing pending chat questions. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
   A rate limit holds until its quota group resets (default one hour; see
@@ -1424,7 +1430,7 @@ now counts as it does for Claude and Codex.
 | Extensions (Cowboy MCP, folder MCP, memory) | MCP | `mcp__<server>__<tool>`, title "Run mcp_cowboy_…", `toolSummary` among the arguments | no result | title `<server> · <tool>`, `toolSummary` dropped, result blocks (text, image, resource) as content, at most 1 MiB |
 | `search_web` | built-in, allowed | WebSearch, query title | `agy` reports no result | unchanged (the result never reaches ACP; the model's reply summarizes it) |
 | `read_url_content`, `view_content_chunk` | built-in, allowed for http(s) | WebFetch, URL title | `agy` reports no result | unchanged |
-| `ask_question` | built-in, allowed | owner permission prompt | none | unchanged |
+| `ask_question` | built-in, allowed | live ACP form elicitation (`elicitation/create`, `mode: "form"`) when `clientCapabilities.elicitation.form` is advertised; chat fallback otherwise | none | proxy advertises form-only `elicitation` in ordinary sessions and forwards `elicitation/create` (`mode: "form"`) under a proxy worker ID; non-form, managed, or malformed requests cancel cleanly (`{ action: "cancel" }`) |
 | Plan / task tracking | planning mode writes `task.md`/`implementation_plan.md` artifacts with `write_file` (denied); no todo tool | nothing | no checklist, no Plan panel | facade tool `UpdatePlan` (`plan: [{step, status}]`, like Codex's `update_plan`): validated by the facade without a target request, sent as ACP `plan`, its tool call hidden |
 
 Per call this adds nothing on the wire to `agy` or the target; the system

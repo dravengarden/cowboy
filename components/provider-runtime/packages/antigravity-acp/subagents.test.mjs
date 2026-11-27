@@ -169,13 +169,20 @@ function unit({
 }
 
 /** A worker that declared subagents, with one session `s` in a turn (id 9). */
-async function parent(options = {}, { subagents = {}, mode = "default" } = {}) {
+async function parent(
+  options = {},
+  { subagents = {}, elicitation = undefined, mode = "default" } = {},
+) {
   const made = unit(options);
   const { proxy, agent } = made;
+  const clientCapabilities = {
+    ...(subagents === null ? {} : { subagents }),
+    ...(elicitation !== undefined ? { elicitation } : {}),
+  };
   await proxy.fromClient(
     request(1, "initialize", {
       protocolVersion: 1,
-      clientCapabilities: subagents === null ? {} : { subagents },
+      clientCapabilities,
     }),
   );
   await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
@@ -1814,4 +1821,501 @@ test("the turn's end waits for a running publish helper", async () => {
   await running;
   await ending;
   assert.equal(ended, true);
+});
+
+test("a running child's form elicitation/create forwards to the owner and retires when the child ends", async () => {
+  const made = await parent({}, { elicitation: { form: {}, url: {} } });
+  const { proxy, agent, client } = made;
+  const id = await startChild(made);
+
+  // Live form elicitation from the running child forwards under a proxy worker ID.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-1",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      toolCallId: "q-child-1",
+      mode: "form",
+      message: "Subagent question",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Choose",
+            oneOf: [{ const: "1", title: "Yes" }],
+          },
+        },
+      },
+    },
+  });
+  const forwarded1 = client.at(-1);
+  assert.equal(forwarded1.method, "elicitation/create");
+  assert.equal(forwarded1.params.sessionId, id);
+  assert.equal(forwarded1.params.toolCallId, "q-child-1");
+
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded1.id,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-elicit-1",
+    result: { action: "accept", content: { q1: "1" } },
+  });
+
+  // A second open elicitation retires cleanly when the child ends; late owner replies are ignored.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-2",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      mode: "form",
+      message: "Pending on end",
+      requestedSchema: { type: "object", properties: {} },
+    },
+  });
+  const forwarded2 = client.at(-1);
+  await endPrompt(made, id);
+  assert.deepEqual(
+    agent.find((m) => m.id === "child-elicit-2"),
+    { jsonrpc: "2.0", id: "child-elicit-2", result: { action: "cancel" } },
+  );
+  assert.equal(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === forwarded2.id),
+    true,
+  );
+  agent.length = 0;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded2.id,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+  assert.equal(agent.length, 0);
+
+  // Any new elicitation from the ended child is cancelled without reaching the worker.
+  client.length = 0;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-3",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      mode: "form",
+      message: "After end",
+      requestedSchema: { type: "object", properties: {} },
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-elicit-3",
+    result: { action: "cancel" },
+  });
+  assert.equal(client.length, 0);
+});
+
+test("pre-turn elicitation during pending child open cancels immediately before session/new settles and before child prompt (R1/R2)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client, control } = made;
+  control.ignore.add("session/new");
+  control.markDelay = 40;
+  const starting = proxy.subagents.start("s", { prompt: "work" });
+  await flush(2);
+  const [newReq] = sent(agent, "session/new");
+  assert.ok(newReq, "session/new is in flight and still unanswered");
+
+  // 1. Pre-open quarantined elicitation cancels IMMEDIATELY while session/new is withheld.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "pre-open-elicit",
+    method: "elicitation/create",
+    params: {
+      sessionId: "child-1",
+      mode: "form",
+      message: "Before session/new answered",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  assert.deepEqual(
+    agent.filter((m) => m.id === "pre-open-elicit"),
+    [{ jsonrpc: "2.0", id: "pre-open-elicit", result: { action: "cancel" } }],
+    "cancelled immediately before session/new reply",
+  );
+
+  // 2. Answer session/new; child enters `opening` while evidence.mark delays session/prompt.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: newReq.id,
+    result: { sessionId: "child-1" },
+  });
+  assert.equal(sent(agent, "session/prompt").length, 0, "child prompt not sent yet");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "post-open-pre-prompt-elicit",
+    method: "elicitation/create",
+    params: {
+      sessionId: "child-1",
+      mode: "form",
+      message: "After session/new before child prompt",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  assert.deepEqual(
+    agent.filter((m) => m.id === "post-open-pre-prompt-elicit"),
+    [{ jsonrpc: "2.0", id: "post-open-pre-prompt-elicit", result: { action: "cancel" } }],
+    "cancelled immediately before child prompt starts",
+  );
+
+  const id = await starting;
+  await flush();
+  assert.equal(id, "child-1");
+  assert.equal(agent.filter((m) => m.id === "pre-open-elicit").length, 1);
+  assert.equal(agent.filter((m) => m.id === "post-open-pre-prompt-elicit").length, 1);
+  assert.equal(
+    client.some((m) => m.method === "elicitation/create"),
+    false,
+    "pre-turn child elicitations must never reach the worker",
+  );
+  assert.equal(proxy.subagents.active(id), true);
+});
+
+test("buffered duplicate native ID during child open retires live parent form and parent reopen retires child form (R1)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client, control } = made;
+
+  // Open a live form on the parent session under native ID "shared-id".
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "shared-id",
+    method: "elicitation/create",
+    params: {
+      sessionId: "s",
+      mode: "form",
+      message: "Parent form",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const parentFwd = client.at(-1);
+  assert.equal(parentFwd.method, "elicitation/create");
+
+  // While a child is opening, agy sends a permission request reusing "shared-id".
+  control.beforeNew = (sessionId) => [
+    {
+      jsonrpc: "2.0",
+      id: "shared-id",
+      method: "session/request_permission",
+      params: {
+        sessionId,
+        toolCall: { toolCallId: "t1", name: "mcp_cowboy_ReadFile" },
+        options: [{ optionId: "yes", kind: "allow_once" }],
+      },
+    },
+  ];
+  const childId = await startChild(made);
+  await flush();
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === parentFwd.id),
+    "buffered duplicate retires original parent form in worker",
+  );
+  const sharedReplies = agent.filter((m) => m.id === "shared-id");
+  assert.equal(sharedReplies.length, 1);
+  assert.equal(sharedReplies[0].error?.code, -32600);
+  // Late worker reply on original parent form produces zero frames.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: parentFwd.id,
+    result: { action: "accept", content: { q1: "late" } },
+  });
+  assert.equal(agent.filter((m) => m.id === "shared-id").length, 1);
+
+  // Open a live child form, then reopen parent session via session/load -> child form retires.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-reopen-elicit",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "Child form before parent reopen",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const childFwd = client.at(-1);
+  await proxy.fromClient(
+    request(55, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === childFwd.id),
+    "parent reopen cancels child form in worker",
+  );
+  assert.deepEqual(
+    agent.find((m) => m.id === "child-reopen-elicit"),
+    { jsonrpc: "2.0", id: "child-reopen-elicit", result: { action: "cancel" } },
+  );
+});
+
+test("held child permission arriving first blocks parent form reusing its ID and emits one error without replay (R2)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "work" });
+  await flush(2);
+  const [newReq] = sent(agent, "session/new");
+  assert.ok(newReq);
+
+  // 1. Child permission arrives FIRST while session/new is pending and is buffered.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "held-first-id",
+    method: "session/request_permission",
+    params: {
+      sessionId: "child-1",
+      toolCall: { toolCallId: "t1", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.equal(agent.filter((m) => m.id === "held-first-id").length, 0, "held while opening");
+
+  // 2. Parent elicitation arrives reusing the exact held native ID -> collides immediately.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "held-first-id",
+    method: "elicitation/create",
+    params: {
+      sessionId: "s",
+      mode: "form",
+      message: "Colliding parent form",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  assert.equal(
+    client.some((m) => m.method === "elicitation/create"),
+    false,
+    "colliding parent form must never reach worker",
+  );
+  const replies = agent.filter((m) => m.id === "held-first-id");
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].error?.code, -32600);
+
+  // 3. Finish opening the child and drain buffer -> held frame was removed so NO second reply fires.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: newReq.id,
+    result: { sessionId: "child-1" },
+  });
+  await starting;
+  await flush();
+  assert.equal(agent.filter((m) => m.id === "held-first-id").length, 1);
+});
+
+test("direct parent uncertainty retires running child form and pending parent reopen fences child forms (R2)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client } = made;
+  const childId = await startChild(made);
+
+  // 1. Pending parent reopen fences new child elicitation admission.
+  await proxy.fromClient(
+    request(70, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-during-reopen",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "During reopen",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-during-reopen",
+    result: { action: "cancel" },
+  });
+  assert.equal(
+    client.some((m) => m.method === "elicitation/create"),
+    false,
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 70, result: {} });
+
+  // 2. Direct proxy.uncertain(parentId, ...) retires a live child form immediately.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-live-uncertain",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "Before direct parent uncertainty",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const childFwd = client.at(-1);
+  assert.equal(childFwd.method, "elicitation/create");
+
+  proxy.uncertain("s", "fs/writeFile");
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === childFwd.id),
+    "direct parent uncertainty notifies worker to cancel child form",
+  );
+  assert.deepEqual(
+    agent.find((m) => m.id === "child-live-uncertain"),
+    { jsonrpc: "2.0", id: "child-live-uncertain", result: { action: "cancel" } },
+  );
+});
+
+test("failed child open keeps quarantine held-ID collision guard active until replay runs (R3)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "work" }).then(
+    () => undefined,
+    (err) => err,
+  );
+  await flush(2);
+  const [newReq] = sent(agent, "session/new");
+  assert.ok(newReq);
+
+  // Buffer a quarantined permission request while session/new is pending.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "q-race-id",
+    method: "session/request_permission",
+    params: {
+      sessionId: "orphan-child",
+      toolCall: { toolCallId: "t1", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  // Same stdout chunk (no microtask yield between frames): session/new fails,
+  // releaseQuarantine schedules replay, and a root permission reuses "q-race-id".
+  await Promise.all([
+    proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: newReq.id,
+      error: { code: -32603, message: "open failed" },
+    }),
+    proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: "q-race-id",
+      method: "session/request_permission",
+      params: {
+        sessionId: "s",
+        toolCall: { toolCallId: "t2", name: "mcp_cowboy_ReadFile" },
+        options: [{ optionId: "yes", kind: "allow_once" }],
+      },
+    }),
+  ]);
+  await starting;
+  await flush();
+  const replies = agent.filter((m) => m.id === "q-race-id");
+  assert.equal(
+    replies.length,
+    1,
+    "exactly one cancellation, no auto-approval and no duplicate replay",
+  );
+  assert.deepEqual(replies[0].result, { outcome: { outcome: "cancelled" } });
+});
+
+test("direct child session/load and session/resume are refused and opening buffer overflow/discard settles requests (R3)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client } = made;
+  const childId = await startChild(made);
+
+  // Open a live child form.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-form-reopen-refused",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "Stay open",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const formFwd = client.at(-1);
+  assert.equal(formFwd.method, "elicitation/create");
+
+  // Direct client session/load and session/resume for the child are refused.
+  for (const [reqId, method] of [
+    [81, "session/load"],
+    [82, "session/resume"],
+  ]) {
+    await proxy.fromClient(
+      request(reqId, method, { sessionId: childId, cwd: "/work/repo", mcpServers: [] }),
+    );
+    const errReply = client.find((m) => m.id === reqId);
+    assert.equal(errReply?.error?.code, -32602);
+    assert.equal(
+      sent(agent, method).some((m) => m.params?.sessionId === childId),
+      false,
+    );
+  }
+  // Child form is still answerable because the refused direct reopen did not disturb it.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: formFwd.id,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-form-reopen-refused",
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+
+  // Opening buffer overflow settles request instead of silently dropping it.
+  proxy.subagents.adopt("overflow-child");
+  for (let i = 0; i < 256; i++) {
+    proxy.subagents.hold({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "overflow-child",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } },
+      },
+    });
+  }
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "overflow-perm",
+    method: "session/request_permission",
+    params: {
+      sessionId: "overflow-child",
+      toolCall: { toolCallId: "t", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "overflow-perm",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+
+  // Abandoning an opening session settles any held request inside it.
+  proxy.subagents.adopt("abandoned-child");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "abandoned-perm",
+    method: "session/request_permission",
+    params: {
+      sessionId: "abandoned-child",
+      toolCall: { toolCallId: "t", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.equal(
+    agent.some((m) => m.id === "abandoned-perm"),
+    false,
+  );
+  proxy.subagents.discardOpening("abandoned-child");
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "abandoned-perm",
+    result: { outcome: { outcome: "cancelled" } },
+  });
 });
