@@ -280,6 +280,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
       sx={{
         order: 1,
         flex: 1,
+        minWidth: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "row",
@@ -446,7 +447,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
             data-desktop-review
             hidden={!reviewShown}
             tabIndex={-1}
-            sx={{ flex: 1, minHeight: 0, display: reviewShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
+            sx={{ flex: 1, minWidth: 0, minHeight: 0, display: reviewShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
           >
             <Suspense fallback={null}><DesktopReviewView active={reviewShown} /></Suspense>
           </Box>

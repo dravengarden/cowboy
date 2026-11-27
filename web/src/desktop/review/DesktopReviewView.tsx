@@ -595,7 +595,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       ref={setRoot}
       data-desktop-review-workbench
       data-review-compact={compact ? "true" : undefined}
-      sx={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}
+      sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative" }}
     >
       <ReviewNavigatorShell navigator={navigator} navigatorShown={navigatorShown} compact={compact} overlay={overlay} navigatorWidth={navigatorWidth} width={width} onWidth={setNavigatorWidth} onShow={() => showNavigator(tab)} />
       <ReviewDocumentRegion review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} streamMode={streamMode} unreadOnly={unreadOnly} commentTarget={commentTarget} onOpenComment={openComment} onCloseComment={() => setCommentTarget(null)} onToggleStream={() => setStreamMode((v) => !v)} />

@@ -295,7 +295,7 @@ function ReviewDocumentFooter({
   onFocusPrompt?: (() => void) | undefined;
 }): React.JSX.Element {
   return (
-    <Toolbar variant="dense" disableGutters data-review-document-footer sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}>
+    <Toolbar variant="dense" disableGutters data-review-document-footer sx={{ minHeight: desktopSize(34), minWidth: 0, px: 1, gap: 0.75, borderTop: 1, borderColor: "divider", flexShrink: 0, overflowX: "auto", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
       <HintTooltip title={document.path} enterDelay={400}>
         <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, ...REVIEW_TRUNCATED_PATH_SX }}>
           <ReviewPathText path={document.path} />

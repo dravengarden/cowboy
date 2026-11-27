@@ -58,39 +58,42 @@ function NavigatorTabs({ tab, onTab }: { tab: ReviewNavigatorTab; onTab: (tab: R
       }}
     >
       {REVIEW_NAVIGATOR_TABS.map(({ value, label, fullLabel, leaderKey }) => (
-        <Tooltip key={value} title={`${fullLabel} (␣${leaderKey})`} enterDelay={400}>
-          <Tab
-            value={value}
-            tabIndex={-1}
-            data-review-navigator-tab={value}
-            disableRipple
-            label={label}
-            icon={showLeader ? <LeaderKeycap leaderKey={leaderKey} /> : undefined}
-            iconPosition="end"
-            sx={{
-              minHeight: desktopSize(24),
-              minWidth: 0,
-              flex: "1 1 auto",
-              px: 0.65,
-              py: 0,
-              gap: 0.4,
-              borderRadius: "6px",
-              textTransform: "none",
-              fontSize: "0.73rem",
-              fontWeight: 550,
-              color: "text.secondary",
-              whiteSpace: "nowrap",
-              transition: "background-color 120ms ease, color 120ms ease",
-              "&:hover": { bgcolor: "action.hover", color: "text.primary" },
-              "&.Mui-selected": {
-                color: "text.primary",
-                fontWeight: 650,
-                bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
-              },
-              "& .MuiTab-icon": { m: 0 },
-            }}
-          />
-        </Tooltip>
+        <Tab
+          key={value}
+          value={value}
+          tabIndex={-1}
+          data-review-navigator-tab={value}
+          disableRipple
+          label={
+            <Tooltip title={`${fullLabel} (␣${leaderKey})`} enterDelay={400}>
+              <span>{label}</span>
+            </Tooltip>
+          }
+          icon={showLeader ? <LeaderKeycap leaderKey={leaderKey} /> : undefined}
+          iconPosition="end"
+          sx={{
+            minHeight: desktopSize(24),
+            minWidth: 0,
+            flex: "1 1 auto",
+            px: 0.65,
+            py: 0,
+            gap: 0.4,
+            borderRadius: "6px",
+            textTransform: "none",
+            fontSize: "0.73rem",
+            fontWeight: 550,
+            color: "text.secondary",
+            whiteSpace: "nowrap",
+            transition: "background-color 120ms ease, color 120ms ease",
+            "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+            "&.Mui-selected": {
+              color: "text.primary",
+              fontWeight: 650,
+              bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
+            },
+            "& .MuiTab-icon": { m: 0 },
+          }}
+        />
       ))}
     </Tabs>
   );
