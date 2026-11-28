@@ -1,5 +1,7 @@
 //! A read-only [`Store`] for preflight checks that run beside the serving
-//! Controller: no file, schema or row is created, migrated or written.
+//! Controller: no database, schema or row is created, migrated or written.
+//! A `SQLite` reader still shares the live WAL index (`-shm`) as any reader
+//! does, and holds a read lock that can delay a checkpoint while it reads.
 
 use std::str::FromStr as _;
 use std::time::Duration;
@@ -13,14 +15,18 @@ use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 impl Store {
     /// Open an existing database read-only. `SQLite` opens the file with
     /// `SQLITE_OPEN_READONLY` (a missing file is an error, never created);
-    /// `PostgreSQL` sessions default every transaction to read-only. No
-    /// migration runs, so queries see the schema the serving Controller left.
+    /// `PostgreSQL` sessions default every transaction to read-only and
+    /// bound each statement to 10 s. No migration runs, so queries see the
+    /// schema the serving Controller left.
     pub async fn connect_read_only(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
         let artifacts = crate::artifacts::ArtifactStore::unopened(artifact_dir);
         let backend = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
             let options = PgConnectOptions::from_str(url)
                 .context("parsing PostgreSQL URL")?
-                .options([("default_transaction_read_only", "on")]);
+                .options([
+                    ("default_transaction_read_only", "on"),
+                    ("statement_timeout", "10000"),
+                ]);
             let pool = PgPoolOptions::new()
                 .max_connections(1)
                 .acquire_timeout(Duration::from_secs(5))
@@ -81,7 +87,7 @@ mod tests {
             .unwrap();
         assert!(
             reader
-                .retired_default_sessions_refusing_startup()
+                .retired_default_sessions_refusing_startup(true)
                 .await
                 .unwrap()
                 .is_empty()

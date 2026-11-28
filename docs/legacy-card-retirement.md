@@ -252,15 +252,23 @@ target (when it carries the same check) and an ordinary reboot. On
 2026-11-28 two such intake registrations kept Hawk's Controller down for
 85 minutes. `cowboy serve --check-startup-admission --data-dir <dir>
 --database-url <url>` runs exactly this session check read-only beside the
-serving Controller (it opens the database with `SQLITE_OPEN_READONLY`,
-takes no vault or instance lock, runs no migration and binds nothing),
-discounting the registrations an admitted dataset would settle. It prints
-one `startup-admission-preflight/v1` report and exits non-zero when
-startup would be refused. The component activator runs it for the
-candidate before stopping anything and for the rollback target, so a
-refused release never stops the serving Controller. It does not check the
-vault credentials or Machine wipe acknowledgements, which need the vault
-the serving Controller owns.
+serving Controller: it opens the database read-only (`SQLITE_OPEN_READONLY`,
+never created; PostgreSQL read-only transactions with a statement timeout),
+runs no migration, takes no vault or instance lock and binds nothing. Like
+any SQLite reader it shares the live WAL index. It discounts the
+registrations startup settles only when the vault's recorded admission names
+this Service dataset, read without opening the vault; it cannot compare the
+wipe generations, which only change under a Controller from before the
+retirement. It prints one `startup-admission-preflight/v1` report:
+`admissible`, `refused` (exit status non-zero) or `unverified` when it could
+not read the state (a missing database, a schema older than its migrations,
+a 30 s timeout). The component activator runs it for the candidate before
+stopping anything and for the rollback target, so a refused release never
+stops the serving Controller, nor does a release whose rollback could not
+start. It does not check the vault credentials or Machine wipe
+acknowledgements, which need the vault the serving Controller owns, and a
+session the serving Controller registers between the check and its stop is
+not seen.
 Delivery acknowledgements are recorded under exactly the enrollment
 key the envelope was sealed to. A reconnecting Machine only wakes the
 reconciler for itself; there is no fleet-wide redelivery on reconnect, and

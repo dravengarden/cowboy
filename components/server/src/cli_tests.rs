@@ -113,7 +113,8 @@ async fn startup_admission_check_reads_existing_state_without_creating_it() {
         args.database_url = Some(url.clone());
         crate::server::serve(args)
     };
-    assert!(check().await.is_err(), "a missing database is not created");
+    // A missing database is unverified, not refused, and never created.
+    check().await.unwrap();
     assert!(!database.exists());
     let store = crate::store::Store::connect(&url, root.path().join("artifacts"))
         .await

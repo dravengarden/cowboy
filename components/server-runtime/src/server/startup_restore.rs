@@ -136,33 +136,64 @@ pub struct Persistence {
 
 /// `--check-startup-admission`: whether the startup gates that depend on
 /// durable session state would admit this Controller, checked read-only
-/// beside the serving one (no instance lock, migration, write or listener).
-/// A component activator runs it for a candidate before stopping anything,
-/// and for its rollback target to learn whether that one could start. Prints
-/// one JSON report; a refusal is also the error, so the exit status fails.
+/// beside the serving one (no vault or instance lock, migration, write or
+/// listener). A component activator runs it for a candidate before stopping
+/// anything, and for its rollback target to learn whether that one could
+/// start. Prints one JSON report: `admissible`, `refused` (also the error,
+/// so the exit status fails) or `unverified` when the state could not be
+/// read (a missing database, a schema older than this binary's migrations,
+/// a timeout); startup would migrate or create that state, so it is no
+/// refusal.
 pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
-    let refusing = match args.database_url() {
-        Some(url) => {
-            let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
-                .await
-                .context("opening the database read-only")?;
-            store
-                .retired_default_sessions_refusing_startup()
-                .await
-                .context("reading live sessions on retired legacy default accounts")?
-        }
-        None => Vec::new(),
+    // Startup settles rejected intake registrations only on a dataset whose
+    // admission is recorded (`retirement::admit_store`).
+    let settles =
+        crate::provider_service::recorded_admission(&args.data_dir).is_some_and(|admitted| {
+            crate::service_identity::inspect(&args.data_dir).is_ok_and(|id| admitted.dataset == id)
+        });
+    let read = async {
+        let Some(url) = args.database_url() else {
+            return Ok(Vec::new());
+        };
+        let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
+            .await
+            .context("opening the database read-only")?;
+        store
+            .retired_default_sessions_refusing_startup(settles)
+            .await
+            .context("reading live sessions on retired legacy default accounts")
     };
-    let refusal = provider_accounts::retirement::refuse_live_sessions(&refusing).err();
+    let (status, refusing, refusal, unverified) =
+        match tokio::time::timeout(std::time::Duration::from_secs(30), read).await {
+            Ok(Ok(refusing)) => {
+                let refusal = provider_accounts::retirement::refuse_live_sessions(&refusing).err();
+                let status = if refusal.is_some() {
+                    "refused"
+                } else {
+                    "admissible"
+                };
+                (status, refusing, refusal, None)
+            }
+            Ok(Err(error)) => ("unverified", Vec::new(), None, Some(format!("{error:#}"))),
+            Err(_) => (
+                "unverified",
+                Vec::new(),
+                None,
+                Some("timed out after 30s".to_owned()),
+            ),
+        };
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "schema": "dravengarden.cowboy.startup-admission-preflight/v1",
-            "status": if refusal.is_some() { "refused" } else { "admissible" },
+            "status": status,
             "retired_default_sessions": refusing,
+            "admission_recorded": settles,
+            "unverified": unverified,
             "not_checked": [
                 "provider_credentials",
                 "machine_wipe_acknowledgements",
+                "admission_wipe_generations",
                 "database_migrations",
                 "configuration",
             ],

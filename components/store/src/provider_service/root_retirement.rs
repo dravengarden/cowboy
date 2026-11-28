@@ -23,6 +23,16 @@ pub struct AdmittedRetirement {
 /// Refusal of a root write whose requested Provider is retired.
 pub const ROOT_RETIRED: &str = "named_account_required";
 
+/// The admission recorded under `data_dir`'s vault, read without opening
+/// or locking the vault: the startup admission preflight runs beside the
+/// serving Controller, which owns it. Wipe generations are not compared.
+pub fn recorded_admission(data_dir: &std::path::Path) -> Option<AdmittedRetirement> {
+    let root = fs::canonicalize(data_dir)
+        .ok()?
+        .join("provider-auth-service");
+    serde_json::from_slice(&fs::read(root.join(RETIREMENT_ADMITTED)).ok()?).ok()
+}
+
 impl ProviderAuthService {
     /// Refuse every later root write to a Provider `retired` accepts. Set once
     /// at Controller startup; without it the vault keeps the old behavior.

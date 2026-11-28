@@ -50,7 +50,7 @@ mod legacy_moves;
 use legacy_moves::LEGACY_MOVES;
 pub use legacy_moves::LegacyMove;
 mod root_retirement;
-pub use root_retirement::{AdmittedRetirement, ROOT_RETIRED};
+pub use root_retirement::{AdmittedRetirement, ROOT_RETIRED, recorded_admission};
 mod portable_accounts;
 mod scope_adoption;
 

@@ -1694,10 +1694,18 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     let refusing = ["dispatched", "logged", "ordinary", "ran", "web"];
     assert_eq!(
         store
-            .retired_default_sessions_refusing_startup()
+            .retired_default_sessions_refusing_startup(true)
             .await
             .unwrap(),
         refusing
+    );
+    // Without a recorded admission startup settles nothing.
+    assert_eq!(
+        store
+            .retired_default_sessions_refusing_startup(false)
+            .await
+            .unwrap(),
+        ["dispatched", "intake", "logged", "ordinary", "ran", "web"]
     );
     assert_eq!(
         store.settle_retired_intake_registrations().await.unwrap(),
@@ -1716,7 +1724,7 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     );
     assert_eq!(
         store
-            .retired_default_sessions_refusing_startup()
+            .retired_default_sessions_refusing_startup(true)
             .await
             .unwrap(),
         refusing
