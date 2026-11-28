@@ -282,115 +282,10 @@ async fn dispatch(
     let cwd = Some(service.config.workspace.to_string_lossy().into_owned());
     let prompt = build_triage_prompt(&req);
 
-    if service.config.machine != "local" {
-        let Some(store) = service.state.store.as_ref() else {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "store_unavailable" })),
-            )
-                .into_response();
-        };
-        let owner = match store.list_users().await {
-            Ok(users) => users.into_iter().find(|user| user.disabled_at_ms.is_none()),
-            Err(err) => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({ "error": "user_lookup_failed", "detail": err.to_string() })),
-                )
-                    .into_response();
-            }
-        };
-        let Some(owner) = owner else {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({ "error": "no_active_operator_account" })),
-            )
-                .into_response();
-        };
-        let authenticated = AuthenticatedProductRequest {
-            principal: ProductPrincipal {
-                user_id: owner.id,
-                username: owner.username,
-                role: crate::admin::AdminRole::Owner,
-            },
-            caller: crate::prompt_origin::RequestCaller::Automation,
-            cookie_session: None,
-            device_identity: None,
-            permissions: None,
-        };
-        let new_req = NewSessionRequest {
-            context_sources: Vec::new(),
-            reserved_id: Some(session_id.clone()),
-            retained_auth_generation: None,
-            provider: service.config.provider.clone(),
-            provider_account_id: None,
-            folder_id: None,
-            preset: None,
-            runtime_machine_id: service
-                .state
-                .project_placement
-                .snapshot()
-                .default_runtime_machine_id
-                .clone(),
-            machine_id: service.config.machine.clone(),
-            cwd,
-            origin: crate::core::SessionOrigin::Api,
-            system: false,
-            initial_prompt: Some(prompt),
-        };
-        let create_res = session_api::api_new_session(
-            State(Arc::clone(&service.state)),
-            Extension(authenticated),
-            Json(new_req),
-        )
-        .await;
-        if !create_res.status().is_success() {
-            let status = create_res.status();
-            let detail = axum::body::to_bytes(create_res.into_body(), 16 * 1024)
-                .await
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .unwrap_or_default();
-            return (
-                status,
-                Json(json!({ "error": "session_start_failed", "detail": detail })),
-            )
-                .into_response();
-        }
-    } else {
-        if let Err(err) = service.state.supervisor.new_session_on_with_id(
-            &session_id,
-            &service.config.provider,
-            cwd,
-            crate::core::SessionOrigin::Api,
-            true,
-            &service.config.machine,
-            crate::supervisor::ProviderGeneration {
-                account_id: None,
-                version: "",
-                digest: "",
-                auth_generation: None,
-                behavior: None,
-            },
-            None,
-        ) {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({ "error": "session_start_failed", "detail": err })),
-            )
-                .into_response();
-        }
-
-        let cmid = format!("intake:{dispatch_id}");
-        if let Err(err) = service.state.supervisor.send(
-            &session_id,
-            AgentCommand::Prompt(vec![ContentBlock::from(prompt)], Some(cmid), None),
-        ) {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({ "error": "prompt_dispatch_failed", "detail": err })),
-            )
-                .into_response();
-        }
+    if let Err(err_res) =
+        start_intake_session(&service, &dispatch_id, &session_id, cwd, prompt).await
+    {
+        return err_res;
     }
 
     let record = DispatchRecord {
@@ -420,6 +315,140 @@ async fn dispatch(
         Json(json!({ "schema": 1, "deduplicated": false, "dispatch": record })),
     )
         .into_response()
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
+async fn start_intake_session(
+    service: &Arc<Service>,
+    dispatch_id: &str,
+    session_id: &str,
+    cwd: Option<String>,
+    prompt: String,
+) -> Result<(), Response> {
+    if service.config.machine == "local" {
+        service
+            .state
+            .supervisor
+            .new_session_on_with_id(
+                session_id,
+                &service.config.provider,
+                cwd,
+                crate::core::SessionOrigin::Api,
+                true,
+                &service.config.machine,
+                crate::supervisor::ProviderGeneration {
+                    account_id: None,
+                    version: "",
+                    digest: "",
+                    auth_generation: None,
+                    behavior: None,
+                },
+                None,
+            )
+            .map_err(|err| {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "session_start_failed", "detail": err })),
+                )
+                    .into_response()
+            })?;
+        let cmid = format!("intake:{dispatch_id}");
+        service
+            .state
+            .supervisor
+            .send(
+                session_id,
+                AgentCommand::Prompt(vec![ContentBlock::from(prompt)], Some(cmid), None),
+            )
+            .map_err(|err| {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "prompt_dispatch_failed", "detail": err })),
+                )
+                    .into_response()
+            })?;
+        return Ok(());
+    }
+
+    let Some(store) = service.state.store.as_ref() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "store_unavailable" })),
+        )
+            .into_response());
+    };
+    let owner = store
+        .list_users()
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "user_lookup_failed", "detail": err.to_string() })),
+            )
+                .into_response()
+        })?
+        .into_iter()
+        .find(|user| user.disabled_at_ms.is_none())
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "no_active_operator_account" })),
+            )
+                .into_response()
+        })?;
+    let authenticated = AuthenticatedProductRequest {
+        principal: ProductPrincipal {
+            user_id: owner.id,
+            username: owner.username,
+            role: crate::admin::AdminRole::Owner,
+        },
+        caller: crate::prompt_origin::RequestCaller::Automation,
+        cookie_session: None,
+        device_identity: None,
+        permissions: None,
+    };
+    let new_req = NewSessionRequest {
+        context_sources: Vec::new(),
+        reserved_id: Some(session_id.to_owned()),
+        retained_auth_generation: None,
+        provider: service.config.provider.clone(),
+        provider_account_id: None,
+        folder_id: None,
+        preset: None,
+        runtime_machine_id: service
+            .state
+            .project_placement
+            .snapshot()
+            .default_runtime_machine_id
+            .clone(),
+        machine_id: service.config.machine.clone(),
+        cwd,
+        origin: crate::core::SessionOrigin::Api,
+        system: false,
+        initial_prompt: Some(prompt),
+    };
+    let create_res = session_api::api_new_session(
+        State(Arc::clone(&service.state)),
+        Extension(authenticated),
+        Json(new_req),
+    )
+    .await;
+    if !create_res.status().is_success() {
+        let status = create_res.status();
+        let detail = axum::body::to_bytes(create_res.into_body(), 16 * 1024)
+            .await
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        return Err((
+            status,
+            Json(json!({ "error": "session_start_failed", "detail": detail })),
+        )
+            .into_response());
+    }
+    Ok(())
 }
 
 async fn inspect(
