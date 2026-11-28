@@ -50,20 +50,31 @@ const CLAUDE_DEEPSEEK: ContextRolloverProviderChoice = {
 const ANTIGRAVITY: ContextRolloverProviderChoice = {
   id: "antigravity",
   name: "Antigravity",
-  builtin_idle_minutes: null,
-  recommended_idle_minutes: null,
-  policy_restricted: true,
-  restriction: "Automatic context renewal is disabled for Antigravity accounts by host policy.",
+  builtin_idle_minutes: 120,
+  recommended_idle_minutes: 120,
+  policy_restricted: false,
+  restriction: null,
   keepalive_independent: false,
 };
 
-const PROVIDERS = [CLAUDE, CODEX, CLAUDE_DEEPSEEK, ANTIGRAVITY];
+const RESTRICTED: ContextRolloverProviderChoice = {
+  id: "restricted-provider",
+  name: "Restricted Provider",
+  builtin_idle_minutes: null,
+  recommended_idle_minutes: null,
+  policy_restricted: true,
+  restriction: "Automatic context renewal is disabled by host policy.",
+  keepalive_independent: false,
+};
+
+const PROVIDERS = [CLAUDE, CODEX, CLAUDE_DEEPSEEK, ANTIGRAVITY, RESTRICTED];
 
 describe("contextRolloverPreferences", () => {
   test("effectiveProviderIdleMinutes honors defaults, explicit null opt-outs, and host policy", () => {
     expect(effectiveProviderIdleMinutes(DEFAULT_CONTEXT_ROLLOVER_VALUES, CLAUDE)).toBe(60);
     expect(effectiveProviderIdleMinutes(DEFAULT_CONTEXT_ROLLOVER_VALUES, CODEX)).toBeNull();
-    expect(effectiveProviderIdleMinutes(DEFAULT_CONTEXT_ROLLOVER_VALUES, ANTIGRAVITY)).toBeNull();
+    expect(effectiveProviderIdleMinutes(DEFAULT_CONTEXT_ROLLOVER_VALUES, ANTIGRAVITY)).toBe(120);
+    expect(effectiveProviderIdleMinutes(DEFAULT_CONTEXT_ROLLOVER_VALUES, RESTRICTED)).toBeNull();
     expect(
       effectiveProviderIdleMinutes(
         { enabled: true, min_context_tokens: 80_000, idle_minutes: { codex: 240 } },
@@ -80,6 +91,12 @@ describe("contextRolloverPreferences", () => {
       effectiveProviderIdleMinutes(
         { enabled: true, min_context_tokens: 80_000, idle_minutes: { antigravity: 60 } },
         ANTIGRAVITY,
+      ),
+    ).toBe(60);
+    expect(
+      effectiveProviderIdleMinutes(
+        { enabled: true, min_context_tokens: 80_000, idle_minutes: { "restricted-provider": 60 } },
+        RESTRICTED,
       ),
     ).toBeNull();
   });
@@ -110,15 +127,15 @@ describe("contextRolloverPreferences", () => {
     ).toEqual({ "claude-code": null });
   });
 
-  test("legacy Antigravity threshold is normalized when editing another provider (M5)", () => {
+  test("restricted provider threshold is normalized while Antigravity overrides are preserved", () => {
     const legacy = {
       enabled: true,
       min_context_tokens: 80_000,
-      idle_minutes: { antigravity: 60, "claude-code": null },
+      idle_minutes: { antigravity: 60, "restricted-provider": 60, "claude-code": null },
     };
     const next = withProviderIdleSelection(legacy, PROVIDERS, CODEX, 240);
-    expect(next).toEqual({ "claude-code": null, codex: 240 });
-    expect(Object.prototype.hasOwnProperty.call(next, "antigravity")).toBe(false);
+    expect(next).toEqual({ antigravity: 60, "claude-code": null, codex: 240 });
+    expect(Object.prototype.hasOwnProperty.call(next, "restricted-provider")).toBe(false);
   });
 
   test("409 conflict rebuild preserves concurrent edits from another device (H4)", () => {
@@ -197,7 +214,8 @@ describe("contextRolloverPreferences", () => {
   });
 
   test("providerRolloverDescription reflects independence and host policy", () => {
-    expect(providerRolloverDescription(ANTIGRAVITY)).toContain("host policy");
+    expect(providerRolloverDescription(ANTIGRAVITY)).toBe("Built-in default: 2 h");
+    expect(providerRolloverDescription(RESTRICTED)).toContain("host policy");
     expect(providerRolloverDescription(CLAUDE_DEEPSEEK)).toContain(
       "Independent of paid DeepSeek keepalive",
     );

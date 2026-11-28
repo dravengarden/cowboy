@@ -40,8 +40,8 @@ reaches the dispatcher and all of these hold, Cowboy renews the context first:
 
 - renewal is enabled for the session (its override, else the owner's
   `preferences.context_rollover.enabled`, default on);
-- the Provider has an idle preset (`claude-code`: 60 minutes; others: none
-  unless the owner sets `idle_minutes`);
+- the Provider has an idle preset (`claude-code`: 60 minutes, `antigravity`:
+  120 minutes; others: none unless the owner sets `idle_minutes`);
 - the session has been idle (no activity event) at least that long. Idle is
   measured from the last event, which never exceeds the time since the last
   request started, so a full TTL guarantees the cache is gone;

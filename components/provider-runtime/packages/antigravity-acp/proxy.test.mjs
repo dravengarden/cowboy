@@ -20,6 +20,7 @@ function harness({
   backend = { class: "ok", successes: 1, barrier: true, refusals: [] },
   memory = null,
   managed = false,
+  managedResumeSessionId = null,
 } = {}) {
   const agent = [];
   const client = [];
@@ -28,6 +29,7 @@ function harness({
   const runtime = {
     memory,
     managed,
+    managedResumeSessionId,
     facade: {
       beginTurn: (id) => turns.push(["begin", id]),
       endTurn: async (id, options) => turns.push(["end", id, options?.cancelled === true]),
@@ -3505,4 +3507,49 @@ test("elicitation enforces reopen fencing, string bounds on choices, Unicode cod
     "new form during pending session/load must not reach worker",
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
+});
+
+test("a resumed managed proxy reopens only its trusted managedResumeSessionId and refuses foreign sessions and session/new", async () => {
+  const { proxy, agent, client } = harness({
+    managed: true,
+    managedResumeSessionId: "agy-managed-1",
+  });
+  await proxy.fromClient(request(1, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  assert.equal(agent.length, 0);
+  assert.match(client.at(-1).error.message, /only reopen its own Antigravity session/);
+
+  await proxy.fromClient(
+    request(2, "session/resume", {
+      sessionId: "foreign-session",
+      cwd: "/work/repo",
+      mcpServers: [],
+    }),
+  );
+  assert.equal(agent.length, 0);
+  assert.match(client.at(-1).error.message, /only its own Antigravity session/);
+
+  await proxy.fromClient(
+    request(3, "session/resume", {
+      sessionId: "agy-managed-1",
+      cwd: "/work/repo",
+      mcpServers: [],
+    }),
+  );
+  assert.equal(agent.length, 1);
+  assert.equal(agent[0].method, "session/resume");
+  assert.equal(agent[0].params.sessionId, "agy-managed-1");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: {} });
+  assert.equal(proxy.managedSession, "agy-managed-1");
+  assert.equal(client.at(-1).id, 3);
+  assert.deepEqual(client.at(-1).result, {});
+
+  await proxy.fromClient(
+    request(4, "session/set_config_option", {
+      sessionId: "foreign-session",
+      configId: "model",
+      value: "gemini-4-neon",
+    }),
+  );
+  assert.equal(agent.length, 1);
+  assert.match(client.at(-1).error.message, /only its own Antigravity session/);
 });

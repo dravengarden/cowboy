@@ -39,7 +39,7 @@ import {
   type TargetChoice,
   type ToolOption,
   type ToolPreset,
-  sameFamily,
+  targetAllowedForCaller,
   type ReviewEffort,
   type ReviewPreferences,
   type ToolsCatalog,
@@ -443,7 +443,7 @@ export function AgentToolsEditor(
   };
   const targets = callableTargets(caller, catalog);
   const allowed = calls.targets.map((target) => target.agent)
-    .filter((agent) => !sameFamily(agent, caller));
+    .filter((agent) => targetAllowedForCaller(agent, caller));
   const names = targets.map((target) => agentLabel(target.agent));
   return (
     <Box data-agent-tools-editor sx={{ color: "text.primary" }}>

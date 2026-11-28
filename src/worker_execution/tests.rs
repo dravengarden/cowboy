@@ -527,7 +527,8 @@ impl UnixFixture {
     fn with(handler: Handler) -> Self {
         let target = Target::new(handler);
         let root = tempfile::tempdir().unwrap();
-        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&target.client), None).unwrap();
+        let (endpoint, bridge) =
+            Endpoint::start_unix(Arc::clone(&target.client), None, None).unwrap();
         assert!(endpoint.descriptor().is_none());
         let socket = root.path().join("exec.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -596,6 +597,32 @@ async fn the_unix_descriptor_names_the_unit_socket() {
         binding()
     );
     assert!(fixture.descriptor.get("file_buffers").is_none());
+}
+
+#[tokio::test]
+async fn the_unix_descriptor_carries_managed_session_id_only_for_managed_bindings() {
+    let (notify, _rx) = mpsc::unbounded_channel();
+    let ordinary = Client::new("session".into(), "worker".into(), binding(), notify.clone());
+    let (_ep1, bridge1) = Endpoint::start_unix(ordinary, None, Some("native-ordinary")).unwrap();
+    let desc1: Value = serde_json::from_slice(&bridge1.descriptor).unwrap();
+    assert!(desc1.get("managed_session_id").is_none());
+    assert!(desc1.get("diagnostics").is_some());
+
+    let mut managed_binding = binding();
+    managed_binding.managed = Some(crate::execution_environment::ManagedBindingV1 {
+        parent_session_id: "parent-1".into(),
+        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+    });
+    let managed = Client::new("child".into(), "worker".into(), managed_binding, notify);
+    let (_ep2, bridge2) =
+        Endpoint::start_unix(Arc::clone(&managed), None, Some("native-managed")).unwrap();
+    let desc2: Value = serde_json::from_slice(&bridge2.descriptor).unwrap();
+    assert_eq!(desc2["managed_session_id"], "native-managed");
+    assert!(desc2.get("diagnostics").is_none());
+
+    let (_ep3, bridge3) = Endpoint::start_unix(managed, None, Some("   ")).unwrap();
+    let desc3: Value = serde_json::from_slice(&bridge3.descriptor).unwrap();
+    assert!(desc3.get("managed_session_id").is_none());
 }
 
 #[tokio::test]

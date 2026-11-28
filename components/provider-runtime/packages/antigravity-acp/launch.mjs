@@ -93,6 +93,16 @@ export async function readDescriptor(credentials) {
   ) {
     throw new Error("unsupported execution descriptor");
   }
+  if (descriptor.managed_session_id !== undefined) {
+    if (
+      typeof descriptor.managed_session_id !== "string" ||
+      descriptor.managed_session_id.length === 0 ||
+      descriptor.managed_session_id.length > 256 ||
+      /[\x00-\x1f\x7f]/.test(descriptor.managed_session_id)
+    ) {
+      throw new Error("unsupported execution descriptor managed_session_id");
+    }
+  }
   return descriptor;
 }
 
@@ -284,6 +294,10 @@ async function connectedRuntime({
   if (managed !== hookManaged) {
     throw new Error("Antigravity's tool gate differs from its managed execution binding");
   }
+  if (!managed && descriptor.managed_session_id !== undefined) {
+    throw new Error("An ordinary Antigravity session cannot carry a managed_session_id");
+  }
+  const managedResumeSessionId = managed ? (descriptor.managed_session_id ?? undefined) : undefined;
   const diagnostics =
     !managed && DiagnosticsClient.isSupported(descriptor)
       ? new DiagnosticsClient(descriptor)
@@ -336,6 +350,7 @@ async function connectedRuntime({
     facade,
     connection,
     managed,
+    managedResumeSessionId,
     server,
     attach(value) {
       proxy = value;

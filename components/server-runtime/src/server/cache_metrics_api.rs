@@ -25,8 +25,6 @@ const MS_PER_DAY: i64 = 86_400_000;
 const MAX_CUSTOM_SPAN_MS: i64 = DEFAULT_RETENTION_DAYS * MS_PER_DAY;
 const DEFAULT_RECENT_TURN_LIMIT: usize = 30;
 const MAX_RECENT_TURN_LIMIT: usize = 100;
-const ANTIGRAVITY_ROLLOVER_RESTRICTION: &str =
-    "Automatic context renewal is disabled for Antigravity accounts by host policy.";
 const NATIVE_FORK_ROLLOVER_RESTRICTION: &str = "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.";
 
 #[derive(Debug, Default, Deserialize)]
@@ -305,20 +303,19 @@ fn resolve_session_keepalive_evidence(
 }
 
 fn resolve_capabilities(
-    provider: &str,
+    _provider: &str,
     keepalive: KeepaliveCapability,
     totals: &CacheMetricsTotals,
 ) -> CacheCapabilitiesView {
-    let named_only = crate::provider_account::named_only(provider);
     CacheCapabilitiesView {
         telemetry_level: "turn_end".to_owned(),
         observed_cache_read: totals.observed_cache_turns > 0,
         observed_cache_write: totals.observed_cache_write_turns > 0,
-        supports_idle_rollover: !named_only,
-        policy_restricted: named_only,
+        supports_idle_rollover: true,
+        policy_restricted: false,
         supports_gateway_keepalive: keepalive.supports(),
         keepalive_capability_status: keepalive.status().to_owned(),
-        rollover_restriction: named_only.then(|| ANTIGRAVITY_ROLLOVER_RESTRICTION.to_owned()),
+        rollover_restriction: None,
     }
 }
 
@@ -760,10 +757,11 @@ mod tests {
 
         let empty = CacheMetricsTotals::default();
         let agy = resolve_capabilities("antigravity", KeepaliveCapability::Verified(false), &empty);
-        assert!(!agy.supports_idle_rollover);
+        assert!(agy.supports_idle_rollover);
+        assert!(!agy.policy_restricted);
         assert_eq!(agy.supports_gateway_keepalive, Some(false));
         assert_eq!(agy.keepalive_capability_status, "verified");
-        assert!(agy.rollover_restriction.is_some());
+        assert!(agy.rollover_restriction.is_none());
 
         let unverified =
             resolve_capabilities("claude-deepseek", KeepaliveCapability::Unverified, &empty);
@@ -1212,8 +1210,11 @@ mod tests {
         .await
         .expect("session cache metrics");
 
-        assert!(resp.capabilities.policy_restricted);
-        assert!(resp.strategy.rollover.policy_restricted);
+        assert!(!resp.capabilities.policy_restricted);
+        assert!(resp.capabilities.supports_idle_rollover);
+        assert!(!resp.strategy.rollover.policy_restricted);
+        assert!(resp.strategy.rollover.supported);
+        assert_eq!(resp.strategy.rollover.recommended_idle_minutes, Some(120));
         assert_eq!(
             resp.context_used, None,
             "restored resumable session with no usage is null"

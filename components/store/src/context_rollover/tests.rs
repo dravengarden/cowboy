@@ -42,7 +42,7 @@ fn turn_end(seq: u64) -> Envelope {
 }
 
 #[test]
-fn only_claude_code_renews_by_default_after_a_full_cache_hour() {
+fn claude_code_and_antigravity_renew_by_default_at_their_cache_thresholds() {
     let claude = policy(None, None, "claude-code");
     assert!(claude.enabled);
     assert_eq!(claude.idle_minutes, Some(60));
@@ -52,6 +52,17 @@ fn only_claude_code_renews_by_default_after_a_full_cache_hour() {
         Duration::from_secs(3 * 3600),
         DEFAULT_MIN_CONTEXT_TOKENS - 1
     ));
+
+    let agy = policy(None, None, "antigravity");
+    assert!(agy.enabled);
+    assert_eq!(agy.idle_minutes, Some(120));
+    assert!(!agy.due(Duration::from_secs(119 * 60), 500_000));
+    assert!(agy.due(Duration::from_secs(120 * 60), DEFAULT_MIN_CONTEXT_TOKENS));
+    assert!(!agy.due(
+        Duration::from_secs(4 * 3600),
+        DEFAULT_MIN_CONTEXT_TOKENS - 1
+    ));
+
     for provider in [
         "codex",
         "claude-deepseek",
@@ -70,7 +81,7 @@ fn only_claude_code_renews_by_default_after_a_full_cache_hour() {
 
 #[test]
 fn preferences_and_session_override_resolve_in_order() {
-    let values = json!({"enabled":false,"min_context_tokens":20_000,"idle_minutes":{"codex":720,"claude-code":null}});
+    let values = json!({"enabled":false,"min_context_tokens":20_000,"idle_minutes":{"codex":720,"claude-code":null,"antigravity":null}});
     assert!(!policy(Some(&values), None, "codex").enabled);
     let codex = policy(Some(&values), Some(true), "codex");
     assert!(codex.enabled);
@@ -80,15 +91,23 @@ fn preferences_and_session_override_resolve_in_order() {
     );
     // null disables a Provider even when the session asks for renewal.
     assert!(!policy(Some(&values), Some(true), "claude-code").enabled);
-    // A stored Antigravity value never enables renewal.
+    assert!(!policy(Some(&values), Some(true), "antigravity").enabled);
+    // Stored Antigravity preference overrides its built-in 120m threshold.
     let agy = json!({"idle_minutes":{"antigravity":60}});
-    assert!(!policy(Some(&agy), Some(true), "antigravity").enabled);
+    let agy_policy = policy(Some(&agy), None, "antigravity");
+    assert!(agy_policy.enabled);
+    assert_eq!(agy_policy.idle_minutes, Some(60));
+    assert!(!policy(Some(&agy), Some(false), "antigravity").enabled);
     // Out-of-range values fall back to the preset.
-    let bad = json!({"min_context_tokens":1,"idle_minutes":{"claude-code":0}});
+    let bad = json!({"min_context_tokens":1,"idle_minutes":{"claude-code":0,"antigravity":0}});
     let claude = policy(Some(&bad), None, "claude-code");
     assert_eq!(
         (claude.idle_minutes, claude.min_context_tokens),
         (Some(60), DEFAULT_MIN_CONTEXT_TOKENS)
+    );
+    assert_eq!(
+        policy(Some(&bad), None, "antigravity").idle_minutes,
+        Some(120)
     );
     assert!(!policy(None, Some(false), "claude-code").enabled);
 }
@@ -101,12 +120,12 @@ fn preference_fields_are_validated() {
     assert!(!valid_preference("min_context_tokens", &json!(10), ok));
     assert!(valid_preference(
         "idle_minutes",
-        &json!({"claude-code":30,"codex":null,"antigravity":null}),
+        &json!({"claude-code":30,"codex":null,"antigravity":120}),
         ok
     ));
-    assert!(!valid_preference(
+    assert!(valid_preference(
         "idle_minutes",
-        &json!({"antigravity":60}),
+        &json!({"antigravity":null}),
         ok
     ));
     assert!(!valid_preference(
@@ -132,7 +151,7 @@ fn recommended_and_shadow_candidates_preserve_antigravity_and_default_boundaries
             "{provider}"
         );
     }
-    assert_eq!(recommended_idle_minutes("antigravity"), None);
+    assert_eq!(recommended_idle_minutes("antigravity"), Some(120));
     assert_eq!(shadow_candidate_idle_minutes("antigravity"), None);
     assert_eq!(recommended_idle_minutes("grok"), None);
     assert_eq!(shadow_candidate_idle_minutes("grok"), None);

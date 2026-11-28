@@ -601,9 +601,11 @@ export class AcpProxy {
      * runtime settles, when nothing `agy` asks for is allowed.
      */
     this.managed = undefined;
-    /** A managed child's one native session, from its `session/new`. */
+    /** A managed child's one native session, from `session/new` or trusted resume/load. */
     this.managedSession = undefined;
-    /** Whether that `session/new` is still waiting for `agy`'s answer. */
+    /** Exact native session ID trusted Machine metadata authorized this managed proxy to restore. */
+    this.managedResumeSessionId = undefined;
+    /** Whether that initial managed session open is still waiting for `agy`'s answer. */
     this.managedOpening = false;
     /** The subagents this unit runs for its sessions (`subagents.mjs`). */
     this.subagents = new Subagents(this, {
@@ -619,6 +621,10 @@ export class AcpProxy {
         if (this.closing) ready?.facade?.quiesce?.();
         /** A managed read-only child (`managed.mjs`): its own allow-list. */
         this.managed = ready?.managed === true;
+        this.managedResumeSessionId =
+          this.managed && typeof ready?.managedResumeSessionId === "string"
+            ? ready.managedResumeSessionId
+            : undefined;
         // A managed child delegates nothing: its facade has no subagent host.
         if (ready?.facade && !this.managed) ready.facade.subagents = this.subagents;
         ready?.facade?.setAuthorizer?.((call, meta) => this.authorizeFacadeCall(call, meta));
@@ -651,21 +657,36 @@ export class AcpProxy {
 
   /**
    * Why a managed child's request for `sessionId` is refused, if it is: it
-   * has exactly one native session, the one its own `session/new` created.
-   * Nothing trusted names that native id to a replacement proxy (the
-   * binding, the keeper's announcement and the round carry none), so a
-   * replacement refuses every `session/load` and `session/resume`: a
-   * managed context ask is single-round, and a replaced proxy fails the
-   * call, which its caller retries.
+   * has exactly one native session. A fresh managed child creates its session
+   * via `session/new`. A resumed managed child whose trusted Machine-owned
+   * descriptor carries `managed_session_id` may reopen ONLY that exact native
+   * ID via `session/resume` or `session/load` (refusing `session/new` and
+   * every foreign session ID).
    */
   managedSessionRefusal(method, params) {
+    if (method === "initialize") return undefined;
     if (method === "session/new") {
+      if (this.managedResumeSessionId !== undefined) {
+        return "A resumed Cowboy managed call may only reopen its own Antigravity session";
+      }
       return this.managedSession !== undefined || this.managedOpening
         ? "A Cowboy managed call has one Antigravity session"
         : undefined;
     }
-    if (method === "initialize") return undefined;
     const sessionId = params?.sessionId;
+    if (
+      (method === "session/resume" || method === "session/load") &&
+      this.managedSession === undefined &&
+      this.managedResumeSessionId !== undefined
+    ) {
+      if (this.managedOpening) {
+        return "A Cowboy managed call has one Antigravity session";
+      }
+      if (sessionId !== this.managedResumeSessionId) {
+        return "A Cowboy managed call may use only its own Antigravity session";
+      }
+      return undefined;
+    }
     if (this.managedSession === undefined || sessionId !== this.managedSession) {
       return "A Cowboy managed call may use only its own Antigravity session";
     }
@@ -1994,7 +2015,9 @@ export class AcpProxy {
       }
       const refusal = this.managedSessionRefusal(method, message.params);
       if (refusal) return refuseClient(id, refusal, -32602);
-      if (method === "session/new") this.managedOpening = true;
+      if (SESSION_REQUESTS.has(method) && this.managedSession === undefined) {
+        this.managedOpening = true;
+      }
     }
     const forwarded = structuredClone(message);
     if (
@@ -2070,7 +2093,9 @@ export class AcpProxy {
         forwarded.params = params;
       } catch (error) {
         if (record.channel) runtime.unbindChannel?.(record.channel);
-        if (method === "session/new") this.managedOpening = false;
+        if (SESSION_REQUESTS.has(method) && this.managedSession === undefined) {
+          this.managedOpening = false;
+        }
         if (modeOp !== undefined) {
           this.finishModeReopen(forwarded.params?.sessionId, modeOp);
         }
@@ -2995,7 +3020,7 @@ export class AcpProxy {
         this.finishModeReopen(reopenSessionId, record.modeOp);
       }
 
-      if (runtime.managed && record.method === "session/new") {
+      if (runtime.managed && SESSION_REQUESTS.has(record.method)) {
         this.managedOpening = false;
       }
 
@@ -3051,7 +3076,11 @@ export class AcpProxy {
       if (record.channel && typeof openedSessionId === "string") {
         runtime.bindChannel(record.channel, openedSessionId);
       }
-      if (runtime.managed && record.method === "session/new") {
+      if (
+        runtime.managed &&
+        SESSION_REQUESTS.has(record.method) &&
+        this.managedSession === undefined
+      ) {
         this.managedSession = openedSessionId;
       }
       return this.client(message);

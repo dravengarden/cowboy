@@ -88,6 +88,12 @@ impl MachinePluginStore {
         *self.worker_command.lock() = Some(worker);
     }
 
+    /// Return the current effective worker executable recorded for this Machine.
+    #[must_use]
+    pub fn worker_command(&self) -> Option<PathBuf> {
+        self.worker_command.lock().clone()
+    }
+
     /// Machine startup records the worker before it accepts Controller commands;
     /// only a store with no Machine around it has none.
     pub(super) async fn ensure_worker_reads_package(

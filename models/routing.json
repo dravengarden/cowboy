@@ -170,6 +170,87 @@
       }
     },
     "antigravity": {
+      "high": {
+        "auto": [
+          {
+            "family": "gemini-neon",
+            "model": "gemini-4-neon",
+            "efforts": [
+              "xhigh"
+            ]
+          },
+          {
+            "family": "gemini-neon",
+            "model": "gemini-4-neon",
+            "efforts": [
+              "high"
+            ]
+          },
+          {
+            "family": "opus",
+            "efforts": [
+              "high"
+            ]
+          }
+        ]
+      },
+      "routine": {
+        "auto": [
+          {
+            "family": "gemini-neon",
+            "model": "gemini-4-neon",
+            "efforts": [
+              "high"
+            ]
+          },
+          {
+            "family": "gemini-hydrogen",
+            "model": "gemini-4-hydrogen",
+            "efforts": [
+              "xhigh",
+              "high"
+            ]
+          },
+          {
+            "family": "opus",
+            "efforts": [
+              "high"
+            ]
+          }
+        ],
+        "allow": [
+          {
+            "family": "gemini-neon",
+            "efforts": [
+              "high"
+            ]
+          },
+          {
+            "family": "gemini-hydrogen"
+          },
+          {
+            "family": "opus"
+          }
+        ]
+      },
+      "economy": {
+        "auto": [
+          {
+            "family": "gemini-hydrogen",
+            "model": "gemini-4-hydrogen",
+            "efforts": [
+              "high"
+            ]
+          },
+          {
+            "family": "gemini-neon",
+            "model": "gemini-4-neon",
+            "efforts": [
+              "high"
+            ]
+          }
+        ]
+      },
       "analysis": {
         "auto": [
           {

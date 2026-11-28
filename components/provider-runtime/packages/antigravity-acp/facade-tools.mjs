@@ -37,11 +37,8 @@ export const LIMITS = Object.freeze({
   // Provider's execution calls (OVH, 2026-11-22), against Claude's two.
   quietReads: 3,
   quietWaitMs: 15_000,
-  // Subagents (design "Subagents"): one parent turn runs at most this many at
-  // once and starts at most `subagentTurn`; a call waits at most
-  // `subagentWaitSeconds` (default and maximum, like a command).
-  subagentConcurrent: 2,
-  subagentTurn: 8,
+  // Subagents (design "Subagents"): no artificial concurrency or per-turn cap;
+  // a wait call waits at most `subagentWaitSeconds` (default and maximum, like a command).
   subagentWaitSeconds: 600,
   subagentPromptBytes: 64 * 1024,
   subagentReportChars: 64 * 1024,
@@ -240,7 +237,7 @@ export const TOOLS = [
   },
   {
     name: "Subagent",
-    description: `Delegate a self-contained task to a subagent: another Antigravity session that works in the same workspace with the same tools and shows to the owner as a subagent. Give prompt (everything it needs: it sees nothing of this conversation) and a short description to start one; it cannot start subagents itself. Waits up to wait_seconds (default and maximum ${LIMITS.subagentWaitSeconds}; 0 returns at once) and returns the subagent's final report. One still running returns its subagent_id, which Subagent (with subagent_id and no prompt) keeps waiting for and StopSubagent stops. At most ${LIMITS.subagentConcurrent} run at once and ${LIMITS.subagentTurn} start per turn. Wait for every subagent you start: they are stopped when your turn ends.`,
+    description: `Delegate a self-contained task to a subagent: another Antigravity session that works in the same workspace with the same tools and shows to the owner as a subagent. Give prompt (everything it needs: it sees nothing of this conversation) and a short description to start one; it cannot start subagents itself. Waits up to wait_seconds (default and maximum ${LIMITS.subagentWaitSeconds}; 0 returns at once) and returns the subagent's final report. One still running returns its subagent_id, which Subagent (with subagent_id and no prompt) keeps waiting for and StopSubagent stops. Wait for every subagent you start: they are stopped when your turn ends.`,
     inputSchema: {
       type: "object",
       properties: {

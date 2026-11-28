@@ -488,13 +488,13 @@ mod tests {
         let legacy_change = PreferenceChange {
             scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
             expected_revision: 0,
-            changes: json!({"idle_minutes": {"antigravity": 60}}),
+            changes: json!({"idle_minutes": {"Bad Id": 60}}),
         };
         let hash = crate::digest::hex_sha256(&serde_json::to_vec(&legacy_change).unwrap());
         let stored_result = Preferences {
             scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
             revision: 1,
-            values: json!({"enabled": true, "min_context_tokens": 80_000, "idle_minutes": {"antigravity": 60}}),
+            values: json!({"enabled": true, "min_context_tokens": 80_000, "idle_minutes": {"Bad Id": 60}}),
         };
         let StorageBackend::Sqlite(db) = &store.backend else {
             panic!("sqlite")
@@ -522,7 +522,7 @@ mod tests {
         let altered = PreferenceChange {
             scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
             expected_revision: 0,
-            changes: json!({"idle_minutes": {"antigravity": 30}}),
+            changes: json!({"idle_minutes": {"Bad Id": 30}}),
         };
         assert_eq!(
             store

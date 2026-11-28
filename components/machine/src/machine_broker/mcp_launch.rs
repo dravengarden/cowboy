@@ -68,6 +68,81 @@ pub(super) async fn ensure_worker_accepts_plan(worker: &std::path::Path) -> Resu
     Ok(())
 }
 
+/// Outcome of probing a worker executable for `managed-resume-v1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedResumeProbe {
+    /// Confirmed exit 0 from `--check-capability managed-resume-v1`.
+    Supported,
+    /// Confirmed non-zero exit (retained/older worker binary).
+    Unsupported,
+    /// Transient timeout or spawn error; never cached and safe to retry.
+    Inconclusive,
+}
+
+/// Probe whether `worker` supports trusted `managed_session_id` resume in its
+/// account-sandbox execution descriptor (`--check-capability managed-resume-v1`).
+/// Confirmed results are cached per `(resolved_path, size, modified)`; transient
+/// errors return [`ManagedResumeProbe::Inconclusive`] without poisoning the cache.
+pub(crate) async fn probe_worker_managed_resume(worker: &std::path::Path) -> ManagedResumeProbe {
+    type CacheKey = (std::path::PathBuf, u64, std::time::SystemTime);
+    static SUPPORTED: std::sync::LazyLock<
+        parking_lot::Mutex<std::collections::HashMap<CacheKey, bool>>,
+    > = std::sync::LazyLock::new(Default::default);
+    let key = std::fs::canonicalize(worker).ok().and_then(|path| {
+        let meta = std::fs::metadata(&path).ok()?;
+        Some((path, meta.len(), meta.modified().ok()?))
+    });
+    if let Some(key) = &key
+        && let Some(cached) = SUPPORTED.lock().get(key).copied()
+    {
+        return if cached {
+            ManagedResumeProbe::Supported
+        } else {
+            ManagedResumeProbe::Unsupported
+        };
+    }
+    let mut attempts = 0;
+    let output = loop {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(worker)
+                .args(["--check-capability", "managed-resume-v1"])
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        match result {
+            Ok(Err(error)) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 20 => {
+                attempts += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Ok(Ok(output)) => break Some(output),
+            _ => break None,
+        }
+    };
+    let Some(output) = output else {
+        return ManagedResumeProbe::Inconclusive;
+    };
+    let supported = output.status.success();
+    if let Some(key) = key {
+        SUPPORTED.lock().insert(key, supported);
+    }
+    if supported {
+        ManagedResumeProbe::Supported
+    } else {
+        ManagedResumeProbe::Unsupported
+    }
+}
+
+pub(super) async fn ensure_worker_supports_managed_resume(worker: &std::path::Path) -> Result<()> {
+    ensure!(
+        probe_worker_managed_resume(worker).await == ManagedResumeProbe::Supported,
+        "this Machine's worker generation does not support managed session resume"
+    );
+    Ok(())
+}
+
 /// Cache `session` as the declaration every Machine-owned relaunch (reset,
 /// cutover) starts from. A worker reports its launch from its own CLI, which
 /// never carries the session-extension switches, and a Controller adoption is
@@ -280,6 +355,60 @@ mod tests {
             error
                 .to_string()
                 .contains("does not support MCP launch plans")
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_resume_probe_tracks_the_selected_worker_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let capable = root.path().join("capable-worker");
+        std::fs::write(
+            &capable,
+            "#!/bin/sh\n[ \"$1\" = \"--check-capability\" ] && [ \"$2\" = \"managed-resume-v1\" ]\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&capable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let legacy = root.path().join("legacy-worker");
+        std::fs::write(&legacy, "#!/bin/sh\nexit 2\n").unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            super::probe_worker_managed_resume(&capable).await,
+            super::ManagedResumeProbe::Supported
+        );
+        super::ensure_worker_supports_managed_resume(&capable)
+            .await
+            .unwrap();
+        assert_eq!(
+            super::probe_worker_managed_resume(&legacy).await,
+            super::ManagedResumeProbe::Unsupported
+        );
+        let error = super::ensure_worker_supports_managed_resume(&legacy)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support managed session resume")
+        );
+
+        // A transient spawn failure (e.g. non-executable mode -> EACCES) reports
+        // Inconclusive without poisoning the cache once the binary is runnable.
+        let transient = root.path().join("transient-worker");
+        std::fs::write(
+            &transient,
+            "#!/bin/sh\n[ \"$1\" = \"--check-capability\" ] && [ \"$2\" = \"managed-resume-v1\" ]\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&transient, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            super::probe_worker_managed_resume(&transient).await,
+            super::ManagedResumeProbe::Inconclusive
+        );
+        std::fs::set_permissions(&transient, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            super::probe_worker_managed_resume(&transient).await,
+            super::ManagedResumeProbe::Supported
         );
     }
 }

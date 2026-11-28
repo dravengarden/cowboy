@@ -30,6 +30,7 @@ use crate::runtime_wire::{PROTOCOL_VERSION, write_frame};
 
 mod account_unit;
 mod account_worker;
+pub(crate) use mcp_launch::{ManagedResumeProbe, probe_worker_managed_resume};
 mod cleanups;
 mod core_overflow;
 mod crashed_drain;
@@ -3357,7 +3358,9 @@ impl Broker {
     ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
         let provider = self.resolve_launch_provider(session).await?;
         let session_environment = self.prepare_launch_environment(session, &provider).await?;
-        let worker_command = self.launch_worker_command(session).await?;
+        let worker_command = self
+            .launch_worker_command(session, provider.as_ref())
+            .await?;
         let network = provider.as_ref().and_then(|provider| provider.network);
         // A signed network policy needs a unit sandbox; refuse to launch the
         // Provider unrestricted rather than silently ignore it.

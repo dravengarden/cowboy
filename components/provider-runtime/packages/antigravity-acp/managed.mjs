@@ -22,6 +22,8 @@ import { isAbsolute } from "node:path";
 export const MANAGED_PROFILE_FLAG = "--cowboy-managed-profile=read-only-v1";
 /** Kept in step with the Controller's `OUTPUT_CONTRACT_FLAG`. */
 export const OUTPUT_CONTRACT_FLAG = "--cowboy-output-contract=v1";
+/** Kept in step with the Controller's `MANAGED_CONTINUE_FLAG`. */
+export const MANAGED_CONTINUE_FLAG = "--cowboy-managed-continue=v1";
 /** The hook policy marker the proxy sets in `agy`'s environment. */
 export const HOOK_PROFILE_ENV = "COWBOY_HOOK_PROFILE";
 export const HOOK_PROFILE_ORDINARY = "ordinary";
@@ -74,12 +76,19 @@ export function managedArguments(args) {
   }
   // The signed declaration that this adapter enforces output schemas; the
   // Controller reads it, `agy` never sees it.
-  const rest = profile.filter((argument) => argument !== OUTPUT_CONTRACT_FLAG);
-  if (rest.some((argument) => argument.startsWith("--cowboy-output-contract"))) {
+  const withoutOutput = profile.filter((argument) => argument !== OUTPUT_CONTRACT_FLAG);
+  if (withoutOutput.some((argument) => argument.startsWith("--cowboy-output-contract"))) {
     throw new Error("Unsupported Cowboy output contract");
   }
-  if (rest.length !== profile.length && !managed) {
+  if (withoutOutput.length !== profile.length && !managed) {
     throw new Error("The Cowboy output contract needs the managed profile");
+  }
+  const rest = withoutOutput.filter((argument) => argument !== MANAGED_CONTINUE_FLAG);
+  if (rest.some((argument) => argument.startsWith("--cowboy-managed-continue"))) {
+    throw new Error("Unsupported Cowboy managed continue contract");
+  }
+  if (rest.length !== withoutOutput.length && !managed) {
+    throw new Error("The Cowboy managed continue contract needs the managed profile");
   }
   return { managed, args: rest };
 }

@@ -278,7 +278,7 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   provider:<cheap>,preset:<light/medium>,notify:true}) searches exported history (no worktree/tools)
 //   and returns checked [session#seq] "quote" citations (calls.result.citations). Pick a cheap preset
 //   from calls.capabilities/help:"models" (not a max reviewer). For small history read sessions.* directly.
-//   "antigravity" (named only, fresh): asks, analyses, reviews; can read host files.
+//   "antigravity" (explicit/Tools opt-in): fresh asks; analyses/reviews (continue if supported); reads host files.
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code"|"antigravity",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}

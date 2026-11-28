@@ -407,6 +407,18 @@ impl Supervisor {
     /// a worker from the stable source checkout, fence that worker here so the
     /// prepared session-owned cwd is authoritative.
     pub fn start_registered_session(&self, session_id: &str) -> Result<(), String> {
+        self.start_registered_session_requiring_resume(session_id, None)
+    }
+
+    /// Start a registered session, optionally requiring under the lifecycle
+    /// lock that its resumable native session ID still matches `expected_resume`.
+    /// Prevents a concurrent Clear (`ResetSession`) from turning a managed
+    /// continuation into a blank native session.
+    pub fn start_registered_session_requiring_resume(
+        &self,
+        session_id: &str,
+        expected_resume: Option<&str>,
+    ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         let meta = self
             .hub
@@ -416,6 +428,12 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         meta.require_runtime_launch()?;
         self.check_registered_launch(&meta)?;
+        let resume = self.hub.agent_session_id_for_resume(session_id);
+        if let Some(expected) = expected_resume
+            && resume.as_deref() != Some(expected)
+        {
+            return Err("conversation_unavailable".to_owned());
+        }
         let spec = if meta.provider_generation_digest.is_empty() {
             provider::lookup(&meta.provider)
         } else {
@@ -426,9 +444,6 @@ impl Supervisor {
         if runtime.has_worker(session_id) && !runtime.worker_matches_cwd(session_id, &meta.cwd) {
             self.recycle_session_inner(session_id)
         } else {
-            // A managed-call continuation restarts its hibernated child here;
-            // it must resume the retained native thread, not open a blank one.
-            let resume = self.hub.agent_session_id_for_resume(session_id);
             self.ensure_worker(session_id, &spec, std::path::Path::new(&meta.cwd), resume)
         }
     }

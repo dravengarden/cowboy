@@ -8,12 +8,18 @@ use super::super::super::AppState;
 /// (Antigravity) declares that it enforces a round's output schema itself.
 pub(in crate::server::managed_calls) const OUTPUT_CONTRACT_FLAG: &str =
     "--cowboy-output-contract=v1";
+/// The signed managed-profile argument by which a context-only adapter
+/// (Antigravity) declares that a replacement proxy can safely reopen the exact
+/// `managed_session_id` bound in its trusted execution descriptor.
+pub(in crate::server::managed_calls) const MANAGED_CONTINUE_FLAG: &str =
+    "--cowboy-managed-continue=v1";
 
 pub(in crate::server::managed_calls) struct ProviderReadiness {
     pub available: bool,
     pub reason: Option<&'static str>,
     pub generation: Option<super::super::super::ResolvedProviderGeneration>,
     pub structured_output: bool,
+    pub managed_continue: bool,
     /// The subscription the child runs on: the owner's default account of
     /// the Provider, never a fallback to another account.
     pub account: crate::provider_account::ProviderAccountId,
@@ -86,6 +92,7 @@ pub(in crate::server::managed_calls) async fn child_runtime_pinned(
                 reason: Some("unsupported_capability"),
                 generation: None,
                 structured_output: false,
+                managed_continue: false,
                 account: Default::default(),
             },
         );
@@ -172,6 +179,7 @@ pub(in crate::server::managed_calls) async fn child_runtime_pinned(
             reason: Some(reason),
             generation: None,
             structured_output: false,
+            managed_continue: false,
             account: Default::default(),
         },
         None if split_only => ProviderReadiness {
@@ -179,6 +187,7 @@ pub(in crate::server::managed_calls) async fn child_runtime_pinned(
             reason: Some("runtime_policy"),
             generation: None,
             structured_output: false,
+            managed_continue: false,
             account: Default::default(),
         },
         None => local,
@@ -211,6 +220,7 @@ pub(in crate::server::managed_calls) async fn runtime_readiness(
             reason: Some(reason),
             generation: None,
             structured_output: false,
+            managed_continue: false,
             account: Default::default(),
         },
     }
@@ -252,6 +262,7 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
         reason: Some(reason),
         generation: None,
         structured_output: false,
+        managed_continue: false,
         account: Default::default(),
     };
     let Some(store) = state.store.as_ref() else {
@@ -348,12 +359,18 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
     });
     let supports = arguments.is_some();
     let output_contract = enforces_output(provider, arguments);
+    let managed_continue = supports_managed_continue(
+        provider,
+        arguments,
+        state.machine_control.supports_managed_resume(machine),
+    );
     if !supports {
         return ProviderReadiness {
             available: false,
             reason: Some("unsupported_capability"),
             generation: Some(generation),
             structured_output: false,
+            managed_continue: false,
             account,
         };
     }
@@ -366,6 +383,7 @@ pub(in crate::server::managed_calls) async fn provider_readiness(
         // constraint; an adapter declaring it must apply the schema.
         structured_output: profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1
             && output_contract,
+        managed_continue,
     }
 }
 
@@ -383,6 +401,242 @@ pub(in crate::server::managed_calls) fn enforces_output(
                     if flag == OUTPUT_CONTRACT_FLAG)
             })
         })
+}
+
+/// Whether `provider` can continue a hibernated managed child on `machine`.
+/// A context-only adapter needs both its signed continuation flag and a
+/// Machine whose worker binds `managed_session_id` in the sandbox descriptor.
+pub(in crate::server::managed_calls) fn supports_managed_continue(
+    provider: &str,
+    arguments: Option<&[cowboy_provider_sdk::RuntimeValue]>,
+    machine_managed_resume: bool,
+) -> bool {
+    !super::super::super::agent_tools::context_only(provider)
+        || (machine_managed_resume
+            && arguments.is_some_and(|arguments| {
+                arguments.iter().any(|argument| {
+                    matches!(argument, cowboy_provider_sdk::RuntimeValue::Literal(flag)
+                        if flag == MANAGED_CONTINUE_FLAG)
+                })
+            }))
+}
+
+/// Whether `child` has a resumable native session ID when its Provider
+/// requires trusted native-session binding for continuation.
+pub(in crate::server::managed_calls) fn child_has_resumable_native_id(
+    state: &AppState,
+    child: &crate::core::SessionMeta,
+) -> bool {
+    !super::super::super::agent_tools::context_only(&child.provider)
+        || state
+            .hub
+            .agent_session_id_for_resume(&child.id)
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+}
+
+pub(in crate::server::managed_calls) fn child_continuable_under_fence(
+    state: &AppState,
+    child_session_id: &str,
+) -> bool {
+    !state
+        .managed_calls
+        .retiring
+        .lock()
+        .contains(child_session_id)
+        && state
+            .hub
+            .session_info(child_session_id)
+            .is_some_and(|child| {
+                !child.meta.closing && child_has_resumable_native_id(state, &child.meta)
+            })
+}
+
+/// Verify an existing child before quiescing it, returning the exact
+/// resumable native ID that must still match at worker launch when continuing
+/// a context-only child.
+pub(in crate::server::managed_calls) fn expected_resume_for_reconfirm(
+    state: &AppState,
+    record: &crate::managed_calls::lifecycle::Record,
+    request: &crate::managed_calls::Request,
+) -> Result<Option<String>, &'static str> {
+    if !matches!(
+        request.conversation,
+        crate::managed_calls::Conversation::Continue { .. }
+    ) || !super::super::super::agent_tools::context_only(&record.provider)
+    {
+        return Ok(None);
+    }
+    state
+        .hub
+        .agent_session_id_for_resume(&record.child_session_id)
+        .filter(|id| !id.trim().is_empty())
+        .map(Some)
+        .ok_or("conversation_unavailable")
+}
+
+pub(in crate::server::managed_calls) fn check_existing_child_before_quiesce(
+    state: &AppState,
+    child: &crate::core::SessionMeta,
+    request: &crate::managed_calls::Request,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+) -> Result<Option<String>, &'static str> {
+    if !request.output.is_text() && !pinned_child_enforces_output(state, child, profile) {
+        return Err("unsupported_capability");
+    }
+    if matches!(
+        request.conversation,
+        crate::managed_calls::Conversation::Continue { .. }
+    ) {
+        let expected_resume = if super::super::super::agent_tools::context_only(&child.provider) {
+            let Some(native_id) = state
+                .hub
+                .agent_session_id_for_resume(&child.id)
+                .filter(|id| !id.trim().is_empty())
+            else {
+                return Err("conversation_unavailable");
+            };
+            Some(native_id)
+        } else {
+            None
+        };
+        if !pinned_child_supports_continue(state, child, profile) {
+            return Err("unsupported_capability");
+        }
+        return Ok(expected_resume);
+    }
+    Ok(None)
+}
+
+/// Whether an existing child's pinned signed generation enforces Cowboy's
+/// structured output contract for `profile`.
+pub(in crate::server::managed_calls) fn pinned_child_enforces_output(
+    state: &AppState,
+    child: &crate::core::SessionMeta,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+) -> bool {
+    let package = state.provider_catalog.package(
+        &child.provider,
+        &child.provider_version,
+        &child.provider_generation_digest,
+    );
+    let arguments = package
+        .as_ref()
+        .and_then(|pkg| pkg.manifest.runtime.launch_arguments(Some(profile)).ok());
+    enforces_output(&child.provider, arguments)
+}
+
+/// Whether an existing child's pinned signed generation AND pinned runtime
+/// Machine support managed continuation for `profile`.
+pub(in crate::server::managed_calls) fn pinned_child_supports_continue(
+    state: &AppState,
+    child: &crate::core::SessionMeta,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+) -> bool {
+    let package = state.provider_catalog.package(
+        &child.provider,
+        &child.provider_version,
+        &child.provider_generation_digest,
+    );
+    let arguments = package
+        .as_ref()
+        .and_then(|pkg| pkg.manifest.runtime.launch_arguments(Some(profile)).ok());
+    supports_managed_continue(
+        &child.provider,
+        arguments,
+        state
+            .machine_control
+            .supports_managed_resume(&child.machine_id),
+    )
+}
+
+/// Readiness of an existing parent-owned child's exact pinned runtime Machine,
+/// account, and signed Provider generation (never probing another Machine or a
+/// newer fresh-child generation).
+pub(in crate::server::managed_calls) async fn pinned_child_readiness(
+    state: &AppState,
+    execution_machine: &str,
+    child: &crate::core::SessionMeta,
+    profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+) -> Result<
+    (
+        Option<(String, String)>,
+        crate::provider_account::ProviderAccountId,
+        bool,
+        bool,
+    ),
+    &'static str,
+> {
+    let Some(store) = state.store.as_ref() else {
+        return Err("provider_unavailable");
+    };
+    let Ok(machines) = store.list_machines().await else {
+        return Err("provider_unavailable");
+    };
+    if !machines
+        .iter()
+        .any(|record| record.id == child.machine_id && !record.revoked)
+    {
+        return Err("provider_unavailable");
+    }
+    if !state.runtime_router.connected(&child.machine_id) {
+        return Err("machine_unavailable");
+    }
+    if !state
+        .supervisor
+        .runtime_allowed(&child.provider, &child.machine_id)
+    {
+        return Err("runtime_policy");
+    }
+    if child.machine_id != execution_machine
+        && (state
+            .machine_control
+            .connection_protocol(execution_machine)
+            .is_none()
+            || state
+                .machine_control
+                .connection_protocol(&child.machine_id)
+                .is_none())
+    {
+        return Err("machine_unavailable");
+    }
+    let package = state.provider_catalog.package(
+        &child.provider,
+        &child.provider_version,
+        &child.provider_generation_digest,
+    );
+    let arguments = package
+        .as_ref()
+        .and_then(|pkg| pkg.manifest.runtime.launch_arguments(Some(profile)).ok());
+    if super::super::super::agent_tools::context_only(&child.provider) && arguments.is_none() {
+        return Err("unsupported_capability");
+    }
+    if package.is_some() && arguments.is_none() {
+        return Err("unsupported_capability");
+    }
+    let structured_output = profile == cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1
+        && enforces_output(&child.provider, arguments);
+    let managed_continue = supports_managed_continue(
+        &child.provider,
+        arguments,
+        state
+            .machine_control
+            .supports_managed_resume(&child.machine_id),
+    );
+    let generation = (!child.provider_version.is_empty()
+        || !child.provider_generation_digest.is_empty())
+    .then(|| {
+        (
+            child.provider_version.clone(),
+            child.provider_generation_digest.clone(),
+        )
+    });
+    Ok((
+        generation,
+        child.provider_account_id.clone(),
+        structured_output,
+        managed_continue,
+    ))
 }
 
 #[cfg(test)]
@@ -409,5 +663,23 @@ mod output_tests {
         // Codex and Claude constrain the turn natively.
         assert!(enforces_output("codex", Some(&old)));
         assert!(enforces_output("claude-code", None));
+        let with_continue = [
+            literal("acp"),
+            literal("--cowboy-managed-profile=read-only-v1"),
+            literal(OUTPUT_CONTRACT_FLAG),
+            literal(MANAGED_CONTINUE_FLAG),
+        ];
+        assert!(!supports_managed_continue("antigravity", Some(&new), true));
+        assert!(!supports_managed_continue(
+            "antigravity",
+            Some(&with_continue),
+            false
+        ));
+        assert!(supports_managed_continue(
+            "antigravity",
+            Some(&with_continue),
+            true
+        ));
+        assert!(supports_managed_continue("codex", Some(&old), false));
     }
 }

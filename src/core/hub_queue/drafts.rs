@@ -244,6 +244,7 @@ impl Hub {
             let schedule = Some(DraftSchedule {
                 fire_at_ms,
                 delivery,
+                scheduled_by: Some(author.clone()),
             });
             match pos {
                 Some(p) => {
@@ -403,7 +404,21 @@ impl Hub {
             {
                 return;
             }
-            let trigger = crate::prompt_origin::DeliveryOrigin::cowboy("schedule");
+            let owner_scheduled = m
+                .schedule
+                .as_ref()
+                .and_then(|sc| sc.scheduled_by.as_ref())
+                .is_some_and(crate::prompt_origin::DeliveryOrigin::is_owner);
+            let trigger = if owner_scheduled {
+                crate::prompt_origin::DeliveryOrigin::cowboy("schedule_owner")
+            } else {
+                m.schedule
+                    .as_ref()
+                    .and_then(|sc| sc.scheduled_by.clone())
+                    .unwrap_or_else(|| {
+                        crate::prompt_origin::DeliveryOrigin::cowboy("schedule_unverified")
+                    })
+            };
             let dispatch_origin =
                 crate::prompt_origin::compute_dispatch_origin(m.origin.as_ref(), Some(&trigger));
             if wired

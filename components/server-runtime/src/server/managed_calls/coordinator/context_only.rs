@@ -13,11 +13,9 @@ use super::super::super::agent_tools::{self, CallsPolicy, Choice};
 use crate::managed_calls::service::Ledger;
 use crate::managed_calls::{Conversation, Request};
 
-/// Every agent discovery describes: call targets, then context-only agents.
+/// Every agent discovery describes (each listed once).
 pub fn discoverable() -> impl Iterator<Item = &'static str> {
-    agent_tools::CALL_TARGETS
-        .into_iter()
-        .chain(agent_tools::CONTEXT_ONLY_TARGETS)
+    agent_tools::CALL_TARGETS.into_iter()
 }
 
 /// The context-ask decisions that precede ordinary agent choice: a history
@@ -123,15 +121,24 @@ pub fn serves_context_asks(
 /// text). It is listed among the read-only providers too; `selection:
 /// explicit` says it runs only when named. It never reviews for its own
 /// family, and only its context asks need a Machine that receives history.
-pub fn restrict(entry: &mut Value, caller: &str, history_capable: bool) {
-    entry["conversation"] = json!(["fresh"]);
-    entry["selection"] = json!("explicit");
-    // No review for its own family, nor when the session's reviewer families
-    // leave it no eligible (Opus) preset.
-    let reviews = !agent_tools::same_family(entry["id"].as_str().unwrap_or_default(), caller)
-        && entry["review_candidates"]
+pub fn restrict(
+    entry: &mut Value,
+    targeted: bool,
+    structured_output: bool,
+    managed_continue: bool,
+    history_capable: bool,
+) {
+    if !managed_continue {
+        entry["conversation"] = json!(["fresh"]);
+    }
+    if !targeted {
+        entry["selection"] = json!("explicit");
+    }
+    let reviews = structured_output
+        && (entry["review_candidates"]
             .as_array()
-            .is_some_and(|candidates| !candidates.is_empty());
+            .is_some_and(|candidates| !candidates.is_empty())
+            || entry["review_available"].as_bool().unwrap_or(false));
     if !reviews {
         entry["purposes"] = json!(["analysis"]);
         entry["review_candidates"] = json!([]);
@@ -161,24 +168,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovery_offers_reviews_only_to_other_families() {
-        let mut entry = json!({"id": "antigravity", "review_candidates": ["claude-opus-high"]});
-        restrict(&mut entry, "codex", false);
+    fn discovery_reflects_tools_opt_in_continuation_output_contract_and_eligible_reviews() {
+        let mut entry = json!({
+            "id": "antigravity",
+            "conversation": ["fresh", "continue"],
+            "review_candidates": ["gemini-neon-high", "claude-opus-high"]
+        });
+        restrict(&mut entry, false, true, true, false);
+        assert_eq!(entry["conversation"], json!(["fresh", "continue"]));
+        assert_eq!(entry["selection"], json!("explicit"));
         assert_eq!(
             entry["purposes"],
             json!(["analysis", "review", "design_review"])
         );
-        assert_eq!(entry["review_candidates"], json!(["claude-opus-high"]));
+        assert_eq!(
+            entry["review_candidates"],
+            json!(["gemini-neon-high", "claude-opus-high"])
+        );
         assert_eq!(entry["context_ask_reason"], "machine_upgrade_required");
-        let mut own = json!({"id": "antigravity", "review_candidates": ["claude-opus-high"]});
-        restrict(&mut own, "antigravity", true);
+
+        let mut legacy = json!({
+            "id": "antigravity",
+            "conversation": ["fresh", "continue"],
+            "review_candidates": ["gemini-neon-high"],
+            "review_available": true,
+            "output": ["text"]
+        });
+        restrict(&mut legacy, false, false, false, true);
+        assert_eq!(legacy["conversation"], json!(["fresh"]));
+        assert_eq!(legacy["purposes"], json!(["analysis"]));
+        assert_eq!(legacy["review_candidates"], json!([]));
+        assert_eq!(legacy["review_routing"], Value::Null);
+        assert_eq!(legacy["review_available"], json!(false));
+
+        let mut opted_in = json!({
+            "id": "antigravity",
+            "conversation": ["fresh", "continue"],
+            "review_candidates": ["claude-opus-high"]
+        });
+        restrict(&mut opted_in, true, true, true, true);
+        assert!(opted_in.get("selection").is_none());
+        assert_eq!(
+            opted_in["purposes"],
+            json!(["analysis", "review", "design_review"])
+        );
+        assert!(opted_in.get("context_ask_reason").is_none());
+
         let mut none = json!({"id": "antigravity", "review_candidates": []});
-        restrict(&mut none, "codex", true);
+        restrict(&mut none, false, true, true, true);
         assert_eq!(none["purposes"], json!(["analysis"]));
-        assert_eq!(own["purposes"], json!(["analysis"]));
-        assert_eq!(own["review_candidates"], json!([]));
-        assert_eq!(own["output"], json!(["text"]));
-        assert!(own.get("context_ask_reason").is_none());
+        assert_eq!(none["review_candidates"], json!([]));
+        assert_eq!(none["output"], json!(["text"]));
     }
 
     fn policy(enabled: bool) -> CallsPolicy {
@@ -234,11 +274,17 @@ mod tests {
         ));
         assert!(matches!(
             choose(&policy(true), "codex", "antigravity", &request, true),
-            Some(Choice::Closed("unsupported_capability"))
+            Some(Choice::Candidates {
+                selection: "explicit",
+                ..
+            })
         ));
         assert!(matches!(
             choose(&policy(true), "antigravity", "antigravity", &request, false),
-            Some(Choice::Closed("same_agent"))
+            Some(Choice::Candidates {
+                selection: "explicit",
+                ..
+            })
         ));
         assert!(matches!(
             choose(&policy(false), "codex", "antigravity", &request, false),

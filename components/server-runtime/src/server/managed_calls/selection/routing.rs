@@ -262,10 +262,6 @@ fn analysis_family(model: &str) -> Option<&'static str> {
         Some("sonnet")
     } else if base.starts_with("gpt-") && base.ends_with("-luna") {
         Some("luna")
-    } else if base.starts_with("gemini-") && base.ends_with("-hydrogen") {
-        Some("gemini-hydrogen")
-    } else if base.starts_with("gemini-") && base.ends_with("-neon") {
-        Some("gemini-neon")
     } else if base.starts_with("deepseek-") {
         Some("deepseek")
     } else if base.starts_with("grok-") {

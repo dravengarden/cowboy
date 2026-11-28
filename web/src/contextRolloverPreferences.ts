@@ -122,7 +122,6 @@ export function sanitizeIdleMinutesMap(
   const restrictedIds = new Set(
     providers.filter((provider) => provider.policy_restricted).map((provider) => provider.id),
   );
-  restrictedIds.add("antigravity");
   const next: Record<string, number | null> = {};
   for (const [providerId, minutes] of Object.entries(idleMinutes)) {
     if (restrictedIds.has(providerId) && minutes !== null) {
@@ -182,7 +181,7 @@ export function buildRolloverChanges(
         name: intent.providerId,
         builtin_idle_minutes: null,
         recommended_idle_minutes: null,
-        policy_restricted: intent.providerId === "antigravity",
+        policy_restricted: false,
         restriction: null,
         keepalive_independent: false,
       };

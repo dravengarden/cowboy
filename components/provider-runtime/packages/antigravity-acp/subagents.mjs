@@ -558,15 +558,6 @@ export class Subagents {
       throw new ToolError("The session's mode is not known yet.");
     }
     const group = this.group(parentId);
-    if (group.started >= LIMITS.subagentTurn) {
-      throw new ToolError(`At most ${LIMITS.subagentTurn} subagents start per turn.`);
-    }
-    if (this.count(group) >= LIMITS.subagentConcurrent) {
-      throw new ToolError(
-        `At most ${LIMITS.subagentConcurrent} subagents run at once; wait for one to finish.`,
-      );
-    }
-    // Counted at once: a concurrent start sees this one before it runs.
     group.started += 1;
     // Latched whatever the child settles to: its traffic shares the log.
     parentTurn.subagents = true;
@@ -576,6 +567,7 @@ export class Subagents {
       id: undefined,
       parent: parentId,
       parentTurn,
+      epoch,
       title,
       prompt,
       state: "starting",
@@ -977,9 +969,19 @@ export class Subagents {
       .finally(() => this.discardOpening(id));
   }
 
-  /** Forget the oldest settled children beyond what a later wait can need. */
+  /**
+   * Forget the oldest settled children beyond what a later wait can need.
+   * Children settled during a parent's currently active turn stay retrievable
+   * until that turn finishes, then `finish()` prunes them down to `MAX_KEPT`.
+   */
   prune() {
-    const settled = [...this.children].filter(([, child]) => !RUNNING.has(child.state));
+    const settled = [...this.children].filter(([, child]) => {
+      if (RUNNING.has(child.state)) return false;
+      const group = this.groups.get(child.parent);
+      const activeInCurrentTurn =
+        group !== undefined && child.epoch === group.epoch && this.proxy.turns.has(child.parent);
+      return !activeInCurrentTurn;
+    });
     for (const [id, child] of settled.slice(0, Math.max(0, settled.length - MAX_KEPT))) {
       this.children.delete(id);
       this.groups.get(child.parent)?.ids.delete(id);
@@ -1115,7 +1117,10 @@ export class Subagents {
     group.epoch += 1;
     group.started = 0;
     const running = this.live(parentId);
-    if (!running.length) return;
+    if (!running.length) {
+      this.prune();
+      return;
+    }
     await Promise.all(running.map((child) => this.cancelChild(child)));
     await Promise.race([
       Promise.all(running.map((child) => child.done)),
@@ -1145,6 +1150,7 @@ export class Subagents {
       // A start still opening ends through its own stale check.
       if (child.id === undefined) child.settled();
     }
+    this.prune();
   }
 
   /** `agy` is gone: every row still running ends as failed, before the parent's reply. */

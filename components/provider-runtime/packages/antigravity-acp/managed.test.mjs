@@ -265,3 +265,21 @@ test("before anything starts, the binding and the launch flag must agree", () =>
     );
   }
 });
+
+test("managed continue flag requires the managed profile and refuses unknown versions", () => {
+  assert.deepEqual(
+    managedArguments([
+      "acp",
+      "--cowboy-managed-profile=read-only-v1",
+      "--cowboy-output-contract=v1",
+      "--cowboy-managed-continue=v1",
+    ]),
+    { managed: true, args: ["acp"] },
+  );
+  assert.throws(() => managedArguments(["acp", "--cowboy-managed-continue=v1"]), /managed profile/);
+  assert.throws(
+    () =>
+      managedArguments(["--cowboy-managed-profile=read-only-v1", "--cowboy-managed-continue=v2"]),
+    /Unsupported Cowboy managed continue/,
+  );
+});

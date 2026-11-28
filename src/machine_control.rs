@@ -215,6 +215,7 @@ struct Connection {
     colocated: bool,
     protocol: u16,
     hibernation_epoch: bool,
+    managed_resume: bool,
     tx: mpsc::UnboundedSender<MachineCommand>,
     connected_at: std::time::Instant,
 }
@@ -519,6 +520,7 @@ impl MachineControl {
                 colocated,
                 protocol,
                 hibernation_epoch: false,
+                managed_resume: false,
                 tx,
                 connected_at: std::time::Instant::now(),
             },

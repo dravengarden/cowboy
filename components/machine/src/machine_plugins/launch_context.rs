@@ -25,6 +25,9 @@ pub struct ProviderLaunchContext {
     pub network: Option<cowboy_provider_sdk::RuntimeNetworkPolicy>,
     /// The daemon launch of a Provider that runs only in the account sandbox.
     pub account_sandbox: Option<crate::account_sandbox::Launch>,
+    /// Managed profiles in this signed package that require the worker to bind
+    /// `managed_session_id` in the sandbox execution descriptor.
+    pub managed_continue_profiles: BTreeSet<cowboy_provider_sdk::ManagedRuntimeProfile>,
 }
 
 impl MachinePluginStore {
@@ -115,4 +118,33 @@ impl MachinePluginStore {
         }
         Ok(directories)
     }
+}
+
+/// Managed profiles in `runtime` whose signed launch arguments declare
+/// `--cowboy-managed-continue=v1`, requiring the worker to bind
+/// `managed_session_id` in the account-sandbox execution descriptor.
+pub(super) fn managed_continue_profiles(
+    package: &ProviderPackage,
+) -> BTreeSet<cowboy_provider_sdk::ManagedRuntimeProfile> {
+    [
+        cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        cowboy_provider_sdk::ManagedRuntimeProfile::ImageV1,
+    ]
+    .into_iter()
+    .filter(|profile| {
+        package
+            .manifest
+            .runtime
+            .launch_arguments(Some(*profile))
+            .is_ok_and(|args| {
+                args.iter().any(|arg| {
+                    matches!(
+                        arg,
+                        cowboy_provider_sdk::RuntimeValue::Literal(flag)
+                            if flag == "--cowboy-managed-continue=v1"
+                    )
+                })
+            })
+    })
+    .collect()
 }

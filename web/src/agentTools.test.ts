@@ -3,6 +3,7 @@ import { assert, assertEquals, assertRejects } from "../../tools/test-assert.ts"
 import {
   agentLabel,
   type AgentTools,
+  callableTargets,
   choiceFor,
   choiceValues,
   normalizedDefault,
@@ -212,4 +213,26 @@ test("the call budget is per owner turn, with the new default among its choices"
     { schema: 1, calls: { max_per_turn: 64 } },
   );
   assertEquals(overrideFor(defaults, defaults), { schema: 1 });
+});
+
+test("Antigravity sessions can explicitly opt Antigravity into callable targets while Codex/Claude exclude their own family", () => {
+  const catalog = {
+    call_targets: [
+      { agent: "codex", presets: [], options: [] },
+      { agent: "claude-code", presets: [], options: [] },
+      { agent: "antigravity", presets: [], options: [] },
+    ],
+  };
+  assertEquals(
+    callableTargets("antigravity", catalog).map((target) => target.agent),
+    ["codex", "claude-code", "antigravity"],
+  );
+  assertEquals(
+    callableTargets("codex", catalog).map((target) => target.agent),
+    ["claude-code", "antigravity"],
+  );
+  assertEquals(
+    callableTargets("claude-code", catalog).map((target) => target.agent),
+    ["codex", "antigravity"],
+  );
 });

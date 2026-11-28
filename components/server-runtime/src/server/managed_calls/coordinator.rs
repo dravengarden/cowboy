@@ -45,7 +45,7 @@ struct GrantEntry {
 
 mod context_only;
 mod observation;
-mod readiness;
+pub(in crate::server::managed_calls) mod readiness;
 mod replay;
 mod review_routing;
 mod turn_budget;
@@ -620,7 +620,10 @@ pub async fn image_capabilities(
     }
     let policy = agent_tools::effective(state, meta).calls;
     let mut providers = Vec::new();
-    for provider in agent_tools::CALL_TARGETS {
+    for provider in agent_tools::CALL_TARGETS
+        .into_iter()
+        .filter(|provider| !agent_tools::context_only(provider))
+    {
         let target = policy
             .targets
             .iter()
@@ -660,6 +663,30 @@ pub async fn image_capabilities(
     value
 }
 
+fn native_capabilities_of(
+    state: &AppState,
+    provider: &str,
+    readiness: &readiness::ProviderReadiness,
+) -> Vec<&'static str> {
+    readiness
+        .generation
+        .as_ref()
+        .and_then(|g| {
+            state
+                .provider_catalog
+                .package(provider, &g.version, &g.digest)
+        })
+        .map(|p| {
+            p.manifest
+                .runtime
+                .managed_profiles
+                .keys()
+                .flat_map(|profile| profile.capabilities().iter().copied())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger: &Ledger) -> Value {
     let placement = ledger.placement();
     let policy = agent_tools::effective(state, meta).calls;
@@ -688,23 +715,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         let reason = context_only::policy_reason(&policy, &meta.provider, provider, targeted)
             .or(readiness.reason);
         let available = reason.is_none() && readiness.available;
-        let native_capabilities: Vec<&str> = readiness
-            .generation
-            .as_ref()
-            .and_then(|g| {
-                state
-                    .provider_catalog
-                    .package(provider, &g.version, &g.digest)
-            })
-            .map(|p| {
-                p.manifest
-                    .runtime
-                    .managed_profiles
-                    .keys()
-                    .flat_map(|profile| profile.capabilities().iter().copied())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let native_capabilities = native_capabilities_of(state, provider, &readiness);
         let context = agent_tools::context_only(provider);
         if available {
             read_only_providers.push(provider);
@@ -761,7 +772,13 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             fields.extend(review);
         }
         if context {
-            context_only::restrict(&mut entry, &meta.provider, history_capable);
+            context_only::restrict(
+                &mut entry,
+                targeted,
+                readiness.structured_output,
+                readiness.managed_continue,
+                history_capable,
+            );
         }
         providers.push(entry);
     }
@@ -819,6 +836,7 @@ async fn first_ready(
     ledger: &Ledger,
     targets: Vec<agent_tools::CallTarget>,
     request: &Request,
+    continued_child: Option<&crate::core::SessionMeta>,
 ) -> Result<
     (
         agent_tools::CallTarget,
@@ -829,6 +847,32 @@ async fn first_ready(
 > {
     let mut refusal = None;
     for target in targets {
+        if !agent_tools::context_only_request_compatible(&target.agent, request) {
+            refusal.get_or_insert("unsupported_capability");
+            continue;
+        }
+        if let Some(child) = continued_child {
+            match readiness::pinned_child_readiness(
+                state,
+                &ledger.placement().machine_id,
+                child,
+                request.purpose.profile(),
+            )
+            .await
+            {
+                Ok((generation, account, structured_output, managed_continue)) => {
+                    if (!request.output.is_text() && !structured_output) || !managed_continue {
+                        refusal.get_or_insert("unsupported_capability");
+                        continue;
+                    }
+                    return Ok((target, generation, account));
+                }
+                Err(reason) => {
+                    refusal.get_or_insert(reason);
+                    continue;
+                }
+            }
+        }
         let (_, readiness) = child_runtime(
             state,
             meta.owner_user_id.as_deref(),
@@ -854,12 +898,21 @@ async fn first_ready(
     Err(refusal.unwrap_or("provider_unavailable"))
 }
 
-/// The agent of a continued conversation (`None` for a fresh one), or the
-/// refusal of a child that cannot continue.
-fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Option<String>, Value> {
+/// The parent-owned child of a continued conversation (`None` for a fresh one),
+/// or the refusal of a child that cannot continue.
+async fn continued_child(
+    state: &AppState,
+    ledger: &Ledger,
+    conversation: &Conversation,
+) -> Result<Option<crate::core::SessionMeta>, Value> {
     let Conversation::Continue { child_session_id } = conversation else {
         return Ok(None);
     };
+    match ledger.child(child_session_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(error("conversation_unavailable", "not_submitted")),
+        Err(_) => return Err(error("capacity", "not_submitted")),
+    }
     match state.hub.session_info(child_session_id) {
         // It ran on a retired card: continue in a new agent instead.
         Some(child)
@@ -870,7 +923,12 @@ fn continued_agent(state: &AppState, conversation: &Conversation) -> Result<Opti
         {
             Err(error("named_account_required", "not_submitted"))
         }
-        Some(child) if !child.meta.closing => Ok(Some(child.meta.provider)),
+        Some(child)
+            if !child.meta.closing
+                && readiness::child_has_resumable_native_id(state, &child.meta) =>
+        {
+            Ok(Some(child.meta))
+        }
         _ => Err(error("conversation_unavailable", "not_submitted")),
     }
 }
@@ -917,13 +975,14 @@ async fn start(
         return error(code, "not_submitted");
     }
     let own_family = agent_tools::own_family(&policy, &request);
-    // A continued conversation keeps its own agent.
-    let continued = match continued_agent(state, &request.conversation) {
+    let continued = match continued_child(state, ledger, &request.conversation).await {
         Ok(continued) => continued,
         Err(refusal) => return refusal,
     };
     let requested = match &continued {
-        Some(agent) if requested == agent_tools::AUTO || requested == agent => agent.as_str(),
+        Some(child) if requested == agent_tools::AUTO || requested == child.provider => {
+            child.provider.as_str()
+        }
         Some(_) => return error("conversation_unavailable", "not_submitted"),
         None => requested,
     };
@@ -980,7 +1039,7 @@ async fn start(
             }
         };
     let (mut target, generation, account) =
-        match first_ready(state, meta, ledger, targets, &request).await {
+        match first_ready(state, meta, ledger, targets, &request, continued.as_ref()).await {
             Ok(ready) => ready,
             Err(reason) => return error(reason, "not_submitted"),
         };
@@ -1029,16 +1088,7 @@ async fn start(
     let fence = match &request.conversation {
         Conversation::Continue { child_session_id } => {
             let fence = state.managed_calls.child_lifecycle.lock().await;
-            if state
-                .managed_calls
-                .retiring
-                .lock()
-                .contains(child_session_id)
-                || state
-                    .hub
-                    .session_info(child_session_id)
-                    .is_none_or(|child| child.meta.closing)
-            {
+            if !readiness::child_continuable_under_fence(state, child_session_id) {
                 return error("conversation_unavailable", "not_submitted");
             }
             Some(fence)
@@ -1051,16 +1101,16 @@ async fn start(
     {
         Ok(record) => record,
         Err(error_detail) => {
-            let text = error_detail.to_string();
-            let code = if text.contains("conflict") {
-                "request_conflict"
-            } else if text.contains("unavailable or incompatible") || text.contains("not owned") {
-                "conversation_unavailable"
-            } else {
-                // The active-child index refuses a second concurrent turn.
-                "conversation_busy"
-            };
-            return error(code, "not_submitted");
+            drop(fence);
+            return replay::admit_error(
+                state,
+                ledger,
+                &error_detail.to_string(),
+                (submitted, preset),
+                &request,
+                deadline,
+            )
+            .await;
         }
     };
     // The inserted call now protects its child; never hold the fence while

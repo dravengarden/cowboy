@@ -10,8 +10,10 @@
 //!
 //! Presets come from measured Cowboy traffic (2026-11): Claude Code on an
 //! included subscription keeps a one-hour cache (cold writes jump ~10x past one
-//! idle hour), while Codex sessions kept most of their cache for hours and
-//! DeepSeek misses are cheap, so only Claude Code renews by default.
+//! idle hour), Antigravity prompt cache cold-miss rates jump sharply past two
+//! idle hours (16.7% at 1-2h to 38.9% at 2-4h on >=80k-token contexts), while
+//! Codex sessions kept most of their cache for hours and DeepSeek misses are
+//! cheap, so Claude Code (60m) and Antigravity (120m) renew by default.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -55,22 +57,23 @@ const DIGEST_REPLY_CHARS: usize = 2_400;
 pub fn default_idle_minutes(provider: &str) -> Option<u64> {
     match provider {
         "claude-code" => Some(60),
+        "antigravity" => Some(120),
         _ => None,
     }
 }
 
-/// Empirically grounded recommended idle threshold for UI opt-in presets and
-/// shadow observation. Never enables automatic renewal by itself; runtime
-/// activation comes exclusively from [`default_idle_minutes`] or explicit owner
-/// preferences. Host-policy-restricted Providers (e.g. Antigravity) always
-/// return `None`.
+/// Empirically grounded recommended idle threshold for UI presets and shadow
+/// observation. Never enables automatic renewal by itself; runtime activation
+/// comes exclusively from [`default_idle_minutes`] or explicit owner
+/// preferences.
 #[must_use]
 pub fn recommended_idle_minutes(provider: &str) -> Option<u64> {
-    if crate::provider_account::named_only(provider) {
-        return None;
-    }
     match provider {
         "claude-code" => Some(60),
+        // Hawk production telemetry shows Antigravity >=80k-token contexts stay
+        // mostly warm through 2 hours (16.7% cold at 1-2h) and climb to 38.9%
+        // cold past 2 hours.
+        "antigravity" => Some(120),
         // Hawk production telemetry shows Codex interactive follow-ups remain
         // 98.8%-99.6% warm through 4 hours and collapse past 4 hours.
         "codex" => Some(240),
@@ -142,13 +145,10 @@ pub fn policy(
         .and_then(Value::as_u64)
         .filter(|tokens| MIN_CONTEXT_TOKENS_RANGE.contains(tokens))
         .unwrap_or(DEFAULT_MIN_CONTEXT_TOKENS);
-    // Antigravity never renews automatically (docs/requirements.md): a stored
-    // preference cannot turn an agent-dispatched prompt into a rollover.
     let idle_minutes = match preferences
         .and_then(|values| values.get("idle_minutes"))
         .and_then(|minutes| minutes.get(provider))
     {
-        _ if crate::provider_account::named_only(provider) => None,
         Some(Value::Null) => None,
         Some(minutes) => minutes
             .as_u64()
@@ -187,10 +187,9 @@ pub fn valid_preference(key: &str, value: &Value, provider_valid: impl Fn(&str) 
                 && providers.iter().all(|(provider, minutes)| {
                     provider_valid(provider)
                         && (minutes.is_null()
-                            || (!crate::provider_account::named_only(provider)
-                                && minutes
-                                    .as_u64()
-                                    .is_some_and(|minutes| IDLE_MINUTES_RANGE.contains(&minutes))))
+                            || minutes
+                                .as_u64()
+                                .is_some_and(|minutes| IDLE_MINUTES_RANGE.contains(&minutes)))
                 })
         }),
         _ => false,

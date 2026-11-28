@@ -20,6 +20,10 @@ pub fn family(model: &str) -> Option<&'static str> {
         Some("astra")
     } else if model.starts_with("gpt-") && model.ends_with("-sol") {
         Some("sol")
+    } else if model.starts_with("gemini-") && model.ends_with("-neon") {
+        Some("gemini-neon")
+    } else if model.starts_with("gemini-") && model.ends_with("-hydrogen") {
+        Some("gemini-hydrogen")
     } else {
         None
     }
@@ -302,18 +306,23 @@ pub fn admit(
     );
     // Unnamed, the exclusion may also remove only the tier's automatic choice.
     let lost_automatic = explicit.is_none() && eligible.automatic && !tier.automatic;
-    // Named, the exclusion removed that preset; unnamed, it removed only the
-    // tier's automatic choice (an empty explicit-only tier is no evidence).
+    // Named, the exclusion removed that preset from the provider's reviewer
+    // pool; unnamed, it removed only the tier's automatic choice (an empty
+    // explicit-only tier is no evidence).
     let lost = match explicit {
-        Some(_) => cross_vendor_same_model(&eligible.list, &choices, explicit, caller),
+        Some(_) => {
+            let all_runnable = reviewers(runnable, provider, preference);
+            cross_vendor_same_model(&all_runnable, &choices, explicit, caller)
+        }
         None => lost_automatic && cross_vendor_same_model(&eligible.list, &[], None, caller),
     };
-    if !same_vendor && lost {
-        return Err(refuse(
-            "same_model",
+    if lost {
+        let hint = if same_vendor {
+            "a review never runs the caller's own model; omit preset or name another model of this vendor"
+        } else {
             "a review never runs the caller's own model, even through another vendor's package"
-                .into(),
-        ));
+        };
+        return Err(refuse("same_model", hint.into()));
     }
     if unnamed {
         return Err(refuse("preset_unavailable", String::new()));
@@ -544,20 +553,21 @@ pub fn analysis_routing_view(runnable: &Value, provider: &str) -> Value {
 
 /// The family/effort order that predates the routing table.
 /// The reviewer families `provider` may review with, in the session's order.
-/// Antigravity reviews only with Claude Opus (its named account's Claude
-/// quota), whatever else a signed generation's presets offer.
+/// Antigravity admits Gemini 4 Neon/Hydrogen plus Claude Opus (when Opus is
+/// enabled in the session's Claude preference).
 pub fn reviewer_families(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
 ) -> Vec<String> {
     match provider {
         "codex" => preference.gpt.clone(),
-        "antigravity" => preference
-            .claude
-            .iter()
-            .filter(|family| *family == "opus")
-            .cloned()
-            .collect(),
+        "antigravity" => {
+            let mut families = vec!["gemini-neon".to_owned(), "gemini-hydrogen".to_owned()];
+            if preference.claude.iter().any(|family| family == "opus") {
+                families.push("opus".to_owned());
+            }
+            families
+        }
         _ => preference.claude.clone(),
     }
 }
@@ -954,54 +964,111 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_reviews_only_with_its_claude_opus_preset() {
+    fn antigravity_reviews_admit_gemini_neon_hydrogen_and_opus_with_same_model_exclusion() {
         let presets = json!([
             {"id":"gemini-neon-high","values":{"model":"gemini-4-neon","thought_level":"high"}},
+            {"id":"gemini-neon-xhigh","values":{"model":"gemini-4-neon","thought_level":"xhigh"}},
             {"id":"gemini-hydrogen-xhigh","values":{"model":"gemini-4-hydrogen","thought_level":"xhigh"}},
+            {"id":"gemini-hydrogen-high","values":{"model":"gemini-4-hydrogen","thought_level":"high"}},
             {"id":"claude-opus-high","values":{"model":"claude-opus-5-5","thought_level":"high"}},
             {"id":"claude-sonnet-high","values":{"model":"claude-sonnet-5-5","thought_level":"high"}},
             {"id":"claude-fable-high","values":{"model":"claude-fable-5-2","thought_level":"high"}},
         ]);
-        // Even a session that prefers Fable gets Opus only from Antigravity.
         let preference = super::super::super::agent_tools::ReviewPreferences {
             claude: vec!["fable".into(), "opus".into()],
             ..Default::default()
         };
-        assert_eq!(reviewer_families("antigravity", &preference), ["opus"]);
-        // An Opus caller loses Antigravity's only reviewer to its own model.
-        let opus = vec![presets[2].clone()];
-        let filtered = exclude_caller_model(&json!(opus), false, Some(Some("opus")));
-        let caller = Some(Some("opus"));
-        assert!(cross_vendor_same_model(&opus, &[], None, caller));
-        assert!(cross_vendor_same_model(
-            &opus,
-            &[],
-            Some("claude-opus-high"),
-            caller
-        ));
-        assert!(!cross_vendor_same_model(
-            &opus,
-            &[],
-            Some("gemini-neon-high"),
-            caller
-        ));
-        // A disabled family is no same-model refusal: nothing was eligible.
-        assert!(!cross_vendor_same_model(&[], &[], None, caller));
-        assert!(filtered.as_array().unwrap().is_empty());
-        let choices = candidates(&presets, "antigravity", &preference, true);
-        let ids: Vec<_> = choices.iter().filter_map(|c| c["id"].as_str()).collect();
-        assert_eq!(ids, ["claude-opus-high"]);
-        // The routing table does not cover Antigravity: a routine review
-        // keeps the same single Claude Opus candidate.
-        let routine = candidates(&presets, "antigravity", &preference, false);
-        assert_eq!(routine, choices);
         assert_eq!(
-            review_preset(&choices, &choices, None).as_deref(),
-            Ok("claude-opus-high")
+            reviewer_families("antigravity", &preference),
+            ["gemini-neon", "gemini-hydrogen", "opus"]
+        );
+        let high = candidates(&presets, "antigravity", &preference, true);
+        let high_ids: Vec<_> = high.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(
+            high_ids,
+            [
+                "gemini-neon-xhigh",
+                "gemini-neon-high",
+                "gemini-hydrogen-xhigh",
+                "gemini-hydrogen-high",
+                "claude-opus-high",
+            ]
+        );
+        let routine = candidates(&presets, "antigravity", &preference, false);
+        let routine_ids: Vec<_> = routine.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert_eq!(
+            routine_ids,
+            [
+                "gemini-neon-high",
+                "gemini-hydrogen-xhigh",
+                "gemini-hydrogen-high",
+                "claude-opus-high",
+            ]
         );
         assert_eq!(
-            review_preset(&choices, &choices, Some("gemini-neon-high")),
+            review_preset(&routine, &high, Some("gemini-neon-xhigh")),
+            Err("preset_outside_tier")
+        );
+        assert_eq!(
+            review_preset(&routine, &high, Some("claude-sonnet-high")),
             Err("review_model_not_allowed")
+        );
+        let routine_req: crate::managed_calls::Request = serde_json::from_value(json!({
+            "schema":1,"request_id":"r-ag","purpose":"review","instruction":"i",
+            "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"},
+            "labels":{"review_risk":"routine"}
+        })).unwrap();
+        assert_eq!(
+            admit(
+                &routine_req,
+                &presets,
+                "antigravity",
+                &preference,
+                None,
+                (false, Some(Some("opus"))),
+                None
+            )
+            .unwrap(),
+            "gemini-neon-high"
+        );
+        assert_eq!(
+            admit(
+                &routine_req,
+                &presets,
+                "antigravity",
+                &preference,
+                Some("claude-opus-high"),
+                (false, Some(Some("opus"))),
+                None
+            )
+            .unwrap_err()["error"]["code"],
+            "same_model"
+        );
+        assert_eq!(
+            admit(
+                &routine_req,
+                &presets,
+                "antigravity",
+                &preference,
+                None,
+                (true, Some(Some("gemini-neon"))),
+                None
+            )
+            .unwrap(),
+            "gemini-hydrogen-xhigh"
+        );
+        assert_eq!(
+            admit(
+                &routine_req,
+                &presets,
+                "antigravity",
+                &preference,
+                Some("gemini-neon-high"),
+                (true, Some(Some("gemini-neon"))),
+                None
+            )
+            .unwrap_err()["error"]["code"],
+            "same_model"
         );
     }
 
@@ -1056,8 +1123,9 @@ mod tests {
         let view = analysis_routing_view(&agy, "antigravity");
         assert_eq!(view["automatic"]["preset"], "gemini-hydrogen-high");
         assert_eq!(view["context_ask"]["preset"], "gemini-hydrogen-high");
-        // Reviewer allowlist remains strictly unaffected by analysis families.
-        assert_eq!(family("gemini-4-hydrogen"), None);
+        // Non-reviewer analysis families remain excluded from reviewer families.
+        assert_eq!(family("gemini-4-neon"), Some("gemini-neon"));
+        assert_eq!(family("gemini-4-hydrogen"), Some("gemini-hydrogen"));
         assert_eq!(family("gpt-6-luna"), None);
         assert_eq!(family("sonnet"), None);
     }

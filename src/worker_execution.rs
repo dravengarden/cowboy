@@ -797,6 +797,7 @@ impl Endpoint {
     pub fn start_unix(
         client: Arc<Client>,
         extensions: Option<Value>,
+        managed_session_id: Option<&str>,
     ) -> Result<(Self, crate::account_sandbox::ExecutionBridge)> {
         let token = bearer_token();
         let mut descriptor = json!({"schema": 1, "binding": client.binding,
@@ -804,6 +805,8 @@ impl Endpoint {
             "bearer_token": token});
         if client.binding.managed.is_none() {
             descriptor["diagnostics"] = json!({"schema": 1, "path": DIAGNOSTICS_PATH});
+        } else if let Some(native_id) = managed_session_id.filter(|id| !id.trim().is_empty()) {
+            descriptor["managed_session_id"] = json!(native_id);
         }
         // What the session's extensions offer the unit; never a relay
         // address, token or host path (`extensions::unit_summary`).

@@ -16,17 +16,13 @@ fn build_rollover_provider_choices(
     by_id
         .into_iter()
         .map(|(id, (name, keepalive_independent))| {
-            let policy_restricted = crate::provider_account::named_only(&id);
-            let restriction = policy_restricted.then_some(
-                "Automatic context renewal is disabled for Antigravity accounts by host policy.",
-            );
             json!({
                 "id": id,
                 "name": name,
                 "builtin_idle_minutes": crate::context_rollover::default_idle_minutes(&id),
                 "recommended_idle_minutes": crate::context_rollover::recommended_idle_minutes(&id),
-                "policy_restricted": policy_restricted,
-                "restriction": restriction,
+                "policy_restricted": false,
+                "restriction": Value::Null,
                 "keepalive_independent": keepalive_independent,
             })
         })
@@ -310,12 +306,10 @@ mod tests {
         assert_eq!(by_id["claude-deepseek"]["keepalive_independent"], true);
         assert_eq!(by_id["deepseek-harness"]["recommended_idle_minutes"], 360);
         assert_eq!(by_id["deepseek-harness"]["keepalive_independent"], false);
-        assert_eq!(by_id["antigravity"]["policy_restricted"], true);
-        assert_eq!(
-            by_id["antigravity"]["recommended_idle_minutes"],
-            Value::Null
-        );
-        assert!(by_id["antigravity"]["restriction"].is_string());
+        assert_eq!(by_id["antigravity"]["builtin_idle_minutes"], 120);
+        assert_eq!(by_id["antigravity"]["recommended_idle_minutes"], 120);
+        assert_eq!(by_id["antigravity"]["policy_restricted"], false);
+        assert_eq!(by_id["antigravity"]["restriction"], Value::Null);
         assert_eq!(by_id["grok"]["recommended_idle_minutes"], Value::Null);
     }
 }

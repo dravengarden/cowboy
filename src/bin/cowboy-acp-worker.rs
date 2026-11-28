@@ -51,6 +51,8 @@ struct Args {
 /// Machine runs it before activating a release, so a package only a newer
 /// worker understands is refused at install instead of crashing sessions.
 const CHECK_PROVIDER_PACKAGE: &str = "--check-provider-package";
+const CHECK_CAPABILITY: &str = "--check-capability";
+const MANAGED_RESUME_CAPABILITY: &str = "managed-resume-v1";
 
 fn check_provider_package(path: &Path) -> anyhow::Result<()> {
     let bytes = std::fs::read(path)
@@ -59,14 +61,27 @@ fn check_provider_package(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn check_capability(name: &std::ffi::OsStr) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        name == std::ffi::OsStr::new(MANAGED_RESUME_CAPABILITY),
+        "unsupported worker capability"
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut arguments = std::env::args_os().skip(1);
-    if arguments.next().as_deref() == Some(std::ffi::OsStr::new(CHECK_PROVIDER_PACKAGE)) {
+    let first = arguments.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new(CHECK_PROVIDER_PACKAGE)) {
         let path = arguments
             .next()
             .context("a Provider package path is required")?;
         return check_provider_package(Path::new(&path));
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new(CHECK_CAPABILITY)) {
+        let capability = arguments.next().context("a capability name is required")?;
+        return check_capability(&capability);
     }
     let args = Args::parse();
     if args.launch_gate {

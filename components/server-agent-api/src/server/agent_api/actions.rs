@@ -199,13 +199,75 @@ fn call_purpose(input: &CallInput, review: bool) -> Result<String, CallRefusal> 
     })
 }
 
+fn call_output_value(
+    provider: &str,
+    purpose: &str,
+    review: bool,
+    bound_review: bool,
+    policy: &CallBuildPolicy,
+) -> Result<Value, CallRefusal> {
+    if bound_review {
+        return Ok(
+            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()}),
+        );
+    }
+    if review
+        && provider == "auto"
+        && let Some(replayed) = &policy.replayed_output
+    {
+        return serde_json::to_value(replayed)
+            .map_err(|_| refuse("arguments could not be encoded"));
+    }
+    if matches!(purpose, "review" | "design_review")
+        && (provider == "antigravity"
+            || policy.continued_antigravity
+            || (review && policy.allow_antigravity_auto && provider == "auto"))
+    {
+        return Ok(
+            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()}),
+        );
+    }
+    Ok(json!({"format":"text"}))
+}
+
+#[derive(Default)]
+struct CallBuildPolicy {
+    allow_antigravity_auto: bool,
+    continued_antigravity: bool,
+    replayed_output: Option<crate::managed_calls::OutputFormat>,
+}
+
+#[cfg(test)]
 fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, CallRefusal> {
-    let input: CallInput = serde_json::from_value(args)
-        .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
+    call_action_with_policy(action, args, operation, &CallBuildPolicy::default())
+}
+
+fn parse_call_input(args: Value) -> Result<CallInput, CallRefusal> {
+    serde_json::from_value(args)
+        .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))
+}
+
+#[cfg(test)]
+fn call_action_with_policy(
+    action: &str,
+    args: Value,
+    operation: &str,
+    policy: &CallBuildPolicy,
+) -> Result<Action, CallRefusal> {
+    let input = parse_call_input(args)?;
+    call_action_from_input(action, input, operation, policy)
+}
+
+fn call_action_from_input(
+    action: &str,
+    input: CallInput,
+    operation: &str,
+    policy: &CallBuildPolicy,
+) -> Result<Action, CallRefusal> {
     let review = action == "review.start";
     if review && input.child_session_id.is_some() {
         return Err(refuse(
-            "review.start always starts a fresh review; to continue a review child (up to 3 rounds, keeping its preset when the declared risk tier admits it; Antigravity is fresh-only), use calls.start({purpose:\"review\"|\"design_review\",child_session_id,instruction,risk}) without preset, or omit child_session_id on review.start with the same task, base and root to reuse captured input",
+            "review.start always starts a fresh review; to continue a review child (up to 3 rounds, keeping its preset when the declared risk tier admits it), use calls.start({purpose:\"review\"|\"design_review\",child_session_id,instruction,risk}) without preset, or omit child_session_id on review.start with the same task, base and root to reuse captured input",
         ));
     }
     if review
@@ -299,7 +361,7 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     if let Some(risk) = input.risk {
         labels.insert(crate::managed_calls::review::RISK, risk);
     }
-    let mut output = json!({"format":"text"});
+    let bound_review = input.task.is_some() && input.base.is_some();
     if let (Some(task), Some(base)) = (input.task, input.base) {
         labels.insert(crate::managed_calls::review::TASK, task);
         labels.insert(crate::managed_calls::review::BASE, base);
@@ -307,14 +369,8 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
             crate::managed_calls::review::REUSE,
             (!input.fresh).to_string(),
         );
-        output =
-            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()});
-    } else if review && input.provider == "antigravity" {
-        // Antigravity reviews only with the checked review schema; an
-        // unscoped review still carries it.
-        output =
-            json!({"format":"json_schema","schema":crate::managed_calls::review::output_schema()});
     }
+    let output = call_output_value(&input.provider, &purpose, review, bound_review, policy)?;
     let conversation = match input.child_session_id {
         Some(child) => json!({"mode":"continue","child_session_id":child}),
         None => json!({"mode":"fresh"}),
@@ -513,6 +569,68 @@ async fn transition_plan(
     ))
 }
 
+fn is_unbound_auto_review(action: &str, input: &CallInput) -> bool {
+    action == "review.start"
+        && input.task.is_none()
+        && input.base.is_none()
+        && input.provider == super::super::agent_tools::AUTO
+}
+
+async fn call_build_policy(
+    state: &Arc<AppState>,
+    meta: &SessionMeta,
+    ledger: &Ledger,
+    action: &str,
+    input: &CallInput,
+    operation: &str,
+) -> Result<CallBuildPolicy, &'static str> {
+    let policy = super::super::agent_tools::effective(state, meta).calls;
+    let allow_antigravity_auto = policy.default == "antigravity"
+        || (policy.default == super::super::agent_tools::AUTO
+            && policy
+                .targets
+                .iter()
+                .any(|target| target.agent == "antigravity"));
+    let continued_antigravity = if action == "calls.start"
+        && let Some(child_id) = input.child_session_id.as_deref()
+    {
+        ledger
+            .child(child_id)
+            .await
+            .map_err(|_| "capacity")?
+            .is_some_and(|record| record.provider == "antigravity")
+    } else {
+        false
+    };
+    let mut replayed_output = None;
+    if is_unbound_auto_review(action, input)
+        && let Some(original) = ledger.observe(operation).await.map_err(|_| "capacity")?
+        && original.selection.as_deref() == Some(super::super::agent_tools::AUTO)
+        && let Some(store) = state.store.as_ref()
+    {
+        let stored = store
+            .managed_call_input(&meta.id, &original.call_id)
+            .await
+            .map_err(|_| "capacity")?;
+        if let Some(stored) = stored {
+            replayed_output = match &stored.output {
+                crate::managed_calls::OutputFormat::Text {} => Some(stored.output),
+                crate::managed_calls::OutputFormat::JsonSchema { schema }
+                    if *schema == crate::managed_calls::review::output_schema() =>
+                {
+                    Some(stored.output)
+                }
+                _ => None,
+            };
+        }
+    }
+    Ok(CallBuildPolicy {
+        allow_antigravity_auto,
+        continued_antigravity,
+        replayed_output,
+    })
+}
+
 /// Start a call from MCP arguments: build the request, pin a context ask's
 /// history bounds, then admit it like any other call.
 async fn start_call(
@@ -527,7 +645,18 @@ async fn start_call(
         action: action.to_owned(),
         operation: operation.to_owned(),
     };
-    let mut action = match call_action(action, args, operation) {
+    let input = match parse_call_input(args) {
+        Ok(input) => input,
+        Err(refusal) => return refusal.value(),
+    };
+    let build_policy = match call_build_policy(state, meta, ledger, action, &input, operation).await
+    {
+        Ok(policy) => policy,
+        Err(code) => {
+            return call_result(json!({"error":{"code":code,"admission":"not_submitted"}}));
+        }
+    };
+    let mut action = match call_action_from_input(action, input, operation, &build_policy) {
         Ok(action) => action,
         Err(refusal) => return refusal.value(),
     };
@@ -1117,20 +1246,178 @@ mod tests {
         assert_eq!(request.labels["selection_reason"], "Ample model quota");
         assert!(!request.labels.contains_key("notify"));
         assert!(request.output.is_text());
-        // An Antigravity review carries the checked review schema unscoped too.
-        let Action::Start { request, .. } = call_action(
+        // An Antigravity review carries the checked review schema unscoped too,
+        // including when Antigravity is opted into Auto/default in Tools.
+        for (args, allow_auto) in [
+            (
+                json!({"focus":"check","provider":"antigravity","root":"/tasks/example"}),
+                false,
+            ),
+            (json!({"focus":"check","root":"/tasks/example"}), true),
+        ] {
+            let Action::Start { request, .. } = call_action_with_policy(
+                "review.start",
+                args,
+                "op",
+                &CallBuildPolicy {
+                    allow_antigravity_auto: allow_auto,
+                    ..Default::default()
+                },
+            )
+            .unwrap() else {
+                panic!()
+            };
+            assert!(matches!(
+                &request.output,
+                crate::managed_calls::OutputFormat::JsonSchema { schema }
+                    if *schema == crate::managed_calls::review::output_schema()
+            ));
+        }
+        // Continuing an Antigravity review or design_review via calls.start
+        // attaches the checked review schema; analysis continuation stays text.
+        for purpose in ["review", "design_review"] {
+            let Action::Start { request, .. } = call_action_with_policy(
+                "calls.start",
+                json!({"purpose":purpose,"child_session_id":"child-agy","instruction":"verify fixes","risk":"routine"}),
+                "op-cont",
+                &CallBuildPolicy {
+                    continued_antigravity: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap() else {
+                panic!()
+            };
+            assert!(matches!(
+                &request.output,
+                crate::managed_calls::OutputFormat::JsonSchema { schema }
+                    if *schema == crate::managed_calls::review::output_schema()
+            ));
+        }
+        let Action::Start {
+            request: cont_analysis,
+            ..
+        } = call_action_with_policy(
+            "calls.start",
+            json!({"purpose":"analysis","child_session_id":"child-agy","instruction":"follow up"}),
+            "op-cont-a",
+            &CallBuildPolicy {
+                continued_antigravity: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert!(cont_analysis.output.is_text());
+        // Replay of an unbound Auto review.start preserves the accepted output
+        // format across Tools toggles while keeping digest checks on all other inputs.
+        let Action::Start {
+            request: first_off, ..
+        } = call_action_with_policy(
             "review.start",
-            json!({"focus":"check","provider":"antigravity","root":"/tasks/example"}),
+            json!({"focus":"check","root":"/tasks/example"}),
+            "op-replay",
+            &CallBuildPolicy {
+                allow_antigravity_auto: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        let Action::Start {
+            request: replay_after_toggle,
+            ..
+        } = call_action_with_policy(
+            "review.start",
+            json!({"focus":"check","root":"/tasks/example"}),
+            "op-replay",
+            &CallBuildPolicy {
+                allow_antigravity_auto: true,
+                replayed_output: Some(first_off.output.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(first_off.digest(), replay_after_toggle.digest());
+        let Action::Start {
+            request: mutated_replay,
+            ..
+        } = call_action_with_policy(
+            "review.start",
+            json!({"focus":"changed focus","root":"/tasks/example"}),
+            "op-replay",
+            &CallBuildPolicy {
+                allow_antigravity_auto: true,
+                replayed_output: Some(first_off.output.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_ne!(first_off.digest(), mutated_replay.digest());
+        // Explicit `task: null, base: null` is an unbound Auto review and stays
+        // eligible for output pinning on replay across Tools toggles.
+        let nullable_args =
+            json!({"focus":"check","root":"/tasks/example","task":null,"base":null});
+        let nullable_input = parse_call_input(nullable_args.clone()).unwrap();
+        assert!(is_unbound_auto_review("review.start", &nullable_input));
+        let Action::Start {
+            request: nullable_first,
+            ..
+        } = call_action_with_policy(
+            "review.start",
+            nullable_args.clone(),
+            "op-replay-null",
+            &CallBuildPolicy {
+                allow_antigravity_auto: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        let Action::Start {
+            request: nullable_replay,
+            ..
+        } = call_action_with_policy(
+            "review.start",
+            nullable_args,
+            "op-replay-null",
+            &CallBuildPolicy {
+                allow_antigravity_auto: true,
+                replayed_output: Some(nullable_first.output.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(nullable_first.digest(), nullable_replay.digest());
+        // Explicit non-Antigravity provider stays text even when Antigravity is opted into Auto.
+        let Action::Start { request, .. } = call_action_with_policy(
+            "review.start",
+            json!({"focus":"check","provider":"codex","root":"/tasks/example"}),
             "op",
+            &CallBuildPolicy {
+                allow_antigravity_auto: true,
+                ..Default::default()
+            },
         )
         .unwrap() else {
             panic!()
         };
-        assert!(matches!(
-            &request.output,
-            crate::managed_calls::OutputFormat::JsonSchema { schema }
-                if *schema == crate::managed_calls::review::output_schema()
-        ));
+        assert!(request.output.is_text());
         let Action::Start { request, .. } = call_action(
             "calls.start",
             json!({"instruction":"inspect","notify":true}),

@@ -438,18 +438,21 @@ test("a wait that times out leaves the child running and says how to keep waitin
   assert.deepEqual(await waiting, { state: "running" });
 });
 
-test("starts are refused beyond the caps, in plan mode, without the capability and inside a child", async () => {
+test("concurrent and multi-child starts succeed while structural boundaries hold", async () => {
   const made = await parent();
   const { proxy } = made;
   const first = await startChild(made, { prompt: "a" });
   const second = await startChild(made, { prompt: "b" });
-  await assert.rejects(startChild(made, { prompt: "c" }), /At most 2 subagents run at once/);
-  await assert.rejects(proxy.subagents.start(first, { prompt: "d" }), /cannot start subagents/);
-  assert.notEqual(first, second);
-  // Settling one frees a slot; the turn's own cap still counts it.
-  assert.equal((await stopChild(made, first)).state, "cancelled");
   const third = await startChild(made, { prompt: "c" });
-  assert.equal(third, "child-3");
+  const fourth = await startChild(made, { prompt: "d" });
+  assert.equal(new Set([first, second, third, fourth]).size, 4);
+  await assert.rejects(
+    proxy.subagents.start(first, { prompt: "nested" }),
+    /cannot start subagents/,
+  );
+  for (const id of [first, second, third, fourth]) {
+    assert.equal((await stopChild(made, id)).state, "cancelled");
+  }
 
   const planning = await parent({}, { mode: "plan" });
   await assert.rejects(planning.proxy.subagents.start("s", { prompt: "x" }), /plan mode/);
@@ -463,16 +466,12 @@ test("starts are refused beyond the caps, in plan mode, without the capability a
   await assert.rejects(idle.proxy.subagents.start("s", { prompt: "x" }), /inside a running turn/);
 });
 
-test("a turn starts at most eight subagents", async () => {
+test("a turn is not artificially capped at eight subagents", async () => {
   const made = await parent();
-  for (let index = 0; index < LIMITS.subagentTurn; index++) {
+  for (let index = 0; index < 10; index++) {
     const id = await startChild(made, { prompt: `task ${index}` });
-    await stopChild(made, id);
+    assert.equal((await stopChild(made, id)).state, "cancelled");
   }
-  await assert.rejects(
-    startChild(made, { prompt: "one more" }),
-    /At most 8 subagents start per turn/,
-  );
 });
 
 test("the parent's mode and model settings carry over to the child", async () => {
@@ -2318,4 +2317,22 @@ test("direct child session/load and session/resume are refused and opening buffe
     id: "abandoned-perm",
     result: { outcome: { outcome: "cancelled" } },
   });
+});
+
+test("settled subagent reports stay retrievable past 64 children during the active turn and prune after turn end", async () => {
+  const made = await parent();
+  const { proxy } = made;
+  const ids = [];
+  for (let i = 0; i < 66; i += 1) {
+    const id = await startChild(made, { prompt: `child-${i}`, description: `Child ${i}` });
+    ids.push(id);
+    await endPrompt(made, id);
+    const settled = await proxy.subagents.wait("s", id, 2000);
+    assert.equal(settled.state, "completed");
+  }
+  const earliest = await proxy.subagents.wait("s", ids[0], 0);
+  assert.equal(earliest.state, "completed");
+  assert.equal(proxy.subagents.children.size, 66);
+  await proxy.subagents.finish("s");
+  assert.equal(proxy.subagents.children.size, 64);
 });

@@ -88,6 +88,15 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.163.0 records provider-runtime 1.3.39, whose
+`cowboy-antigravity-acp` 1.0.33 removes the artificial proxy-hosted subagent
+concurrency (`2`) and per-turn (`8`) caps (retaining active-turn settled
+reports until turn end so large bursts remain retrievable), and adds signed
+`--cowboy-managed-continue=v1` support so a resumed managed child proxy reopens
+only the exact `managed_session_id` bound in its trusted execution descriptor
+while refusing `session/new` and foreign sessions. Antigravity 0.2.43 pins it;
+the other six Providers pinning provider-runtime advance one patch version.
+
 Component release 3.162.0 advances `claude-deepseek` to `3.1.103` and
 `codex-deepseek` to `3.1.102`: sets `deepseek_cache_protection` default
 preference to `false` (opt-in paid keepalive, strictly independent from

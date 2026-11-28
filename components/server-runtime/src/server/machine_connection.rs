@@ -798,13 +798,21 @@ fn queue_outbound_runtime_frame(
     .map_err(|_| ())
 }
 
+pub struct MachineUpgradeCaps {
+    pub(super) post_edit_token: Option<String>,
+    pub(super) post_edit_workspace: bool,
+    pub(super) hibernation_epoch: bool,
+    pub(super) managed_resume: bool,
+}
+
 pub async fn handle_machine_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
     (chunked, compressed, paced, stream): (bool, bool, bool, bool),
     lane_token: Option<String>,
-    (post_edit_token, post_edit_workspace, hibernation_epoch): (Option<String>, bool, bool),
+    caps: MachineUpgradeCaps,
 ) {
+    let (post_edit_token, post_edit_workspace) = (caps.post_edit_token, caps.post_edit_workspace);
     let Some(MachineHandshake {
         store,
         hello,
@@ -880,7 +888,7 @@ pub async fn handle_machine_ws(
         &challenge_id,
         colocated,
         protocol,
-        hibernation_epoch,
+        (caps.hibernation_epoch, caps.managed_resume),
         machine_command_tx,
         runtime_core,
         hint_ws_tx,
@@ -1216,7 +1224,7 @@ async fn register_current_machine_connection(
     challenge_id: &str,
     colocated: bool,
     protocol: u16,
-    hibernation_epoch: bool,
+    (hibernation_epoch, managed_resume): (bool, bool),
     machine_command_tx: mpsc::UnboundedSender<crate::machine_protocol::MachineCommand>,
     runtime_core: UnixStream,
     hint_ws_tx: mpsc::Sender<String>,
@@ -1244,6 +1252,11 @@ async fn register_current_machine_connection(
         state
             .machine_control
             .mark_hibernation_epoch_supported(&connection);
+    }
+    if managed_resume {
+        state
+            .machine_control
+            .mark_managed_resume_supported(&connection);
     }
     let Some(runtime) = install_machine_runtime(
         state,

@@ -37,8 +37,7 @@ fn session_override(hub: &Hub, id: &str) -> Option<bool> {
 }
 
 fn session_restricted(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
-    crate::provider_account::named_only(&meta.provider)
-        || state.hub.session_fork(&meta.id).is_some()
+    state.hub.session_fork(&meta.id).is_some()
 }
 
 /// Shared reader/writer fence serializing global & per-session rollover
@@ -298,9 +297,6 @@ async fn evaluate_hibernate_candidate(state: &AppState, meta: crate::core::Sessi
     {
         return;
     }
-    if crate::provider_account::named_only(&meta.provider) {
-        return;
-    }
     let Some(idle) = state.hub.session_idle_for(&meta.id) else {
         return;
     };
@@ -471,10 +467,11 @@ fn is_command_or_compaction(_text: &str, content: &[serde_json::Value]) -> bool 
 
 /// Prompts eligible for idle context renewal: direct owner prompts and
 /// scheduled drafts with verified Owner authorship (`origin == Some(Owner)` and
-/// `trigger == Cowboy("schedule")`). Agent `ScheduleWakeup`s (`__wake__` /
-/// non-owner origin), legacy drafts with unknown authorship (`origin == None`),
-/// call notices (`call-notice:`), managed calls, superagent prompts, peer
-/// prompts, legacy queue rows, and automation API callers stay excluded.
+/// `trigger == Cowboy("schedule_owner")`). Legacy persisted `"schedule"` rows
+/// (which predate `DraftSchedule.scheduled_by`), agent `ScheduleWakeup`s
+/// (`__wake__` / non-owner origin), legacy drafts with unknown authorship
+/// (`origin == None`), call notices (`call-notice:`), managed calls,
+/// superagent prompts, peer prompts, and automation API callers stay excluded.
 fn allows_rollover(
     origin: Option<&crate::prompt_origin::DeliveryOrigin>,
     trigger: &crate::prompt_origin::DeliveryOrigin,
@@ -492,7 +489,7 @@ fn allows_rollover(
     origin.is_some_and(crate::prompt_origin::DeliveryOrigin::is_owner)
         && matches!(
             trigger,
-            crate::prompt_origin::DeliveryOrigin::Cowboy { source } if source == "schedule"
+            crate::prompt_origin::DeliveryOrigin::Cowboy { source } if source == "schedule_owner"
         )
 }
 
@@ -695,8 +692,9 @@ fn shadow_gate(used: Option<u64>, min: Option<u64>) -> &'static str {
 /// Evaluate observational shadow outcome without mutating dispatch behavior.
 /// When a Provider has no active preset (`no_preset`) and has not been
 /// explicitly disabled by owner/session settings, evaluates its empirical
-/// shadow candidate threshold (e.g. Codex 240m, DeepSeek 360m). Host-policy-
-/// restricted Providers (`antigravity`) always remain `no_preset`.
+/// shadow candidate threshold (e.g. Codex 240m, DeepSeek 360m). Providers with
+/// active built-in defaults (`claude-code`, `antigravity`) or no candidate
+/// preset (`grok`) remain `no_preset` in shadow.
 /// Pure candidate-threshold decision before checking runtime dormancy/history.
 /// Returns `Ok((candidate_policy, candidate_ms))` when a shadow candidate is due
 /// and ready for `shadow_preflight`, or `Err((outcome, threshold_ms))` otherwise.
@@ -908,17 +906,10 @@ async fn view(state: &AppState, id: &str) -> Response {
         .hub
         .session_idle_for(id)
         .map(|idle| u64::try_from(idle.as_millis()).unwrap_or(u64::MAX));
-    let policy_restricted = crate::provider_account::named_only(&meta.provider);
     let native_fork = state.hub.session_fork(&meta.id).is_some();
-    let restriction = if policy_restricted {
-        Some("Automatic context renewal is disabled for Antigravity accounts by host policy.")
-    } else if native_fork {
-        Some(
-            "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.",
-        )
-    } else {
-        None
-    };
+    let restriction = native_fork.then_some(
+        "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.",
+    );
     let dormant = state.supervisor.is_dormant_for_renewal(&meta.id);
     let pending_work = state.hub.session_info(&meta.id).is_some_and(|info| {
         info.queue_count > 0
@@ -942,7 +933,7 @@ async fn view(state: &AppState, id: &str) -> Response {
         "pending_work": pending_work,
         "keepalive_handoff_supported": keepalive_handoff_supported,
         "recommended_idle_minutes": crate::context_rollover::recommended_idle_minutes(&meta.provider),
-        "policy_restricted": policy_restricted || native_fork,
+        "policy_restricted": native_fork,
         "restriction": restriction,
     }))
     .into_response()
@@ -961,12 +952,11 @@ pub async fn set(
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     if request.enabled == Some(true) && session_restricted(&state, &meta) {
-        let message = if crate::provider_account::named_only(&meta.provider) {
-            "Automatic context renewal is disabled for Antigravity accounts by host policy."
-        } else {
-            "Automatic context renewal is excluded for native fork sessions."
-        };
-        return (StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Automatic context renewal is excluded for native fork sessions.",
+        )
+            .into_response();
     }
     {
         let _policy_write = policy_lock().write().await;
@@ -998,7 +988,9 @@ mod tests {
 
     #[test]
     fn rollover_allows_owner_and_verified_owner_scheduled_drafts_only() {
+        let verified_schedule = DeliveryOrigin::cowboy("schedule_owner");
         let schedule = DeliveryOrigin::cowboy("schedule");
+        let unverified_schedule = DeliveryOrigin::cowboy("schedule_unverified");
         // Direct owner prompt: allowed.
         assert!(allows_rollover(
             Some(&DeliveryOrigin::Owner),
@@ -1006,12 +998,25 @@ mod tests {
             &DeliveryOrigin::Owner,
             "user-1"
         ));
-        // Verified owner-authored scheduled draft: allowed.
+        // Verified owner-authored & owner-scheduled draft: allowed.
         assert!(allows_rollover(
+            Some(&DeliveryOrigin::Owner),
+            &verified_schedule,
+            &verified_schedule,
+            "sched-sess-1-draft-1"
+        ));
+        // Legacy persisted `"schedule"` marker fails closed after upgrade.
+        assert!(!allows_rollover(
             Some(&DeliveryOrigin::Owner),
             &schedule,
             &schedule,
-            "sched-sess-1-draft-1"
+            "sched-sess-1-draft-legacy"
+        ));
+        assert!(!allows_rollover(
+            Some(&DeliveryOrigin::Owner),
+            &unverified_schedule,
+            &unverified_schedule,
+            "sched-sess-1-draft-unverified"
         ));
         // Agent ScheduleWakeup (`__wake__` and non-owner origin): denied.
         assert!(!allows_rollover(
@@ -1135,8 +1140,9 @@ mod tests {
             Err(("disabled", Some(240 * 60_000)))
         );
 
-        // Antigravity and Grok stay no_preset in shadow.
-        for provider in ["antigravity", "grok"] {
+        // Providers with active built-in defaults (claude-code, antigravity)
+        // or no candidate preset (grok) stay no_preset in shadow.
+        for provider in ["claude-code", "antigravity", "grok"] {
             assert_eq!(
                 shadow_candidate_stage(
                     provider,

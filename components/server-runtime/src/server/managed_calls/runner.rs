@@ -394,6 +394,37 @@ fn output_schema(request: &Request) -> Option<Value> {
     }
 }
 
+async fn prepare_existing_child(
+    state: &AppState,
+    existing: Option<&crate::core::SessionInfo>,
+    existing_workspace: Option<&str>,
+    request: &Request,
+    record: &Record,
+) -> Result<Option<String>, &'static str> {
+    let Some(existing) = existing else {
+        return if matches!(request.conversation, Conversation::Continue { .. }) {
+            Err("conversation_unavailable")
+        } else {
+            Ok(None)
+        };
+    };
+    if existing_workspace.is_none() {
+        return Err("identity_mismatch");
+    }
+    let child = record.child_session_id.as_str();
+    if let Some(code) = retirement::call_refusal(&state.accounts, child) {
+        return Err(code);
+    }
+    let expected_resume = super::coordinator::readiness::check_existing_child_before_quiesce(
+        state,
+        &existing.meta,
+        request,
+        record.purpose.profile(),
+    )?;
+    quiesce(state, child).await?;
+    Ok(expected_resume)
+}
+
 /// Stop a live continued child before its workspace is refreshed in place.
 async fn quiesce(state: &AppState, child: &str) -> Result<(), &'static str> {
     if !state.supervisor.has_live_worker(child) {
@@ -472,23 +503,21 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             })
             .map(|(_, _, workspace)| workspace)
     });
-    if existing.is_some() {
-        if existing_workspace.is_none() {
-            advance(state, store, record, fail("identity_mismatch", None)).await;
-            return Step::Again;
-        }
-        if let Some(code) = retirement::call_refusal(&state.accounts, child) {
+    let expected_resume = match prepare_existing_child(
+        state,
+        existing.as_ref(),
+        existing_workspace.as_deref(),
+        &request,
+        record,
+    )
+    .await
+    {
+        Ok(expected_resume) => expected_resume,
+        Err(code) => {
             advance(state, store, record, fail(code, None)).await;
             return Step::Again;
         }
-        if let Err(code) = quiesce(state, child).await {
-            advance(state, store, record, fail(code, None)).await;
-            return Step::Again;
-        }
-    } else if matches!(request.conversation, Conversation::Continue { .. }) {
-        advance(state, store, record, fail("conversation_unavailable", None)).await;
-        return Step::Again;
-    }
+    };
     let round = match child_round(state, record, &request, child).await {
         Ok(round) => round,
         Err(super::history::RETRY) => return Step::Wait(Duration::from_secs(5)),
@@ -561,7 +590,8 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     {
         return step;
     }
-    if let Err(error) = configuration::ready(state, store, record).await {
+    if let Err(error) = configuration::ready(state, store, record, expected_resume.as_deref()).await
+    {
         if error.code == RETRY {
             return Step::Wait(POLL);
         }
@@ -849,8 +879,7 @@ fn resolve_preset(
 fn reviewer_family_allowed(provider: &str, model: Option<&str>) -> bool {
     let families: &[&str] = match provider {
         "codex" => &["astra", "sol"],
-        // Antigravity reviews with Claude Opus only.
-        "antigravity" => &["opus"],
+        "antigravity" => &["gemini-neon", "gemini-hydrogen", "opus"],
         _ => &["opus", "fable"],
     };
     model
@@ -1424,7 +1453,7 @@ async fn reconfirm(
         advance(state, store, record, fail(code, None)).await;
         return Err(Step::Again);
     }
-    let Err(error) = configuration::ready(state, store, record).await else {
+    let Err(error) = configuration::ready_for_reconfirm(state, store, record, request).await else {
         // Reconfirmation can take long; a cancellation or another transition
         // committed meanwhile wins over the resubmission.
         return match store
@@ -1482,6 +1511,26 @@ mod tests {
         assert!(!reviewer_family_allowed("claude-code", Some("sonnet")));
         // A Claude model is never a GPT reviewer.
         assert!(!reviewer_family_allowed("codex", Some("opus")));
+        assert!(reviewer_family_allowed(
+            "antigravity",
+            Some("gemini-4-neon")
+        ));
+        assert!(reviewer_family_allowed(
+            "antigravity",
+            Some("gemini-4-hydrogen")
+        ));
+        assert!(reviewer_family_allowed(
+            "antigravity",
+            Some("claude-opus-5-5")
+        ));
+        assert!(!reviewer_family_allowed(
+            "antigravity",
+            Some("claude-sonnet-5-5")
+        ));
+        assert!(!reviewer_family_allowed(
+            "antigravity",
+            Some("claude-fable-5-2")
+        ));
     }
 
     #[test]

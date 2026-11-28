@@ -198,12 +198,20 @@ export function sameFamily(left: string, right: string): boolean {
   return family(left) === family(right);
 }
 
+/** Whether `caller` may configure `target` as an explicit Tools call target.
+ * Single-vendor families exclude themselves; Antigravity hosts multiple model
+ * families, so Antigravity sessions may opt Antigravity into Auto (unchecked
+ * by default, guarded by same_model exclusion). */
+export function targetAllowedForCaller(target: string, caller: string): boolean {
+  return !sameFamily(target, caller) || (target === "antigravity" && caller === "antigravity");
+}
+
 /** The catalog targets an agent of `caller`'s kind may call. */
 export function callableTargets(
   caller: string,
   catalog: ToolsCatalog,
 ): ToolsCatalog["call_targets"] {
-  return catalog.call_targets.filter((target) => !sameFamily(target.agent, caller));
+  return catalog.call_targets.filter((target) => targetAllowedForCaller(target.agent, caller));
 }
 
 /** Replace, add or remove one agent from a target list, keeping its order. */

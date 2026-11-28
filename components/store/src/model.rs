@@ -422,6 +422,11 @@ pub struct DraftSchedule {
     /// ⏸ hold) and never interrupt a running turn.
     #[serde(default)]
     pub delivery: Delivery,
+    /// Who authorized this schedule, tracked separately from `QueuedMessage.origin`
+    /// (who authored the draft text) so non-owner callers scheduling an existing
+    /// owner-authored draft cannot trigger owner-only context renewal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_by: Option<crate::delivery_origin::DeliveryOrigin>,
 }
 
 /// Fire-time queue position for a scheduled draft. The two modes differ ONLY in

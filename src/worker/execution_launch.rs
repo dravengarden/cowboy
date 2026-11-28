@@ -109,7 +109,14 @@ pub(super) async fn prepare(
             extensions.memory,
         ));
         let summary = Some(extensions.summary);
-        let (endpoint, bridge) = Endpoint::start_unix(Arc::clone(&client), summary)?;
+        let managed_resume = binding_profile.and_then(|_| {
+            args.resume
+                .as_deref()
+                .or(launch.agent_session_id.as_deref())
+                .filter(|id| !id.trim().is_empty())
+        });
+        let (endpoint, bridge) =
+            Endpoint::start_unix(Arc::clone(&client), summary, managed_resume)?;
         spec.execution_bridge = Some(bridge);
         return Ok((Some(endpoint), managed_round));
     }

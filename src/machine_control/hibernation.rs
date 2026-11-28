@@ -56,6 +56,27 @@ impl MachineControl {
             .get(&token.0.machine_id)
             .is_some_and(|connection| connection.token.same(token) && connection.hibernation_epoch)
     }
+
+    /// Record that the authenticated connection `token` advertised host-layer
+    /// managed-child native session binding (`managed_session_id` in descriptor).
+    pub fn mark_managed_resume_supported(&self, token: &ConnectionToken) {
+        if let Some(connection) = self.live.write().connections.get_mut(&token.0.machine_id)
+            && connection.token.same(token)
+        {
+            connection.managed_resume = true;
+        }
+    }
+
+    /// Whether the Machine's current connection binds `managed_session_id` in
+    /// sandboxed execution descriptors for safe managed-child continuation.
+    #[must_use]
+    pub fn supports_managed_resume(&self, machine_id: &str) -> bool {
+        self.live
+            .read()
+            .connections
+            .get(machine_id)
+            .is_some_and(|connection| connection.managed_resume)
+    }
 }
 
 #[cfg(test)]

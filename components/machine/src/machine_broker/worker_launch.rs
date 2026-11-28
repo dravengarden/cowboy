@@ -25,7 +25,11 @@ impl Broker {
     /// The registered worker for this generation. A retained bundle may predate
     /// MCP launch plans, so an MCP launch is refused before it starts a worker
     /// that would exit on the unknown argument.
-    pub(super) async fn launch_worker_command(&self, session: &StartSession) -> Result<PathBuf> {
+    pub(super) async fn launch_worker_command(
+        &self,
+        session: &StartSession,
+        provider: Option<&ProviderLaunchContext>,
+    ) -> Result<PathBuf> {
         let worker = self
             .generation_commands
             .lock()
@@ -39,6 +43,12 @@ impl Broker {
             })?;
         if session.mcp_plan.is_some() {
             super::mcp_launch::ensure_worker_accepts_plan(&worker).await?;
+        }
+        if requires_managed_resume_worker(
+            session,
+            provider.map(|context| &context.managed_continue_profiles),
+        ) {
+            super::mcp_launch::ensure_worker_supports_managed_resume(&worker).await?;
         }
         Ok(worker)
     }
@@ -370,5 +380,99 @@ mod network_policy_tests {
             super::network_property(cowboy_provider_sdk::RuntimeNetworkPolicy::Ipv4OnlyV1);
         assert!(property.contains("AF_INET "));
         assert!(!property.contains("AF_INET6"));
+    }
+}
+
+/// Whether launching `session` requires a worker that binds `managed_session_id`
+/// in the account-sandbox execution descriptor (`--check-capability managed-resume-v1`).
+/// Only signed managed profiles declaring `--cowboy-managed-continue=v1` require it;
+/// Codex and Claude managed children resume natively on retained workers.
+pub(super) fn requires_managed_resume_worker(
+    session: &StartSession,
+    managed_continue_profiles: Option<&BTreeSet<cowboy_provider_sdk::ManagedRuntimeProfile>>,
+) -> bool {
+    if !session
+        .agent_session_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return false;
+    }
+    let Some(profile) = session.execution_binding.as_ref().and_then(|binding| {
+        binding
+            .managed_child()
+            .map(|child| child.profile)
+            .or_else(|| {
+                binding
+                    .decode()
+                    .ok()
+                    .and_then(|decoded| decoded.managed.map(|managed| managed.profile))
+            })
+    }) else {
+        return false;
+    };
+    managed_continue_profiles.is_some_and(|profiles| profiles.contains(&profile))
+}
+
+#[cfg(test)]
+mod managed_resume_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn managed_session(provider: &str) -> StartSession {
+        let mut session: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "child-1",
+            "provider": provider,
+            "cwd": "/work",
+            "generation": "gen-1",
+            "agent_session_id": "native-1",
+        }))
+        .unwrap();
+        let record = serde_json::to_value(crate::execution_environment::ManagedChildV1 {
+            schema: 1,
+            phase: "managed_child".into(),
+            session_id: "child-1".into(),
+            parent_session_id: "parent-1".into(),
+            machine_id: "hawk".into(),
+            workspace_id: "w".into(),
+            cwd: "/work".into(),
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        })
+        .unwrap();
+        session.execution_binding = Some(
+            crate::execution_environment::ExecutionBinding::from_record(record),
+        );
+        session
+    }
+
+    #[tokio::test]
+    async fn codex_and_claude_managed_continuations_remain_compatible_with_retained_workers() {
+        let root = tempfile::tempdir().unwrap();
+        let retained = root.path().join("retained-worker");
+        std::fs::write(&retained, "#!/bin/sh\nexit 2\n").unwrap();
+        std::fs::set_permissions(&retained, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let empty_profiles = BTreeSet::new();
+        for provider in ["codex", "claude-code"] {
+            let session = managed_session(provider);
+            assert!(
+                !requires_managed_resume_worker(&session, Some(&empty_profiles)),
+                "{provider} must not require managed-resume-v1 probe on retained workers"
+            );
+        }
+
+        let agy_session = managed_session("antigravity");
+        let agy_profiles: BTreeSet<_> = [cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1]
+            .into_iter()
+            .collect();
+        assert!(requires_managed_resume_worker(
+            &agy_session,
+            Some(&agy_profiles)
+        ));
+        assert!(
+            super::super::mcp_launch::ensure_worker_supports_managed_resume(&retained)
+                .await
+                .is_err()
+        );
     }
 }

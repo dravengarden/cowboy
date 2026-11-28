@@ -1235,7 +1235,13 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     endpoint.set_query(None);
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let mut request = endpoint.as_str().into_client_request()?;
-    transport_headers::attach(&mut request)?;
+    let resume_probe =
+        transport_headers::probe_effective_managed_resume(&config.components, &config.providers)
+            .await;
+    transport_headers::attach(
+        &mut request,
+        resume_probe == crate::machine_broker::ManagedResumeProbe::Supported,
+    )?;
     post_edit::attach_upgrade_header(&mut request)?;
     let lane_endpoint = endpoint.clone();
     let (mut socket, response) = reconnect::dial(request, retry.dial_bound()).await?;
@@ -1442,12 +1448,23 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     retry.connected(connected_at);
     let mut last_inbound = connected_at;
     let mut liveness_probe = liveness::Probe::default();
+    let mut refresh_resume =
+        (resume_probe == crate::machine_broker::ManagedResumeProbe::Inconclusive).then(|| {
+            transport_headers::spawn_inconclusive_resume_watcher(
+                Arc::clone(&config.components),
+                Arc::clone(&config.providers),
+            )
+        });
     let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
                 () = liveness::wait(liveness_probe.deadline()) => {
                     tracing::warn!(reason = "liveness_timeout", inbound_idle_ms = last_inbound.elapsed().as_millis(), "Machine Controller liveness probe timed out; reconnecting");
                     bail!("Controller did not answer the WebSocket liveness probe");
+                }
+                () = transport_headers::wait_refresh(&mut refresh_resume) => {
+                    tracing::info!("worker managed-resume capability confirmed after inconclusive initial probe; reconnecting to refresh capabilities");
+                    return Ok(());
                 }
                 _ = heartbeat.tick() => {
                     if let Some(payload) = liveness_probe.ping(

@@ -20,35 +20,40 @@ mod effort_store;
 pub use effort_store::store_session;
 
 pub const SCHEMA: u16 = 1;
-/// Agents a managed call can start. Each must declare the read-only profile.
-pub const CALL_TARGETS: [&str; 2] = ["codex", "claude-code"];
+/// Agents a managed call can start and Tools policy can configure. Each must
+/// declare the read-only profile.
+pub const CALL_TARGETS: [&str; 3] = ["codex", "claude-code", "antigravity"];
+/// Agents enabled by default in built-in Tools policies (and Auto fallback
+/// widening). Antigravity is opt-in in Tools so Auto never spends a personal
+/// Google account silently unless the owner checks it.
+pub const DEFAULT_CALL_TARGETS: [&str; 2] = ["codex", "claude-code"];
 pub const AUTO: &str = "auto";
-/// Agents a managed call may start only when a caller names them explicitly,
-/// for one fresh read-only round: an analysis (a context ask over recorded
-/// history included), a review or a design review. They are never Tools
-/// policy targets, Auto choices or approvals: Antigravity accounts are
-/// personal, so only an explicit request spends one.
+/// Agents with split-only keeper execution and proxy-enforced output schemas
+/// (Antigravity). Explicit `provider: "antigravity"` calls remain admitted
+/// whenever `calls.enabled` is true even if unchecked in Tools; checking
+/// Antigravity in Tools also opts it into Auto / default target selection and
+/// preset pins.
 pub const CONTEXT_ONLY_TARGETS: [&str; 1] = ["antigravity"];
 
 pub fn context_only(agent: &str) -> bool {
     CONTEXT_ONLY_TARGETS.contains(&agent)
 }
 
-/// The single candidate for an explicit request to a context-only agent, or
-/// why the request cannot use that agent. A context ask (an analysis over
-/// recorded history) and a workspace analysis answer in text; a review or
-/// design review may carry Cowboy's own review schema and nothing else. A
-/// review is a second opinion, so it never comes from the caller's own agent.
-pub fn choose_context_only(
-    policy: &CallsPolicy,
-    caller: &str,
-    requested: &str,
+/// Whether `request` satisfies the technical constraints of a context-only
+/// adapter (Antigravity): fresh text context asks, fresh/continued workspace
+/// analyses, fresh/continued review/design-review with Cowboy's checked review
+/// schema, no leading native slash command, and no image profile calls.
+pub fn context_only_request_compatible(
+    agent: &str,
     request: &crate::managed_calls::Request,
-    continued: bool,
-) -> Result<CallTarget, &'static str> {
-    use crate::managed_calls::Purpose;
+) -> bool {
+    if !context_only(agent) {
+        return true;
+    }
+    use crate::managed_calls::{Conversation, Purpose};
     let context_ask = !request.context.sessions.is_empty()
         && request.purpose == Purpose::Analysis
+        && matches!(request.conversation, Conversation::Fresh {})
         && request.output.is_text();
     let workspace = request.context.sessions.is_empty()
         && matches!(
@@ -75,18 +80,33 @@ pub fn choose_context_only(
         .prompt()
         .trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
         .starts_with('/');
-    if continued || !output || slash || !(context_ask || workspace) {
+    output && !slash && (context_ask || workspace)
+}
+
+/// The single candidate for an explicit request to a context-only agent, or
+/// why the request cannot use that agent. Same-vendor reviews are admitted here
+/// and guarded by `selection::exclude_caller_model` (`same_model` exclusion),
+/// matching Codex and Claude. If the owner configured a Tools target pin for
+/// `requested`, its preset/options are inherited.
+pub fn choose_context_only(
+    policy: &CallsPolicy,
+    _caller: &str,
+    requested: &str,
+    request: &crate::managed_calls::Request,
+    _continued: bool,
+) -> Result<CallTarget, &'static str> {
+    if !context_only_request_compatible(requested, request) {
         return Err("unsupported_capability");
-    }
-    if matches!(request.purpose, Purpose::Review | Purpose::DesignReview)
-        && same_family(requested, caller)
-    {
-        return Err("same_agent");
     }
     if !policy.enabled {
         return Err("calls_disabled");
     }
-    Ok(own_target(requested))
+    Ok(policy
+        .targets
+        .iter()
+        .find(|target| target.agent == requested)
+        .cloned()
+        .unwrap_or_else(|| own_target(requested)))
 }
 
 /// Agents of one family (`claude-code`, `claude-deepseek`; `codex`,
@@ -101,9 +121,19 @@ pub fn same_family(left: &str, right: &str) -> bool {
     family(left) == family(right)
 }
 
-/// The call targets an agent of `caller`'s kind may use at all.
+/// Whether `caller` may configure `target` as an explicit Tools call target.
+/// Single-vendor families (`claude-*`, `codex-*`) never configure their own
+/// family; Antigravity hosts multiple distinct model families, so an
+/// Antigravity session may explicitly opt Antigravity into Auto while remaining
+/// unchecked by default and guarded by `same_model` exclusion.
+#[must_use]
+pub fn target_allowed_for_caller(target: &str, caller: &str) -> bool {
+    !same_family(target, caller) || (target == "antigravity" && caller == "antigravity")
+}
+
+/// The built-in call targets enabled by default for `caller`'s kind.
 fn callable(caller: &str) -> impl Iterator<Item = &'static str> + '_ {
-    CALL_TARGETS
+    DEFAULT_CALL_TARGETS
         .into_iter()
         .filter(move |target| !same_family(target, caller))
 }
@@ -743,12 +773,12 @@ impl AgentTools {
             && MAX_PER_TURN.contains(&self.calls.max_per_turn)
     }
 
-    /// Drop targets of the caller's own family (stored before this rule, or
-    /// written by hand); a default naming one falls back to Auto.
+    /// Drop targets disallowed for `caller` (e.g. single-vendor own-family
+    /// targets); a default naming one falls back to Auto.
     pub fn for_caller(mut self, caller: &str) -> Self {
         self.calls
             .targets
-            .retain(|target| !same_family(&target.agent, caller));
+            .retain(|target| target_allowed_for_caller(&target.agent, caller));
         if !valid_default(&self.calls.default, &self.calls.targets) {
             AUTO.clone_into(&mut self.calls.default);
         }
@@ -864,13 +894,13 @@ pub fn effective(state: &AppState, session: &crate::core::SessionMeta) -> AgentT
 pub fn continuation_settings(mut current: SessionTools, provider: &str) -> SessionTools {
     if let Some(targets) = &mut current.calls.targets {
         let had_targets = !targets.is_empty();
-        targets.retain(|target| !same_family(&target.agent, provider));
+        targets.retain(|target| target_allowed_for_caller(&target.agent, provider));
         if had_targets && targets.is_empty() {
             current.calls.enabled = Some(false);
         }
     }
     if current.calls.default.as_ref().is_some_and(|default| {
-        same_family(default, provider)
+        !target_allowed_for_caller(default, provider)
             || current
                 .calls
                 .targets
@@ -1039,7 +1069,7 @@ fn widen(targets: &mut Vec<CallTarget>, caller: &str, requested: &str) {
             Vec::new()
         }
     } else if CALL_TARGETS.contains(&requested)
-        && !same_family(requested, caller)
+        && target_allowed_for_caller(requested, caller)
         && !targets.iter().any(|target| target.agent == requested)
     {
         vec![requested]
@@ -1091,7 +1121,7 @@ pub fn choose(
     own_family: bool,
 ) -> Choice {
     // Not a policy question a person could answer: never offered, never asked.
-    if requested != AUTO && same_family(requested, parent_agent) {
+    if requested != AUTO && !target_allowed_for_caller(requested, parent_agent) {
         if !own_family {
             return Choice::Refused("same_agent");
         }
@@ -1131,9 +1161,11 @@ pub fn choose(
     // otherwise.
     let mut targets = policy.targets.clone();
     targets.sort_by_key(|target| target.agent == parent_agent);
+    // Implicit own-family Auto fallback applies only to default call targets;
+    // Antigravity is never spent by Auto without explicit Tools opt-in.
     if own_family {
         targets.extend(
-            CALL_TARGETS
+            DEFAULT_CALL_TARGETS
                 .into_iter()
                 .filter(|agent| same_family(agent, parent_agent))
                 .map(own_target),
@@ -1286,7 +1318,7 @@ fn catalog(state: &AppState, caller: Option<&str>) -> serde_json::Value {
     json!({
         "review_routing": &*REVIEW_ROUTING,
         "call_targets": CALL_TARGETS.iter().filter(|agent| {
-            caller.is_none_or(|caller| !same_family(agent, caller))
+            caller.is_none_or(|caller| target_allowed_for_caller(agent, caller))
         }).map(|agent| json!({
             "agent": agent,
             "presets": presets(state, agent),
@@ -1729,7 +1761,17 @@ mod tests {
                 "antigravity"
             );
         }
-        // A context ask answers in text; nothing is continued.
+        // Continued rounds are admitted for analysis and review alike.
+        for request in [&plain, &review, &design] {
+            assert_eq!(
+                choose_context_only(&on, "codex", "antigravity", request, true)
+                    .unwrap()
+                    .agent,
+                "antigravity"
+            );
+        }
+        // Technical boundaries stay enforced: no non-review JSON schema, no
+        // text-only reviews, no leading slash commands.
         for (request, continued) in [
             (&structured_history, false),
             (&custom, false),
@@ -1737,22 +1779,32 @@ mod tests {
             (&slash, false),
             (&bom, false),
             (&structured_analysis, false),
-            (&plain, true),
-            (&review, true),
         ] {
             assert_eq!(
                 choose_context_only(&on, "codex", "antigravity", request, continued).err(),
                 Some("unsupported_capability")
             );
         }
-        // A review is a second opinion: never Antigravity's own.
-        for request in [&review, &design] {
-            assert_eq!(
-                choose_context_only(&on, "antigravity", "antigravity", request, false).err(),
-                Some("same_agent")
-            );
+        // Same-vendor Antigravity reviews are admitted here (same-model
+        // exclusion is enforced during review routing).
+        for request in [&review, &design, &context] {
+            assert!(choose_context_only(&on, "antigravity", "antigravity", request, false).is_ok());
         }
-        assert!(choose_context_only(&on, "antigravity", "antigravity", &context, false).is_ok());
+        // Opt-in Tools target preset is inherited on explicit calls.
+        let mut opted_in = AgentTools::builtin("codex");
+        opted_in.calls.targets.push(CallTarget {
+            agent: "antigravity".to_owned(),
+            preset: Some("gemini-neon-high".to_owned()),
+            options: None,
+        });
+        assert!(opted_in.validate());
+        assert_eq!(
+            choose_context_only(&opted_in.calls, "codex", "antigravity", &plain, false)
+                .unwrap()
+                .preset
+                .as_deref(),
+            Some("gemini-neon-high")
+        );
         let mut off = on.clone();
         off.enabled = false;
         assert_eq!(
@@ -1762,12 +1814,19 @@ mod tests {
         // Never a policy target, approval widening or Auto candidate.
         for caller in ["codex", "claude-code", "antigravity"] {
             assert!(callable(caller).all(|agent| !context_only(agent)));
+            let builtin = AgentTools::builtin(caller).calls;
             assert!(
-                AgentTools::builtin(caller)
-                    .calls
+                builtin
                     .targets
                     .iter()
                     .all(|target| !context_only(&target.agent))
+            );
+            // Auto with own_family fallback never adds Antigravity without explicit Tools opt-in.
+            assert!(
+                agents(choose(&builtin, caller, AUTO, true))
+                    .into_iter()
+                    .all(|agent| !context_only(&agent)),
+                "caller {caller} auto leaked antigravity"
             );
         }
     }
@@ -1852,5 +1911,62 @@ mod tests {
         assert!(image_widens(&policy(false, false), &policy(true, false)));
         assert!(image_widens(&policy(true, false), &policy(true, true)));
         assert!(!image_widens(&policy(true, true), &policy(false, false)));
+    }
+
+    #[test]
+    fn antigravity_sessions_may_opt_antigravity_into_auto_while_defaulting_off() {
+        let builtin = AgentTools::builtin("antigravity");
+        assert!(
+            !builtin
+                .calls
+                .targets
+                .iter()
+                .any(|target| target.agent == "antigravity"),
+            "Antigravity stays unchecked by default"
+        );
+        let mut opted = builtin.clone();
+        opted.calls.targets.push(CallTarget {
+            agent: "antigravity".into(),
+            preset: None,
+            options: None,
+        });
+        let preserved = opted.clone().for_caller("antigravity");
+        assert!(
+            preserved
+                .calls
+                .targets
+                .iter()
+                .any(|target| target.agent == "antigravity")
+        );
+        let Choice::Candidates { targets, selection } =
+            choose(&preserved.calls, "antigravity", AUTO, true)
+        else {
+            panic!("expected candidates");
+        };
+        assert_eq!(selection, AUTO);
+        let agents: Vec<&str> = targets.iter().map(|t| t.agent.as_str()).collect();
+        assert_eq!(agents.last().copied(), Some("antigravity"));
+        assert_eq!(agents.len(), 3);
+        // Unchecked Antigravity is still excluded from Auto even when own_family=true.
+        let Choice::Candidates { targets, .. } = choose(&builtin.calls, "antigravity", AUTO, true)
+        else {
+            panic!("expected candidates");
+        };
+        assert!(!targets.iter().any(|target| target.agent == "antigravity"));
+        // Single-vendor families still drop themselves in for_caller.
+        let mut codex_self = AgentTools::builtin("codex");
+        codex_self.calls.targets.push(CallTarget {
+            agent: "codex".into(),
+            preset: None,
+            options: None,
+        });
+        assert!(
+            !codex_self
+                .for_caller("codex")
+                .calls
+                .targets
+                .iter()
+                .any(|target| target.agent == "codex")
+        );
     }
 }

@@ -1878,6 +1878,7 @@ impl MachinePluginStore {
         );
         let command = runtime_command(&package_path, &payload.launch_command)?;
         Ok(ProviderLaunchContext {
+            managed_continue_profiles: launch_context::managed_continue_profiles(package),
             mcp_bindings: package
                 .manifest
                 .runtime

@@ -29,6 +29,11 @@ pub const STREAM: &str = "deflate-stream-v1";
 /// enforcement on `CoreCommand::HibernateSession` without altering the
 /// retained worker wire interface.
 pub const HIBERNATION_EPOCH_HEADER: &str = "x-cowboy-machine-hibernation-epoch";
+/// Host-layer upgrade header advertising that this Machine's worker writes the
+/// trusted `managed_session_id` into account-sandboxed execution descriptors
+/// when resuming a managed child, enabling safe Antigravity continuation.
+pub const MANAGED_RESUME_HEADER: &str = "x-cowboy-machine-managed-resume";
+pub const MANAGED_RESUME_V1: &str = "v1";
 pub const HIBERNATION_EPOCH_V1: &str = "epoch-v1";
 const CHUNK_BYTES: usize = 16 * 1024;
 // Chunk bytes sent beyond the receiver's credit: at the measured ~100 KiB/s

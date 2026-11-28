@@ -15,7 +15,24 @@ impl From<&'static str> for Failure {
     }
 }
 
-pub async fn ready(state: &AppState, store: &Store, record: &Record) -> Result<(), Failure> {
+pub async fn ready_for_reconfirm(
+    state: &AppState,
+    store: &Store,
+    record: &Record,
+    request: &Request,
+) -> Result<(), Failure> {
+    let expected = super::super::coordinator::readiness::expected_resume_for_reconfirm(
+        state, record, request,
+    )?;
+    ready(state, store, record, expected.as_deref()).await
+}
+
+pub async fn ready(
+    state: &AppState,
+    store: &Store,
+    record: &Record,
+    expected_resume: Option<&str>,
+) -> Result<(), Failure> {
     let child = &record.child_session_id;
     // Without a preset the child would run its default model, which the
     // reviewer allowlist never vetted.
@@ -62,8 +79,14 @@ pub async fn ready(state: &AppState, store: &Store, record: &Record) -> Result<(
     };
     state
         .supervisor
-        .start_registered_session(child)
-        .map_err(|_| "provider_unavailable")?;
+        .start_registered_session_requiring_resume(child, expected_resume)
+        .map_err(|error| {
+            if error == "conversation_unavailable" {
+                "conversation_unavailable"
+            } else {
+                "provider_unavailable"
+            }
+        })?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         if *state.shutdown.borrow() {

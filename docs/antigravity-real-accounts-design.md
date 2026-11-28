@@ -1650,9 +1650,11 @@ waiting, so a model can run two at once and collect both.
   evidence is an unproven outcome. A helper process that cannot be confirmed
   closed (a failed read, a timeout whose termination is not confirmed) is a
   lost effect.
-- **Bounded.** One level only (a child's `Subagent` call fails), at most 2
-  running at once and 8 started per turn, a prompt of at most 64 KiB, a report
-  of at most 64 K characters, nothing in plan mode or before the mode is known.
+- **Bounded.** One level only (a child's `Subagent` call fails), a prompt of at
+  most 64 KiB, a report of at most 64 K characters, nothing in plan mode or
+  before the mode is known. Concurrency and per-turn child count are bounded by
+  the host `cowboy-accounts.slice` memory budget rather than artificial proxy
+  caps (owner decision, 2026-11-28).
 - **Nothing outlives the turn, and a stop fails closed.** The parent's prompt
   ending, its cancel or its Stop cancels every child (their facade turns are
   fenced and `agy` is asked to stop in the same tick) after the parent's own

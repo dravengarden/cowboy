@@ -1852,8 +1852,111 @@ fn copy_undo_requires_the_original_unsent_row() {
         .schedule = Some(DraftSchedule {
         fire_at_ms: i64::MAX,
         delivery: Delivery::default(),
+        scheduled_by: Some(crate::prompt_origin::DeliveryOrigin::Owner),
     });
     assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-2", "original", &content));
+}
+
+#[tokio::test]
+async fn automation_scheduling_owner_draft_never_produces_owner_schedule_trigger() {
+    let hub = hub_with_session("sched-origin");
+    let (tx, mut rx) = mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("sched-origin", Status::Running, None);
+    let owner = crate::prompt_origin::RequestCaller::Person;
+    let automation = crate::prompt_origin::RequestCaller::Automation;
+    // Owner authors a plain parked draft.
+    hub.add_draft(
+        "sched-origin",
+        "owner-written text".into(),
+        vec![],
+        Some("draft-owner-1".into()),
+        &owner,
+    );
+    let draft_id = hub.inner.sessions.lock()["sched-origin"].drafts[0]
+        .id
+        .clone();
+    // Automation schedules that existing draft without replacing its text.
+    hub.schedule_draft(
+        "sched-origin",
+        Some(draft_id.clone()),
+        None,
+        String::new(),
+        vec![],
+        1,
+        Delivery::Back,
+        &automation,
+    );
+    hub.fire_scheduled_draft("sched-origin", &draft_id);
+    let req = rx.try_recv().expect("fired draft dispatches");
+    assert_eq!(
+        req.origin,
+        Some(crate::prompt_origin::DeliveryOrigin::Owner)
+    );
+    assert_eq!(
+        req.trigger,
+        crate::prompt_origin::DeliveryOrigin::Automation
+    );
+    assert!(!req.dispatch_origin.is_owner());
+    drop(req);
+    hub.set_status("sched-origin", Status::Busy, None);
+    hub.complete_turn("sched-origin");
+    hub.set_status("sched-origin", Status::Running, None);
+
+    // A legacy persisted schedule with `scheduled_by: None` also fails closed.
+    hub.add_draft(
+        "sched-origin",
+        "legacy scheduled".into(),
+        vec![],
+        Some("draft-legacy".into()),
+        &owner,
+    );
+    let legacy_id = {
+        let mut sessions = hub.inner.sessions.lock();
+        let d = &mut sessions.get_mut("sched-origin").unwrap().drafts[0];
+        d.schedule = Some(DraftSchedule {
+            fire_at_ms: 1,
+            delivery: Delivery::Back,
+            scheduled_by: None,
+        });
+        d.id.clone()
+    };
+    hub.fire_scheduled_draft("sched-origin", &legacy_id);
+    let req_legacy = rx.try_recv().expect("legacy scheduled draft dispatches");
+    assert_eq!(
+        req_legacy.trigger,
+        crate::prompt_origin::DeliveryOrigin::cowboy("schedule_unverified")
+    );
+    assert!(!req_legacy.dispatch_origin.is_owner());
+    drop(req_legacy);
+    hub.set_status("sched-origin", Status::Busy, None);
+    hub.complete_turn("sched-origin");
+    hub.set_status("sched-origin", Status::Running, None);
+
+    // By contrast, an owner-scheduled owner draft gets the verified schedule trigger.
+    hub.schedule_draft(
+        "sched-origin",
+        None,
+        Some("draft-owner-2".into()),
+        "owner scheduled".into(),
+        vec![],
+        1,
+        Delivery::Back,
+        &owner,
+    );
+    let draft2_id = hub.inner.sessions.lock()["sched-origin"].drafts[0]
+        .id
+        .clone();
+    hub.fire_scheduled_draft("sched-origin", &draft2_id);
+    let req2 = rx.try_recv().expect("owner scheduled draft dispatches");
+    assert_eq!(
+        req2.origin,
+        Some(crate::prompt_origin::DeliveryOrigin::Owner)
+    );
+    assert_eq!(
+        req2.trigger,
+        crate::prompt_origin::DeliveryOrigin::cowboy("schedule_owner")
+    );
 }
 
 #[tokio::test]

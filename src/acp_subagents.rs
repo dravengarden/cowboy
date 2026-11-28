@@ -518,19 +518,23 @@ impl Subagents {
                 .and_then(Value::as_str)
                 .map(label);
         }
-        Some(self.publish(&id, now, now_ms))
+        let snapshot = self.publish(&id, now, now_ms);
+        self.evict_settled(MAX_CHILDREN);
+        Some(snapshot)
     }
 
-    fn insert(&mut self, id: &str, parent: Option<&str>) {
-        if self.retired.remove(id) {
-            self.retired_order.retain(|retired| retired != id);
-        }
-        if self.children.len() >= MAX_CHILDREN {
-            let victim = self
+    /// Evict oldest settled (non-working) children until total tracked children
+    /// fit `limit` or only live working children remain. Live children are never
+    /// evicted so their cancellation state and updates stay intact.
+    fn evict_settled(&mut self, limit: usize) {
+        while self.children.len() > limit {
+            let Some(victim) = self
                 .order
                 .iter()
                 .position(|old| self.children.get(old).is_none_or(|child| !child.working()))
-                .unwrap_or(0);
+            else {
+                break;
+            };
             if let Some(old) = self.order.remove(victim) {
                 self.children.remove(&old);
                 self.links.retain(|_, (child, _)| child != &old);
@@ -543,6 +547,13 @@ impl Subagents {
                 }
             }
         }
+    }
+
+    fn insert(&mut self, id: &str, parent: Option<&str>) {
+        if self.retired.remove(id) {
+            self.retired_order.retain(|retired| retired != id);
+        }
+        self.evict_settled(MAX_CHILDREN.saturating_sub(1));
         self.children.insert(
             id.to_owned(),
             Child {
@@ -1205,5 +1216,41 @@ mod tests {
         );
         assert_eq!(spoke.snapshots.len(), 1);
         assert_eq!(spoke.snapshots[0]["reporting"], true);
+    }
+
+    #[test]
+    fn live_working_subagents_are_never_evicted_past_max_children_and_settled_ones_evict_afterward()
+    {
+        let mut subagents = Subagents::default();
+        let now = Instant::now();
+        for i in 0..(MAX_CHILDREN + 4) {
+            let id = format!("child-{i}");
+            subagents.route(
+                ROOT,
+                &announce(
+                    &id,
+                    &json!({ "capabilities": { "cancel": {} }, "state": { "state": "running" } }),
+                ),
+                now,
+                i as u64,
+            );
+        }
+        assert_eq!(subagents.children.len(), MAX_CHILDREN + 4);
+        assert!(subagents.can_cancel("child-0"));
+        assert!(subagents.can_cancel(&format!("child-{}", MAX_CHILDREN + 3)));
+
+        // Settling excess children evicts oldest settled entries back down to MAX_CHILDREN.
+        for i in 0_u64..6 {
+            let id = format!("child-{i}");
+            subagents.route(
+                ROOT,
+                &announce(&id, &json!({ "state": { "state": "idle" } })),
+                now,
+                1_000 + i,
+            );
+        }
+        assert_eq!(subagents.children.len(), MAX_CHILDREN);
+        assert!(!subagents.can_cancel("child-0"));
+        assert!(subagents.can_cancel("child-6"));
     }
 }

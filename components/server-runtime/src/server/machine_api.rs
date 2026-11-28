@@ -504,12 +504,16 @@ pub async fn machine_ws_upgrade(
     let hibernation_epoch = headers
         .get(crate::machine_transport::HIBERNATION_EPOCH_HEADER)
         .is_some_and(|value| value == crate::machine_transport::HIBERNATION_EPOCH_V1);
+    let managed_resume = headers
+        .get(crate::machine_transport::MANAGED_RESUME_HEADER)
+        .is_some_and(|value| value == crate::machine_transport::MANAGED_RESUME_V1);
     let upgrade_token = lane_token.clone();
-    let upgrade_post_edit = (
-        post_edit_token.clone(),
+    let upgrade_post_edit = MachineUpgradeCaps {
+        post_edit_token: post_edit_token.clone(),
         post_edit_workspace,
         hibernation_epoch,
-    );
+        managed_resume,
+    };
     let mut response = ws.on_upgrade(move |socket| {
         handle_machine_ws(
             socket,
