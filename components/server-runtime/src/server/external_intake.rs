@@ -487,6 +487,7 @@ async fn observe_and_emit(
 ) {
     let mut events = service.state.hub.subscribe();
     let deadline = tokio::time::Instant::now() + service.config.timeout;
+    let mut started = false;
     let outcome = loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
             Ok(Ok(frame)) => match frame.outbound() {
@@ -496,14 +497,17 @@ async fn observe_and_emit(
                 {
                     break Ok(extract_assistant_text(&service.state.hub, &session_id));
                 }
-                Outbound::SessionUpdated { session }
-                    if session.id == session_id
-                        && matches!(
-                            session.status,
-                            crate::core::Status::Crashed | crate::core::Status::Exited
-                        ) =>
-                {
-                    break Err("session_terminated_before_turn_end".to_owned());
+                Outbound::SessionUpdated { session } if session.id == session_id => {
+                    if matches!(
+                        session.status,
+                        crate::core::Status::Running | crate::core::Status::Busy
+                    ) {
+                        started = true;
+                    } else if matches!(session.status, crate::core::Status::Crashed)
+                        || (started && matches!(session.status, crate::core::Status::Exited))
+                    {
+                        break Err("session_terminated_before_turn_end".to_owned());
+                    }
                 }
                 _ => {}
             },
