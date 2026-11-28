@@ -16,6 +16,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let runtime_restrictions = Arc::new(crate::project_placement::RuntimeRestrictions::parse(
         &args.provider_runtime_machines,
     )?);
+    let intake_config = external_intake::Config::from_serve_args(&args)?;
     if args.check_plugin_catalog {
         return print_plugin_catalog_preflight(&args);
     }
@@ -288,7 +289,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let code_holdings_task = tokio::spawn(agent_api::maintain_holdings(Arc::clone(&state)));
 
     let (runtime_router, hub) = (Arc::clone(&state.runtime_router), state.hub.clone());
-    let result = serve_axum(args.bind, args.data_dir.clone(), state, shutdown_tx).await;
+    let result = serve_axum(
+        args.bind,
+        args.data_dir.clone(),
+        state,
+        shutdown_tx,
+        intake_config,
+    )
+    .await;
     code_holdings_task.abort();
     let _ = code_holdings_task.await;
     // Persistence closes below; events consumed after this point would be
@@ -320,6 +328,7 @@ async fn serve_axum(
     data_dir: PathBuf,
     state: Arc<AppState>,
     shutdown_tx: watch::Sender<bool>,
+    intake_config: external_intake::Config,
 ) -> anyhow::Result<()> {
     provider_accounts::browser::install_observer(&state.accounts);
     session_maintenance::start(&state);
@@ -381,6 +390,10 @@ async fn serve_axum(
             enforce_product_api,
         ))
         .merge(product_auth_router(auth_state))
+        .merge(external_intake::routes(external_intake::Service::new(
+            Arc::clone(&state),
+            intake_config,
+        )))
         .layer(middleware::from_fn_with_state(
             secure_transport,
             secure_transport::enforce,

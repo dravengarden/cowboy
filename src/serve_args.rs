@@ -236,6 +236,32 @@ pub struct ServeArgs {
         value_delimiter = ','
     )]
     pub colocated_machines: Vec<String>,
+
+    /// Optional Bearer token file enabling the product-neutral External Intake
+    /// HTTP surface (`/api/v1/intake/dispatch`). Disabled when omitted.
+    #[arg(long, env = "COWBOY_INTAKE_TOKEN_FILE")]
+    pub intake_token_file: Option<PathBuf>,
+
+    /// Optional host Unix socket where External Intake writes turn-end verdict
+    /// JSON lines (`{"verdict": ...}`).
+    #[arg(long, env = "COWBOY_INTAKE_VERDICT_SOCKET")]
+    pub intake_verdict_socket: Option<PathBuf>,
+
+    /// Provider used for External Intake sessions (defaults to `codex`).
+    #[arg(long, env = "COWBOY_INTAKE_PROVIDER")]
+    pub intake_provider: Option<String>,
+
+    /// Target machine ID for External Intake sessions (defaults to `local`).
+    #[arg(long, env = "COWBOY_INTAKE_MACHINE")]
+    pub intake_machine: Option<String>,
+
+    /// Workspace directory for External Intake sessions (defaults to workspace root).
+    #[arg(long, env = "COWBOY_INTAKE_WORKSPACE")]
+    pub intake_workspace: Option<PathBuf>,
+
+    /// Optional public base URL used to compose `session_url` links on intake verdicts.
+    #[arg(long, env = "COWBOY_INTAKE_PUBLIC_URL")]
+    pub intake_public_url: Option<String>,
 }
 
 /// Explicit private rollout policy, independent of Machine protocol support.

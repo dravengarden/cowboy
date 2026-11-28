@@ -94,6 +94,7 @@ pub mod cardea_authorization;
 pub use cowboy_server_code_buffers::server::code_buffers;
 pub mod draft_documents;
 pub mod execution;
+pub mod external_intake;
 #[cfg(unix)]
 pub mod local_operator;
 pub mod machine_lanes;
