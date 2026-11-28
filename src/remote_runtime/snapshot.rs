@@ -394,6 +394,7 @@ pub(super) fn handle_crashed_drain_command_ack(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn seed_crashed_sightings(
     workers: &[WorkerSnapshot],
 ) -> std::collections::HashMap<String, SightingActivity> {
@@ -409,6 +410,7 @@ pub(super) fn seed_crashed_sightings(
         .collect()
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn seed_draining_crashed_epochs(
     workers: &[WorkerSnapshot],
 ) -> std::collections::HashMap<String, DrainingCrashedEpoch> {
