@@ -16,16 +16,29 @@ export interface ContextRolloverView {
   context_used: number;
   idle_ms: number | null;
   due: boolean;
+  dormant?: boolean;
+  pending_work?: boolean;
+  keepalive_handoff_supported?: boolean;
   recommended_idle_minutes?: number | null;
   policy_restricted?: boolean;
   restriction?: string | null;
+}
+
+export interface ContextRolloverCaptionContext {
+  dormant?: boolean | undefined;
+  pendingWork?: boolean | undefined;
+  keepaliveStatus?: DeepseekCacheProtectionStatus | null | undefined;
+  handoffSupported?: boolean | undefined;
 }
 
 function contextRolloverUrl(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/context-rollover`;
 }
 
-export function contextRolloverCaption(view: ContextRolloverView): string {
+export function contextRolloverCaption(
+  view: ContextRolloverView,
+  context?: ContextRolloverCaptionContext,
+): string {
   if (view.policy_restricted) {
     return (
       view.restriction ??
@@ -39,7 +52,26 @@ export function contextRolloverCaption(view: ContextRolloverView): string {
     return "Off for this Provider (configure in Settings → Agent).";
   }
   if (view.due) {
-    return "The prompt cache has expired: your next message starts a fresh context and reads earlier history on demand.";
+    const keepaliveStatus = context?.keepaliveStatus ?? null;
+    if (keepaliveStatus?.state === "protected") {
+      return "Gateway keepalive is active; idle renewal waits until keepalive expires or is revoked.";
+    }
+    const dormant = context?.dormant ?? view.dormant;
+    const pendingWork = context?.pendingWork ?? view.pending_work;
+    const handoffSupported = context?.handoffSupported ?? view.keepalive_handoff_supported;
+    if (dormant === false) {
+      if (keepaliveStatus?.configuredEnabled === true && handoffSupported === false) {
+        return "The prompt cache window has expired, but this Machine predates automatic keepalive handoff: hibernate or Clear to start a fresh context.";
+      }
+      if (pendingWork === true) {
+        return "The prompt cache window has expired, but queued or background work is blocking hibernation; renewal runs once idle and dormant.";
+      }
+      return "The prompt cache window has expired; your next message starts a fresh context once this session hibernates.";
+    }
+    if (dormant === true) {
+      return "The prompt cache has expired: your next message starts a fresh context and reads earlier history on demand.";
+    }
+    return "The prompt cache window has expired: once dormant, your next message starts a fresh context and reads earlier history on demand.";
   }
   const idle = formatIdleMinutesLabel(view.policy.idle_minutes);
   const tokens = `${Math.round(view.policy.min_context_tokens / 1_000)}k`;
@@ -51,9 +83,17 @@ export function contextRolloverCaption(view: ContextRolloverView): string {
 /** Session control for renewing the agent context after its cache expired. */
 export function ContextRolloverSettings({
   sessionId,
+  dormant,
+  pendingWork,
+  keepaliveStatus,
+  handoffSupported,
   onPolicyChange,
 }: {
   sessionId: string;
+  dormant?: boolean | undefined;
+  pendingWork?: boolean | undefined;
+  keepaliveStatus?: DeepseekCacheProtectionStatus | null | undefined;
+  handoffSupported?: boolean | undefined;
   onPolicyChange?: (() => void) | undefined;
 }): React.JSX.Element | null {
   const [view, setView] = useState<ContextRolloverView | null>(null);
@@ -110,7 +150,7 @@ export function ContextRolloverSettings({
           Fresh context after cache expiry
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          {contextRolloverCaption(view)}
+          {contextRolloverCaption(view, { dormant, pendingWork, keepaliveStatus, handoffSupported })}
         </Typography>
       </Stack>
     );
@@ -128,7 +168,7 @@ export function ContextRolloverSettings({
         />
       </Stack>
       <Typography variant="caption" color={view.due ? "warning.main" : "text.secondary"}>
-        {contextRolloverCaption(view)}
+        {contextRolloverCaption(view, { dormant, pendingWork, keepaliveStatus, handoffSupported })}
       </Typography>
       {view.policy.session_override !== null && (
         <Button

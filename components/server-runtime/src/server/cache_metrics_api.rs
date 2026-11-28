@@ -104,6 +104,8 @@ pub struct RolloverStrategyView {
 pub struct KeepaliveStrategyView {
     pub supported: Option<bool>,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub handoff_supported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -133,6 +135,8 @@ pub struct SessionCacheMetricsResponse {
     pub context_stale: bool,
     pub active_turn: bool,
     pub pending_work: bool,
+    #[serde(default)]
+    pub dormant: bool,
 }
 
 fn no_store_json<T: Serialize>(payload: T) -> Response {
@@ -389,7 +393,9 @@ struct SessionCacheStrategyInput<'a> {
     rollover_policy: Option<crate::context_rollover::Policy>,
     idle_ms: Option<u64>,
     due: bool,
+    dormant: bool,
     native_fork: bool,
+    handoff_supported: bool,
     keepalive_evidence: Option<&'a SessionKeepaliveEvidence>,
 }
 
@@ -405,7 +411,9 @@ async fn load_authorized_session_cache_metrics(
         rollover_policy,
         idle_ms,
         due,
+        dormant,
         native_fork,
+        handoff_supported,
         keepalive_evidence,
     } = input;
     if !session_is_visible(hub, principal, session_id) {
@@ -503,6 +511,8 @@ async fn load_authorized_session_cache_metrics(
         gateway_keepalive: KeepaliveStrategyView {
             supported: keepalive_cap.supports(),
             enabled: keepalive_enabled,
+            handoff_supported: keepalive_cap == KeepaliveCapability::Verified(true)
+                && handoff_supported,
         },
     };
 
@@ -525,6 +535,7 @@ async fn load_authorized_session_cache_metrics(
         context_stale: meta.context_usage_stale(),
         active_turn,
         pending_work,
+        dormant,
     })
 }
 
@@ -601,7 +612,11 @@ pub async fn session_cache_metrics(
             })
             && super::session_context::rollover::is_ordinary_session(&state, &meta)
     });
+    let dormant = state.supervisor.is_dormant_for_renewal(&meta.id);
     let native_fork = state.hub.session_fork(&meta.id).is_some();
+    let handoff_supported = state
+        .machine_control
+        .supports_hibernation_epoch(&meta.machine_id);
     let keepalive_evidence = resolve_session_keepalive_evidence(&state.provider_catalog, &meta);
 
     match load_authorized_session_cache_metrics(
@@ -614,7 +629,9 @@ pub async fn session_cache_metrics(
             rollover_policy,
             idle_ms,
             due,
+            dormant,
             native_fork,
+            handoff_supported,
             keepalive_evidence: keepalive_evidence.as_ref(),
         },
     )
@@ -1038,7 +1055,9 @@ mod tests {
                 rollover_policy: Some(fork_policy.clone()),
                 idle_ms: Some(3_600_000),
                 due: true,
+                dormant: false,
                 native_fork: true,
+                handoff_supported: false,
                 keepalive_evidence: Some(&verified_portable),
             },
         )
@@ -1063,10 +1082,12 @@ mod tests {
             "sess-a",
             &SessionCacheMetricsQuery::default(),
             SessionCacheStrategyInput {
-                rollover_policy: Some(fork_policy),
+                rollover_policy: Some(fork_policy.clone()),
                 idle_ms: Some(60_000),
                 due: false,
+                dormant: false,
                 native_fork: false,
+                handoff_supported: true,
                 keepalive_evidence: Some(&unverified_dsh),
             },
         )
@@ -1079,10 +1100,57 @@ mod tests {
         );
         assert_eq!(dsh_res.strategy.gateway_keepalive.supported, None);
         assert_eq!(dsh_res.strategy.gateway_keepalive.enabled, None);
+        assert!(!dsh_res.strategy.gateway_keepalive.handoff_supported);
         assert_eq!(
             dsh_res.strategy.effective_mode,
             "rollover_keepalive_unknown"
         );
+
+        let verified_dsh = SessionKeepaliveEvidence {
+            configuration: cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
+            policy_transport_verified: Some(true),
+        };
+        let handoff_ready = load_authorized_session_cache_metrics(
+            &hub,
+            &store,
+            &principal_a,
+            "sess-a",
+            &SessionCacheMetricsQuery::default(),
+            SessionCacheStrategyInput {
+                rollover_policy: Some(fork_policy.clone()),
+                idle_ms: Some(60_000),
+                due: false,
+                dormant: true,
+                native_fork: false,
+                handoff_supported: true,
+                keepalive_evidence: Some(&verified_dsh),
+            },
+        )
+        .await
+        .expect("verified gateway metrics");
+        assert!(handoff_ready.dormant);
+        assert!(handoff_ready.strategy.gateway_keepalive.handoff_supported);
+
+        let pre55_machine = load_authorized_session_cache_metrics(
+            &hub,
+            &store,
+            &principal_a,
+            "sess-a",
+            &SessionCacheMetricsQuery::default(),
+            SessionCacheStrategyInput {
+                rollover_policy: Some(fork_policy),
+                idle_ms: Some(60_000),
+                due: false,
+                dormant: false,
+                native_fork: false,
+                handoff_supported: false,
+                keepalive_evidence: Some(&verified_dsh),
+            },
+        )
+        .await
+        .expect("pre-55 gateway metrics");
+        assert!(!pre55_machine.dormant);
+        assert!(!pre55_machine.strategy.gateway_keepalive.handoff_supported);
     }
 
     #[tokio::test]
@@ -1135,7 +1203,9 @@ mod tests {
                 rollover_policy: None,
                 idle_ms: Some(45 * 60_000),
                 due: false,
+                dormant: false,
                 native_fork: false,
+                handoff_supported: false,
                 keepalive_evidence: None,
             },
         )

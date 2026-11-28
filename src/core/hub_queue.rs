@@ -448,42 +448,6 @@ impl Hub {
         );
     }
 
-    /// Atomically validate idle-rollover hibernation admission under the same
-    /// Hub session mutex that serializes prompt submission, scheduled drafts,
-    /// pause/resume, and queue draining.
-    pub fn admit_idle_hibernation(
-        &self,
-        session_id: &str,
-        min_idle: std::time::Duration,
-        min_context_tokens: u64,
-    ) -> Result<(), String> {
-        let sessions = self.inner.sessions.lock();
-        let Some(s) = sessions.get(session_id) else {
-            return Err(format!("unknown session {session_id:?}"));
-        };
-        if s.meta.status != Status::Running
-            || s.in_flight
-            || !s.queue.is_empty()
-            || s.meta.background_tasks > 0
-        {
-            return Err("session is active or has queued work".to_owned());
-        }
-        if s.meta.context_usage_stale() || s.meta.context_used < min_context_tokens {
-            return Err("session context does not qualify for renewal".to_owned());
-        }
-        if s.last_activity.elapsed() < min_idle {
-            return Err("session became active before hibernation".to_owned());
-        }
-        let configuration =
-            configuration_behavior(&s.meta.provider, s.meta.provider_behavior.as_ref());
-        if crate::managed_config::cache_protection(&configuration, &s.config_preferences)
-            == Some(true)
-        {
-            return Err("session has explicit paid cache keepalive enabled".to_owned());
-        }
-        Ok(())
-    }
-
     pub(super) fn try_drain(&self, session_id: &str) {
         self.drain_head(session_id, false, false, None);
     }

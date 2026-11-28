@@ -41,6 +41,14 @@ fn session_restricted(state: &AppState, meta: &crate::core::SessionMeta) -> bool
         || state.hub.session_fork(&meta.id).is_some()
 }
 
+/// Shared reader/writer fence serializing global & per-session rollover
+/// policy mutations against the hibernation sweep's post-RPC read-through-enqueue.
+pub(crate) fn policy_lock() -> &'static tokio::sync::RwLock<()> {
+    static LOCK: std::sync::LazyLock<tokio::sync::RwLock<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
+    &LOCK
+}
+
 /// A continuation keeps the source's explicit choice, except an enabling
 /// override on a restricted source or target is never inherited.
 pub fn inherit(state: &AppState, source: &str, target: &str) {
@@ -63,6 +71,7 @@ pub fn inherit(state: &AppState, source: &str, target: &str) {
     state
         .hub
         .set_setting(override_key(target), serde_json::Value::Bool(enabled));
+    state.hub.bump_rollover_policy_epoch();
 }
 
 /// The effective policy, or `None` when the owner's preferences cannot be
@@ -206,90 +215,225 @@ fn first_turn(session: &str, usage: Option<&crate::agent_model::TurnUsage>) {
     );
 }
 
-/// Hibernate live workers whose cache has expired under their policy, so the
-/// next prompt renews a dormant session. The Machine refuses atomically if
-/// work started; a refusal is only logged.
-async fn hibernate_expired(state: &AppState) {
-    for meta in state.hub.session_list() {
-        // Queued work (paused or held for editing) must stay runnable by
-        // its auto-drain, which never revives a dormant session.
-        if meta.status != Status::Running
-            || !ordinary(state, &meta)
-            || state.hub.session_has_in_flight_prompt(&meta.id)
-            || state
-                .hub
-                .session_info(&meta.id)
-                .is_none_or(|info| info.queue_count > 0)
-            || !state.supervisor.has_live_worker(&meta.id)
-        {
-            continue;
-        }
-        if crate::provider_account::named_only(&meta.provider) {
-            continue;
-        }
-        let Some(idle) = state.hub.session_idle_for(&meta.id) else {
-            continue;
-        };
-        // Minimum configurable idle_minutes is 1; skip active sessions before
-        // touching the preference store on the 1-minute sweep.
-        if idle < std::time::Duration::from_mins(1) {
-            continue;
-        }
-        let Some(policy) = policy(state, &meta).await else {
-            continue;
-        };
-        let Some(idle_minutes) = policy.idle_minutes.filter(|_| policy.enabled) else {
-            continue;
-        };
-        let min_idle = std::time::Duration::from_mins(idle_minutes);
-        let Some(fresh_info) = state.hub.session_info(&meta.id) else {
-            continue;
-        };
-        let Some(fresh_idle) = state.hub.session_idle_for(&meta.id) else {
-            continue;
-        };
-        // A reading a compaction made history measures nothing current; the
-        // renewal it would lead to skips it too.
-        if fresh_info.meta.context_usage_stale()
-            || !policy.due(fresh_idle, fresh_info.meta.context_used)
-            || fresh_info.queue_count > 0
-        {
-            continue;
-        }
-        let result =
-            state
-                .supervisor
-                .hibernate_idle_session(&meta.id, min_idle, policy.min_context_tokens);
-        tracing::info!(
-            target: "cowboy::evidence",
-            event_name = "cowboy.context_rollover.hibernate",
-            session = %meta.id,
-            provider = %meta.provider,
-            outcome = if result.is_ok() { "requested" } else { "refused" },
-            idle_ms = u64::try_from(fresh_idle.as_millis()).unwrap_or(u64::MAX),
-            context_used = fresh_info.meta.context_used,
-            "hibernating a worker whose prompt cache expired"
+/// Bound on concurrent gateway keepalive probes during one hibernation sweep.
+const HIBERNATE_SWEEP_CONCURRENCY: usize = 4;
+
+enum KeepaliveHandoffCheck {
+    NotConfigured,
+    Inactive(crate::supervisor::KeepaliveRuntimeProof),
+    ActiveOrUnavailable,
+}
+
+fn keepalive_status_is_inactive(status: &serde_json::Value) -> bool {
+    status.get("state").and_then(serde_json::Value::as_str) == Some("inactive")
+}
+
+/// Fail-closed check for two-stage keepalive -> idle-renewal handoff: binds
+/// the host-layer hibernation-epoch capability check, the gateway
+/// `provider-cache-status` RPC, and the subsequent hibernation command to the
+/// exact authenticated Machine connection token attached to the runtime.
+async fn verify_keepalive_handoff(state: &AppState, session_id: &str) -> KeepaliveHandoffCheck {
+    let probe = match state.supervisor.capture_keepalive_probe(session_id) {
+        Ok(Some(probe)) => probe,
+        Ok(None) => return KeepaliveHandoffCheck::NotConfigured,
+        Err(_) => return KeepaliveHandoffCheck::ActiveOrUnavailable,
+    };
+    if !state
+        .machine_control
+        .connection_supports_hibernation_epoch(probe.connection())
+    {
+        tracing::debug!(
+            session = %session_id,
+            machine = %probe.machine_id(),
+            "skipping keepalive handoff: Machine predates epoch-bound hibernation"
         );
+        return KeepaliveHandoffCheck::ActiveOrUnavailable;
+    }
+    match state
+        .machine_control
+        .adapter_request_on_connection(
+            probe.connection(),
+            "provider-cache-status",
+            serde_json::json!({
+                "configuration": probe.configuration(),
+                "sessionId": session_id,
+            }),
+        )
+        .await
+    {
+        Ok(status) if keepalive_status_is_inactive(&status) => {
+            if state
+                .machine_control
+                .connection_supports_hibernation_epoch(probe.connection())
+            {
+                KeepaliveHandoffCheck::Inactive(probe)
+            } else {
+                KeepaliveHandoffCheck::ActiveOrUnavailable
+            }
+        }
+        Ok(_) => KeepaliveHandoffCheck::ActiveOrUnavailable,
+        Err(error) => {
+            tracing::debug!(
+                session = %session_id,
+                machine = %probe.machine_id(),
+                %error,
+                "skipping idle hibernation: could not verify keepalive inactive state"
+            );
+            KeepaliveHandoffCheck::ActiveOrUnavailable
+        }
+    }
+}
+
+async fn evaluate_hibernate_candidate(state: &AppState, meta: crate::core::SessionMeta) {
+    // Queued work (paused or held for editing) must stay runnable by
+    // its auto-drain, which never revives a dormant session.
+    if meta.status != Status::Running
+        || !ordinary(state, &meta)
+        || state.hub.session_has_in_flight_prompt(&meta.id)
+        || state
+            .hub
+            .session_info(&meta.id)
+            .is_none_or(|info| info.queue_count > 0)
+        || !state.supervisor.has_live_worker(&meta.id)
+    {
+        return;
+    }
+    if crate::provider_account::named_only(&meta.provider) {
+        return;
+    }
+    let Some(idle) = state.hub.session_idle_for(&meta.id) else {
+        return;
+    };
+    // Minimum configurable idle_minutes is 1; skip active sessions before
+    // touching the preference store on the 1-minute sweep.
+    if idle < std::time::Duration::from_mins(1) {
+        return;
+    }
+    let Some(initial_policy) = policy(state, &meta).await else {
+        return;
+    };
+    if initial_policy
+        .idle_minutes
+        .filter(|_| initial_policy.enabled)
+        .is_none()
+    {
+        return;
+    }
+    let Some(pre_info) = state.hub.session_info(&meta.id) else {
+        return;
+    };
+    let Some(pre_idle) = state.hub.session_idle_for(&meta.id) else {
+        return;
+    };
+    if pre_info.meta.context_usage_stale()
+        || !initial_policy.due(pre_idle, pre_info.meta.context_used)
+        || pre_info.queue_count > 0
+    {
+        return;
+    }
+    let (keepalive_proof, keepalive_handoff) = match verify_keepalive_handoff(state, &meta.id).await
+    {
+        KeepaliveHandoffCheck::NotConfigured => (None, false),
+        KeepaliveHandoffCheck::Inactive(proof) => (Some(proof), true),
+        KeepaliveHandoffCheck::ActiveOrUnavailable => return,
+    };
+    // Hold the shared policy read guard from post-RPC policy re-read through
+    // command enqueue so concurrent preference or override writes cannot race.
+    let _policy_read = policy_lock().read().await;
+    let policy_epoch = state.hub.rollover_policy_epoch();
+    let Some(fresh_info) = state.hub.session_info(&meta.id) else {
+        return;
+    };
+    let Some(fresh_policy) = policy(state, &fresh_info.meta).await else {
+        return;
+    };
+    let Some(idle_minutes) = fresh_policy.idle_minutes.filter(|_| fresh_policy.enabled) else {
+        return;
+    };
+    let min_idle = std::time::Duration::from_mins(idle_minutes);
+    let Some(fresh_idle) = state.hub.session_idle_for(&meta.id) else {
+        return;
+    };
+    if fresh_info.meta.context_usage_stale()
+        || !fresh_policy.due(fresh_idle, fresh_info.meta.context_used)
+        || fresh_info.queue_count > 0
+    {
+        return;
+    }
+    // Serialize keepalive-handoff connection validation and command enqueue
+    // against Machine reconnect registration so a retired connection cannot
+    // race between `machine_control.install` and `runtime_router.install_if`.
+    let _reg_guard = if let Some(proof) = keepalive_proof.as_ref() {
+        Some(super::super::machine_handshake::machine_registration_lock(proof.machine_id()).await)
+    } else {
+        None
+    };
+    let result = state.supervisor.hibernate_idle_session(
+        &meta.id,
+        min_idle,
+        fresh_policy.min_context_tokens,
+        policy_epoch,
+        keepalive_proof.as_ref(),
+        |connection| {
+            state
+                .machine_control
+                .connection_supports_hibernation_epoch(connection)
+        },
+    );
+    tracing::info!(
+        target: "cowboy::evidence",
+        event_name = "cowboy.context_rollover.hibernate",
+        session = %meta.id,
+        provider = %meta.provider,
+        outcome = if result.is_ok() { "requested" } else { "refused" },
+        keepalive_handoff,
+        idle_ms = u64::try_from(fresh_idle.as_millis()).unwrap_or(u64::MAX),
+        context_used = fresh_info.meta.context_used,
+        "hibernating a worker whose prompt cache expired"
+    );
+}
+
+/// Hibernate live workers whose cache has expired under their policy, so the
+/// next prompt renews a dormant session. Bounded concurrency ensures one slow
+/// gateway RPC never delays unrelated sessions.
+async fn hibernate_expired(state: &AppState) {
+    use futures::StreamExt as _;
+    let sessions = state.hub.session_list();
+    futures::stream::iter(sessions)
+        .for_each_concurrent(HIBERNATE_SWEEP_CONCURRENCY, |meta| {
+            evaluate_hibernate_candidate(state, meta)
+        })
+        .await;
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
 /// Record the first turn after a measured prompt (what the resume or renewal
-/// actually cost) and periodically hibernate workers past their cache.
+/// actually cost) and run the periodic hibernation sweep on an independent
+/// abort-on-drop task so gateway RPC timeouts never lag turn-event observation
+/// and server shutdown cancels in-flight sweeps cleanly.
 pub async fn observe(state: Arc<AppState>) {
-    tokio::spawn(super::super::background_tasks::wait_observation::observe(
-        Arc::clone(&state),
+    let _wait_guard = AbortOnDrop(tokio::spawn(
+        super::super::background_tasks::wait_observation::observe(Arc::clone(&state)),
     ));
+    let sweep_state = Arc::clone(&state);
+    let _sweep_guard = AbortOnDrop(tokio::spawn(async move {
+        let mut pass = tokio::time::interval(HIBERNATE_PASS);
+        pass.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            pass.tick().await;
+            hibernate_expired(&sweep_state).await;
+        }
+    }));
     let mut events = state.hub.subscribe();
-    let mut pass = tokio::time::interval(HIBERNATE_PASS);
-    pass.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let frame = tokio::select! {
-            _ = pass.tick() => {
-                hibernate_expired(&state).await;
-                continue;
-            }
-            frame = events.recv() => frame,
-        };
+        let frame = events.recv().await;
         let frame = match frame {
             Ok(frame) => frame,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -775,6 +919,17 @@ async fn view(state: &AppState, id: &str) -> Response {
     } else {
         None
     };
+    let dormant = state.supervisor.is_dormant_for_renewal(&meta.id);
+    let pending_work = state.hub.session_info(&meta.id).is_some_and(|info| {
+        info.queue_count > 0
+            || info.meta.background_tasks > 0
+            || info.meta.attention.approvals > 0
+            || info.meta.attention.questions > 0
+            || info.meta.attention.other > 0
+    });
+    let keepalive_handoff_supported = state
+        .machine_control
+        .supports_hibernation_epoch(&meta.machine_id);
     Json(serde_json::json!({
         "policy": policy,
         "context_used": meta.context_used,
@@ -783,6 +938,9 @@ async fn view(state: &AppState, id: &str) -> Response {
         "idle_ms": idle_ms,
         "due": !meta.context_usage_stale() && idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
             && ordinary(state, &meta),
+        "dormant": dormant,
+        "pending_work": pending_work,
+        "keepalive_handoff_supported": keepalive_handoff_supported,
         "recommended_idle_minutes": crate::context_rollover::recommended_idle_minutes(&meta.provider),
         "policy_restricted": policy_restricted || native_fork,
         "restriction": restriction,
@@ -810,18 +968,24 @@ pub async fn set(
         };
         return (StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
     }
-    state.hub.set_setting(
-        override_key(&id),
-        request
-            .enabled
-            .map_or(serde_json::Value::Null, serde_json::Value::Bool),
-    );
+    {
+        let _policy_write = policy_lock().write().await;
+        state.hub.set_setting(
+            override_key(&id),
+            request
+                .enabled
+                .map_or(serde_json::Value::Null, serde_json::Value::Bool),
+        );
+        state.hub.bump_rollover_policy_epoch();
+    }
     view(&state, &id).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Policy, allows_rollover, shadow_candidate_stage, shadow_gate};
+    use super::{
+        Policy, allows_rollover, keepalive_status_is_inactive, shadow_candidate_stage, shadow_gate,
+    };
     use crate::prompt_origin::DeliveryOrigin;
     use std::time::Duration;
 
@@ -984,5 +1148,21 @@ mod tests {
                 "{provider}"
             );
         }
+    }
+
+    #[test]
+    fn keepalive_status_is_inactive_fails_closed_for_protected_or_unknown_payloads() {
+        assert!(keepalive_status_is_inactive(&serde_json::json!({
+            "state": "inactive",
+            "algorithm": "adaptive-replay-v1"
+        })));
+        assert!(!keepalive_status_is_inactive(&serde_json::json!({
+            "state": "protected",
+            "attempts": 2
+        })));
+        assert!(!keepalive_status_is_inactive(&serde_json::json!({
+            "state": "disabled"
+        })));
+        assert!(!keepalive_status_is_inactive(&serde_json::json!({})));
     }
 }

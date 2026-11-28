@@ -767,10 +767,19 @@ where
 }
 
 fn queue_outbound_runtime_frame(
+    machine_control: &MachineControl,
+    connection: &crate::machine_control::ConnectionToken,
     machine_write_tx: &mpsc::UnboundedSender<Message>,
     machine_id: &str,
     frame: crate::runtime_wire::Frame,
 ) -> Result<(), ()> {
+    if !machine_control.is_current(connection) {
+        tracing::info!(
+            machine = %machine_id,
+            "dropping outbound runtime frame for retired Machine connection"
+        );
+        return Err(());
+    }
     if matches!(
         frame,
         crate::runtime_wire::Frame::PostEditInspectRequest { .. }
@@ -794,7 +803,7 @@ pub async fn handle_machine_ws(
     state: Arc<AppState>,
     (chunked, compressed, paced, stream): (bool, bool, bool, bool),
     lane_token: Option<String>,
-    post_edit: (Option<String>, bool),
+    (post_edit_token, post_edit_workspace, hibernation_epoch): (Option<String>, bool, bool),
 ) {
     let Some(MachineHandshake {
         store,
@@ -871,6 +880,7 @@ pub async fn handle_machine_ws(
         &challenge_id,
         colocated,
         protocol,
+        hibernation_epoch,
         machine_command_tx,
         runtime_core,
         hint_ws_tx,
@@ -898,12 +908,12 @@ pub async fn handle_machine_ws(
             },
         )
     });
-    let _post_edit_registration = post_edit.0.map(|token| {
+    let _post_edit_registration = post_edit_token.map(|token| {
         machine_post_edit::register_connection(
             token,
             connection.clone(),
             hello.machine_id.clone(),
-            post_edit.1,
+            post_edit_workspace,
         )
     });
     state.machine_control.record_remote(
@@ -966,7 +976,7 @@ pub async fn handle_machine_ws(
             message = socket_stream.next() => Some(message),
             frame = runtime_frame_rx.recv() => {
                 let Some(frame) = frame else { break };
-                if queue_outbound_runtime_frame(&machine_write_tx, &hello.machine_id, frame).is_err() {
+                if queue_outbound_runtime_frame(&state.machine_control, &connection, &machine_write_tx, &hello.machine_id, frame).is_err() {
                     break;
                 }
                 continue;
@@ -1206,6 +1216,7 @@ async fn register_current_machine_connection(
     challenge_id: &str,
     colocated: bool,
     protocol: u16,
+    hibernation_epoch: bool,
     machine_command_tx: mpsc::UnboundedSender<crate::machine_protocol::MachineCommand>,
     runtime_core: UnixStream,
     hint_ws_tx: mpsc::Sender<String>,
@@ -1229,11 +1240,17 @@ async fn register_current_machine_connection(
         protocol,
         machine_command_tx,
     );
+    if hibernation_epoch {
+        state
+            .machine_control
+            .mark_hibernation_epoch_supported(&connection);
+    }
     let Some(runtime) = install_machine_runtime(
         state,
         hello,
         &connection,
         protocol,
+        hibernation_epoch,
         runtime_core,
         hint_ws_tx,
     ) else {
@@ -1251,6 +1268,7 @@ fn install_machine_runtime(
     hello: &crate::machine_protocol::MachineHello,
     connection: &crate::machine_control::ConnectionToken,
     protocol: u16,
+    hibernation_epoch: bool,
     runtime_core: UnixStream,
     hint_ws_tx: mpsc::Sender<String>,
 ) -> Option<Arc<RemoteRuntime>> {
@@ -1284,6 +1302,8 @@ fn install_machine_runtime(
         protocol,
         hello.encryption_public_key.clone(),
     );
+    runtime.attach_connection(connection.clone());
+    runtime.set_hibernation_epoch_supported(hibernation_epoch);
     runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
     runtime.attach_service_config(state.service_config.clone());
     if protocol >= crate::machine_protocol::WRAP_UP_STEERING_PROTOCOL_VERSION {

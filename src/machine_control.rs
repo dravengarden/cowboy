@@ -24,6 +24,7 @@ mod browser;
 mod code_buffer_navigation;
 mod code_buffer_sync;
 mod execution;
+mod hibernation;
 mod installation;
 pub mod local_roots;
 mod mcp_transport;
@@ -213,6 +214,7 @@ struct Connection {
     token: ConnectionToken,
     colocated: bool,
     protocol: u16,
+    hibernation_epoch: bool,
     tx: mpsc::UnboundedSender<MachineCommand>,
     connected_at: std::time::Instant,
 }
@@ -516,6 +518,7 @@ impl MachineControl {
                 token: token.clone(),
                 colocated,
                 protocol,
+                hibernation_epoch: false,
                 tx,
                 connected_at: std::time::Instant::now(),
             },
@@ -931,17 +934,6 @@ impl MachineControl {
             .map_err(|error| error.detail)
     }
 
-    /// Short-lived connection evidence. Never saved in the operation journal or
-    /// reacquired after restart to replay an old destructive command.
-    /// The current connection and its negotiated protocol, if connected.
-    pub fn connection_protocol(&self, machine_id: &str) -> Option<(ConnectionToken, u16)> {
-        self.live
-            .read()
-            .connections
-            .get(machine_id)
-            .map(|connection| (connection.token.clone(), connection.protocol))
-    }
-
     pub fn operation_connection(&self, machine_id: &str) -> Result<ConnectionToken, String> {
         self.live
             .read()
@@ -990,15 +982,6 @@ impl MachineControl {
             token,
             crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION,
         )
-    }
-
-    /// Whether the Machine's current connection negotiated at least `minimum`.
-    pub fn machine_supports(&self, machine_id: &str, minimum: u16) -> bool {
-        self.live
-            .read()
-            .connections
-            .get(machine_id)
-            .is_some_and(|c| c.protocol >= minimum)
     }
 
     fn connection_supports(&self, token: &ConnectionToken, minimum: u16) -> bool {

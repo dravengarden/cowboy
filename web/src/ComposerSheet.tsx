@@ -43,6 +43,7 @@ import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
 import { CacheProtectionDisableButton, useCacheProtectionStatus } from "./ContextRolloverSettings";
 import { SessionPromptCacheCard } from "./SessionPromptCacheCard";
+import { keepaliveScheduleSuffix } from "./sessionCacheUi";
 
 export function SessionActionConfirmDialog({
   action,
@@ -702,6 +703,8 @@ export interface DeepseekCacheProtectionStatus {
   jitter_ms?: number;
   expires_at_ms?: number;
   attempts?: number;
+  maximum_attempts?: number;
+  maximum_age_ms?: number;
   configuredEnabled?: boolean;
   optionId?: string;
   appliedEnabled?: boolean;
@@ -930,13 +933,14 @@ export function SessionInfoSection({
           sessionId={session.id}
           refreshKey={cacheMetricsNonce}
           keepaliveStatus={cacheProtection}
+          keepaliveUnavailable={cacheProtectionUnavailable}
           keepaliveSlot={cacheProtectionVisible &&
             (cacheProtection || cacheProtectionUnavailable)
             ? (
               <Stack spacing={0.35} alignItems="flex-start">
                 <Tooltip
                   title={cacheProtection?.state === "protected"
-                    ? `${cacheIntervalDetail}. Last verified ${
+                    ? `${cacheProtection.configuredEnabled === false ? "Retained keepalive (configured off): snapshot may replay until revoked. " : ""}${cacheIntervalDetail}. Last verified ${
                       cacheProtection.last_verified_at_ms
                         ? new Date(cacheProtection.last_verified_at_ms)
                           .toLocaleString()
@@ -957,12 +961,10 @@ export function SessionInfoSection({
                     size="small"
                     variant="outlined"
                     color={cacheProtection?.state === "protected"
-                      ? "success"
-                      : cacheProtectionUnavailable
-                      ? "warning"
-                      : "default"}
+                      ? cacheProtection.configuredEnabled === false ? "warning" : "success"
+                      : cacheProtectionUnavailable ? "warning" : "default"}
                     label={cacheProtection?.state === "protected"
-                      ? `Cache protected · ${
+                      ? `${cacheProtection.configuredEnabled === false ? "Cache protected (retained)" : "Cache protected"} · ${
                         compactCacheTokens(cacheProtection.protected_tokens)
                       }`
                       : cacheProtection?.state === "disabled"
@@ -975,7 +977,7 @@ export function SessionInfoSection({
                 </Tooltip>
                 {cacheProtection && !cacheProtectionUnavailable && (
                   <Typography variant="caption" color="text.secondary">
-                    {cacheIntervalDetail} · adaptive learning
+                    {cacheIntervalDetail} · adaptive learning{keepaliveScheduleSuffix(cacheProtection, cacheBaseInterval)}
                   </Typography>
                 )}
                 <CacheProtectionDisableButton sessionId={session.id} status={cacheProtection} onDisabled={(): void => { refreshCacheProtection(); setCacheMetricsNonce((n) => n + 1); }} />

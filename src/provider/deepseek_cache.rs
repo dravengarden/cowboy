@@ -11,11 +11,21 @@ use cowboy_provider_sdk::ConfigurationBehavior;
 use sha2::{Digest as _, Sha256};
 
 pub const SESSION_POLICY_ENV: &str = "COWBOY_DEEPSEEK_CACHE_PROTECTION";
+/// Gateway upper bound on keepalive replay attempts before auto-stopping.
+pub const MAX_ATTEMPTS: u64 = 6;
+/// Gateway upper bound on keepalive snapshot age (26 hours) before auto-stopping.
+pub const MAX_AGE_MS: u64 = 26 * 3_600_000;
 
 #[must_use]
 #[cfg(feature = "full")]
 pub fn minimum_hit_tokens() -> u64 {
     crate::plugin_runtime_args::cache_protection_policy().min_hit_tokens
+}
+
+#[must_use]
+#[cfg(feature = "full")]
+pub fn base_interval_ms() -> u32 {
+    crate::plugin_runtime_args::cache_protection_policy().interval_ms
 }
 
 #[must_use]

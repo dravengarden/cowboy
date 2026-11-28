@@ -88,6 +88,7 @@ export interface RolloverStrategyView {
 export interface KeepaliveStrategyView {
   supported: boolean | null;
   enabled: boolean | null;
+  handoff_supported?: boolean | undefined;
 }
 
 export interface SessionCacheStrategyView {
@@ -125,6 +126,7 @@ export interface SessionCacheMetricsResponse {
   context_stale?: boolean;
   active_turn?: boolean;
   pending_work?: boolean;
+  dormant?: boolean | undefined;
 }
 
 export function accountCacheMetricsUrl(

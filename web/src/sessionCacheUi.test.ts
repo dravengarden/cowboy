@@ -1,3 +1,4 @@
+import { contextRolloverCaption, type ContextRolloverView } from "./ContextRolloverSettings";
 import { test } from "bun:test";
 import { assert, assertEquals } from "../../tools/test-assert.ts";
 import type { SessionCacheMetricsResponse, TurnCacheFact } from "./cacheMetricsApi";
@@ -7,6 +8,7 @@ import {
   deriveCacheGlanceCue,
   deriveCacheWindowState,
   deriveSessionCacheStrategyBadge,
+  formatKeepaliveRuntimeMeta,
   formatTelemetryBadge,
 } from "./sessionCacheUi";
 
@@ -80,6 +82,7 @@ function baseResponse(
     context_stale: false,
     active_turn: false,
     pending_work: false,
+    dormant: true,
     ...overrides,
   };
 }
@@ -269,4 +272,227 @@ test("aggregateProviderCacheShare combines multi-account 7-day cache reads accur
     { totals: { cached_read_tokens: 270_000, observed_cache_input_tokens: 300_000, observed_cache_turns: 10 } },
   ]);
   assertEquals(combined, { cachedShare: 0.9, observedTurns: 15 });
+});
+
+test("keepalive runtime meta and live window show refresh countdown, attempts, 26h cap, and rollover handoff", () => {
+  const now = 1_700_000_000_000;
+  const protectedStatus = {
+    state: "protected" as const,
+    configuredEnabled: true,
+    protected_tokens: 96_000,
+    base_interval_ms: 19_800_000,
+    scheduled_interval_ms: 19_200_000,
+    last_verified_at_ms: now - 9_600_000,
+    next_attempt_at_ms: now + 9_600_000,
+    expires_at_ms: now + 20 * 3_600_000,
+    attempts: 2,
+    maximum_attempts: 6,
+  };
+  const meta = formatKeepaliveRuntimeMeta(protectedStatus, now);
+  assert(meta !== null);
+  assertEquals(meta.intervalSummary, "Base 5h 30m · interval 5h 20m");
+  assert(meta.scheduleSummary?.includes("Next refresh in 2h 40m") === true);
+  assert(meta.scheduleSummary?.includes("2/6 refreshes") === true);
+  assert(meta.scheduleSummary?.includes("cap 20h left") === true);
+
+  const deepseekWithRollover = baseResponse({
+    provider: "claude-deepseek",
+    idle_ms: 7 * 3_600_000,
+    strategy: {
+      ...baseResponse().strategy,
+      rollover: { ...baseResponse().strategy.rollover, idle_minutes: 360, due: true },
+      gateway_keepalive: { supported: true, enabled: true, handoff_supported: true },
+    },
+  });
+  const activeWin = deriveCacheWindowState(deepseekWithRollover, 0, protectedStatus, now);
+  assertEquals(activeWin.kind, "keepalive_protected");
+  assertEquals(activeWin.stateLabel, "Protected by keepalive");
+  assertEquals(activeWin.tone, "success");
+  assertEquals(activeWin.progressPercent, 50);
+  assert(activeWin.thresholdSummary?.includes("Auto-handoff") === true);
+  assert(activeWin.thresholdSummary?.includes("6h idle renewal") === true);
+
+  // Live worker with confirmed inactive keepalive on protocol-55 Machine shows handoff waiting for hibernation.
+  const handoffLive = deriveCacheWindowState(
+    {
+      ...deepseekWithRollover,
+      dormant: false,
+      strategy: {
+        ...deepseekWithRollover.strategy,
+        gateway_keepalive: { supported: true, enabled: true, handoff_supported: true },
+      },
+    },
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assertEquals(handoffLive.kind, "rollover_window");
+  assertEquals(handoffLive.stateLabel, "Handing off to renewal");
+  assertEquals(handoffLive.tone, "warning");
+  assert(handoffLive.timingLabel?.includes("waiting for hibernation") === true);
+
+  // Live worker on pre-55 Machine never claims auto-handoff is in progress.
+  const pre55Live = deriveCacheWindowState(
+    {
+      ...deepseekWithRollover,
+      dormant: false,
+      strategy: {
+        ...deepseekWithRollover.strategy,
+        gateway_keepalive: { supported: true, enabled: true, handoff_supported: false },
+      },
+    },
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assertEquals(pre55Live.stateLabel, "Keepalive inactive · Manual renew");
+  assert(pre55Live.timingLabel?.includes("auto-handoff unavailable") === true);
+
+  // Dormant session with confirmed inactive keepalive is ready to renew on next send.
+  const handoffDormant = deriveCacheWindowState(
+    { ...deepseekWithRollover, dormant: true },
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assertEquals(handoffDormant.stateLabel, "Ready to renew");
+  assert(handoffDormant.timingLabel?.includes("next send renews") === true);
+
+  // Unknown dormancy uses conditional copy instead of promising immediate renewal.
+  const unknownDormant = deriveCacheWindowState(
+    { ...deepseekWithRollover, dormant: undefined },
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assert(unknownDormant.timingLabel?.includes("renews once dormant") === true);
+
+  // Below min_context_tokens (70K < 80K): never promise renewal or handoff.
+  const belowThreshold = deriveCacheWindowState(
+    baseResponse({
+      provider: "claude-deepseek",
+      context_used: 70_000,
+      idle_ms: 7 * 3_600_000,
+      strategy: {
+        ...baseResponse().strategy,
+        rollover: { ...baseResponse().strategy.rollover, idle_minutes: 360, due: false },
+      },
+    }),
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assertEquals(belowThreshold.stateLabel, "Cache window elapsed");
+  assertEquals(belowThreshold.tone, "info");
+  assert(belowThreshold.timingLabel?.includes("next send renews") === false);
+
+  // Failed keepalive status read fails closed and never promises renewal.
+  const unavailable = deriveCacheWindowState(
+    baseResponse({
+      provider: "claude-deepseek",
+      idle_ms: 7 * 3_600_000,
+      strategy: {
+        ...baseResponse().strategy,
+        rollover: { ...baseResponse().strategy.rollover, idle_minutes: 360, due: true },
+        gateway_keepalive: { supported: true, enabled: true },
+      },
+    }),
+    0,
+    { keepaliveStatus: null, keepaliveUnavailable: true, nowMs: now },
+  );
+  assertEquals(unavailable.kind, "keepalive_unavailable");
+  assertEquals(unavailable.stateLabel, "Keepalive status unavailable");
+
+  // Custom maximum_age_ms override flows into the UI copy instead of hardcoding 26h.
+  const customCapWin = deriveCacheWindowState(
+    deepseekWithRollover,
+    0,
+    { ...protectedStatus, maximum_age_ms: 12 * 3_600_000, maximum_attempts: 4 },
+    now,
+  );
+  assert(customCapWin.thresholdSummary?.includes("4 refreshes / 12h cap") === true);
+});
+
+test("pre-capability Machine, pending-work blocks, and rollover captions stay aligned", () => {
+  const now = 1_700_000_000_000;
+  const protectedStatus = {
+    state: "protected" as const,
+    configuredEnabled: true,
+    protected_tokens: 96_000,
+    base_interval_ms: 19_800_000,
+    scheduled_interval_ms: 19_200_000,
+    last_verified_at_ms: now - 9_600_000,
+    next_attempt_at_ms: now + 9_600_000,
+    expires_at_ms: now + 20 * 3_600_000,
+    attempts: 2,
+    maximum_attempts: 6,
+  };
+  const preCapDeepseek = baseResponse({
+    provider: "claude-deepseek",
+    idle_ms: 7 * 3_600_000,
+    dormant: false,
+    strategy: {
+      ...baseResponse().strategy,
+      rollover: { ...baseResponse().strategy.rollover, idle_minutes: 360, due: true },
+      gateway_keepalive: { supported: true, enabled: true, handoff_supported: false },
+    },
+  });
+  const preCapProtected = deriveCacheWindowState(preCapDeepseek, 0, protectedStatus, now);
+  assert(preCapProtected.thresholdSummary?.includes("Auto-handoff") === false);
+  assert(preCapProtected.thresholdSummary?.includes("manual hibernate or Clear") === true);
+
+  // Paused / queued pending work blocks hibernation instead of claiming handoff in progress.
+  const blockedKeepalive = deriveCacheWindowState(
+    {
+      ...preCapDeepseek,
+      pending_work: true,
+      strategy: {
+        ...preCapDeepseek.strategy,
+        gateway_keepalive: { supported: true, enabled: true, handoff_supported: true },
+      },
+    },
+    0,
+    { keepaliveStatus: { state: "inactive", configuredEnabled: true }, nowMs: now },
+  );
+  assertEquals(blockedKeepalive.stateLabel, "Keepalive inactive · Hibernation blocked");
+  assert(blockedKeepalive.timingLabel?.includes("blocks hibernation") === true);
+
+  const blockedCue = deriveCacheGlanceCue(
+    {
+      ...preCapDeepseek,
+      pending_work: true,
+      strategy: {
+        ...preCapDeepseek.strategy,
+        gateway_keepalive: { supported: true, enabled: true, handoff_supported: true },
+      },
+    },
+    { state: "inactive", configuredEnabled: true },
+    now,
+  );
+  assertEquals(blockedCue?.shortLabel, "Hibernation blocked");
+
+  // Session renewal caption respects dormancy, keepalive protection, handoff capability, and pending work.
+  const rolloverView: ContextRolloverView = {
+    policy: { enabled: true, session_override: null, idle_minutes: 360, min_context_tokens: 80_000 },
+    context_used: 120_000,
+    idle_ms: 7 * 3_600_000,
+    due: true,
+    dormant: false,
+    keepalive_handoff_supported: false,
+  };
+  assert(
+    contextRolloverCaption(rolloverView, {
+      keepaliveStatus: { state: "inactive", configuredEnabled: true },
+    }).includes("predates automatic keepalive handoff"),
+  );
+  assert(
+    contextRolloverCaption(rolloverView, {
+      keepaliveStatus: protectedStatus,
+    }).includes("Gateway keepalive is active"),
+  );
+  assert(
+    contextRolloverCaption({ ...rolloverView, pending_work: true, keepalive_handoff_supported: true }).includes(
+      "blocking hibernation",
+    ),
+  );
+  assert(
+    contextRolloverCaption({ ...rolloverView, dormant: true }).includes(
+      "The prompt cache has expired: your next message starts a fresh context",
+    ),
+  );
 });

@@ -257,11 +257,15 @@ Older sessions without a stored choice use the lane default above.
 
 ### DeepSeek prompt-cache protection
 
-DeepSeek sessions expose a separate `Prompt cache protection` option. It is
-enabled by default for new and existing `claude-deepseek` and
-`codex-deepseek` sessions, but does no work until a completed interactive
-request proves that at least 64,000 input tokens were cache hits at a hit rate
-of at least 90%. The controller persists only the policy. The owning gateway
+DeepSeek sessions expose a separate `Cache protection` option. It defaults to
+`Off` for `claude-deepseek` and `codex-deepseek` sessions and requires explicit
+owner opt-in (`Auto (paid keepalive)`), doing no work until a completed
+interactive request proves that at least 64,000 input tokens were cache hits at
+a hit rate of at least 90%. When enabled alongside an idle context renewal
+policy, once the gateway snapshot becomes `inactive` (6-attempt / 26-hour cap,
+miss/partial, or never enrolled), the Controller's idle hibernation pass verifies
+the inactive gateway state fail-closed and hands the session off to dormant idle
+renewal. The controller persists only the policy. The owning gateway
 keeps the last eligible upstream request in bounded process memory and never
 stores its prompt, response, tools, or reasoning in Cowboy telemetry or logs.
 

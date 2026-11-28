@@ -14,6 +14,8 @@
 )]
 
 mod delivery;
+mod hibernation;
+pub use hibernation::KeepaliveRuntimeProof;
 pub mod launch_gate;
 mod session_lifecycle;
 use launch_gate::refuse_trashed;
@@ -1115,29 +1117,6 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Revalidate idle-rollover hibernation admission atomically under the
-    /// lifecycle lock: activity, queue state, background work, context size,
-    /// and explicit `DeepSeek` keepalive are checked before issuing hibernation.
-    pub fn hibernate_idle_session(
-        &self,
-        session_id: &str,
-        min_idle: std::time::Duration,
-        min_context_tokens: u64,
-    ) -> Result<(), String> {
-        let _lifecycle = self.lifecycle.lock();
-        let runtime = self.runtime_for_session(session_id)?;
-        if !runtime.has_worker(session_id) || runtime.hibernation_pending(session_id) {
-            return Err("session is already hibernated or hibernating".to_owned());
-        }
-        let expected_epoch = runtime
-            .worker_snapshot(session_id)
-            .map(|snapshot| snapshot.worker_epoch);
-        self.hub
-            .admit_idle_hibernation(session_id, min_idle, min_context_tokens)?;
-        runtime.hibernate_epoch(session_id, expected_epoch);
-        Ok(())
-    }
-
     /// Forget a dormant session's native context so its next launch starts
     /// fresh (context renewal). Every wake path holds the same lifecycle lock,
     /// so a worker cannot start between this check and the reset. Refuses when
@@ -1150,12 +1129,7 @@ impl Supervisor {
         marker: (u64, u64, u64),
     ) -> bool {
         let _lifecycle = self.lifecycle.lock();
-        let dormant = self.hub.session_info(session_id).is_some_and(|info| {
-            info.meta.status == Status::Exited
-                && info.meta.agent_session_id.as_deref() == Some(agent_session_id)
-        }) && self.runtime_for_session(session_id).is_ok_and(|runtime| {
-            !runtime.has_worker(session_id) && !runtime.hibernation_pending(session_id)
-        });
+        let dormant = self.is_dormant_locked(session_id, Some(agent_session_id));
         if dormant {
             // Marker first: if only it persists, the old context resumes
             // with a harmless extra digest instead of a fresh one without.
@@ -3386,5 +3360,97 @@ mod tests {
             vec!["s"]
         );
         assert_eq!(hub.status("s"), Some(Status::Running));
+    }
+
+    #[tokio::test]
+    async fn dormancy_blocks_while_hibernation_is_pending_and_keepalive_handoff_fences_retired_connection()
+     {
+        let root = TestDir::new();
+        let hub = dormant_codex_session(&root);
+        let router = RuntimeRouter::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, router);
+
+        // Exited with no worker and no pending hibernation -> genuinely dormant.
+        assert!(supervisor.is_dormant_for_renewal("s"));
+
+        // While a HibernateSession command is pending ACK, Exited is NOT yet dormant.
+        runtime.hibernate("s");
+        assert!(runtime.hibernation_pending("s"));
+        assert!(!supervisor.is_dormant_for_renewal("s"));
+
+        // Retired ConnectionToken rejects keepalive-handoff hibernation even if the
+        // old RemoteRuntime pointer is still installed in RuntimeRouter.
+        let hub2 = Hub::new();
+        hub2.create_session(crate::core::SessionRegistration {
+            id: "ds".to_owned(),
+            provider: "claude-deepseek".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_version: "1".to_owned(),
+            provider_generation_digest: "gen".to_owned(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: root.path().to_string_lossy().into_owned(),
+            title: "DS".to_owned(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("u1".to_owned()),
+            owner_username: Some("draven".to_owned()),
+        });
+        hub2.set_agent_session_id("ds", "native-ds-1".to_owned());
+        hub2.set_status("ds", Status::Running, None);
+        hub2.set_owner_config_preference(
+            "ds",
+            "deepseek_cache_protection".to_owned(),
+            serde_json::json!(true),
+            true,
+        )
+        .expect("enable keepalive with owner provenance");
+
+        let mut worker = worker_snapshot(root.path().to_string_lossy().as_ref());
+        worker.session_id = "ds".to_owned();
+        worker.state = WorkerState::Running;
+        worker.worker_epoch = "epoch-ds-1".to_owned();
+        let rt2 = RemoteRuntime::for_test(hub2.clone(), vec![worker]);
+        let control = crate::machine_control::MachineControl::default();
+        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
+        let tok1 = control.install("hawk".into(), "conn-1".into(), false, 54, tx1);
+        control.mark_hibernation_epoch_supported(&tok1);
+        rt2.attach_connection(tok1);
+        rt2.set_hibernation_epoch_supported(true);
+        let sup2 = remote_supervisor(hub2.clone(), Arc::clone(&rt2), root.0.clone());
+
+        let proof = sup2
+            .capture_keepalive_probe("ds")
+            .expect("capture probe")
+            .expect("keepalive configured");
+        let policy_epoch = hub2.rollover_policy_epoch();
+
+        // Simulate reconnect installing a newer MachineControl connection BEFORE
+        // RuntimeRouter replaces `rt2`.
+        let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel();
+        let _tok2 = control.install("hawk".into(), "conn-2".into(), false, 54, tx2);
+
+        let err = sup2
+            .hibernate_idle_session(
+                "ds",
+                std::time::Duration::ZERO,
+                0,
+                policy_epoch,
+                Some(&proof),
+                |conn| control.connection_supports_hibernation_epoch(conn),
+            )
+            .expect_err("retired connection must be rejected before enqueue");
+        assert!(
+            err.contains("connection changed"),
+            "unexpected error: {err}"
+        );
+        assert!(!rt2.hibernation_pending("ds"));
     }
 }

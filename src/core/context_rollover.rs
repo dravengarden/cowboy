@@ -1,5 +1,16 @@
 //! Hub state behind a context renewal (see [`crate::context_rollover`]).
-use super::{Envelope, Event, Hub, SessionMeta, StoreWrite};
+use super::{Envelope, Event, Hub, SessionMeta, Status, StoreWrite, configuration_behavior};
+
+/// Verified evidence from a live gateway `provider-cache-status` check bound
+/// to the exact Machine, gateway configuration, session activity instant, and
+/// worker epoch captured before the RPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeepaliveInactiveProof {
+    pub machine_id: String,
+    pub configuration: cowboy_provider_sdk::ConfigurationBehavior,
+    pub last_activity: std::time::Instant,
+    pub worker_epoch: String,
+}
 use crate::context_rollover::{Digest, MARKER};
 
 /// Separate diagnostic sample. A restored unversioned usage value cannot prove
@@ -407,6 +418,116 @@ impl Hub {
             }
         }
         None
+    }
+}
+
+impl Hub {
+    /// How long ago this Controller last appended an event to the session.
+    #[must_use]
+    pub fn session_idle_for(&self, session_id: &str) -> Option<std::time::Duration> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| session.last_activity.elapsed())
+    }
+
+    /// Monotonic timestamp of the Controller's latest activity on `session_id`,
+    /// used to bind pre-lock gateway checks against concurrent turns.
+    #[must_use]
+    pub fn session_last_activity(&self, session_id: &str) -> Option<std::time::Instant> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| session.last_activity)
+    }
+
+    /// Monotonic generation for context-rollover policy changes (both global
+    /// owner preferences and per-session overrides).
+    #[must_use]
+    pub fn rollover_policy_epoch(&self) -> u64 {
+        self.inner
+            .rollover_policy_epoch
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn bump_rollover_policy_epoch(&self) {
+        self.inner
+            .rollover_policy_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Capture `(machine_id, configuration, last_activity)` when explicit paid
+    /// `DeepSeek` keepalive is configured on `session_id`; returns `None` when
+    /// keepalive is not configured.
+    #[must_use]
+    pub fn keepalive_probe_target(
+        &self,
+        session_id: &str,
+    ) -> Option<(
+        String,
+        cowboy_provider_sdk::ConfigurationBehavior,
+        std::time::Instant,
+    )> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        let configuration =
+            configuration_behavior(&s.meta.provider, s.meta.provider_behavior.as_ref());
+        if crate::managed_config::cache_protection(&configuration, &s.config_preferences)
+            != Some(true)
+        {
+            return None;
+        }
+        Some((s.meta.machine_id.clone(), configuration, s.last_activity))
+    }
+
+    /// Atomically validate idle-rollover hibernation admission under the same
+    /// Hub session mutex that serializes prompt submission, scheduled drafts,
+    /// pause/resume, and queue draining.
+    pub fn admit_idle_hibernation(
+        &self,
+        session_id: &str,
+        min_idle: std::time::Duration,
+        min_context_tokens: u64,
+        expected_policy_epoch: u64,
+        keepalive_proof: Option<&KeepaliveInactiveProof>,
+    ) -> Result<(), String> {
+        let sessions = self.inner.sessions.lock();
+        if self.rollover_policy_epoch() != expected_policy_epoch {
+            return Err("context renewal policy changed before hibernation".to_owned());
+        }
+        let Some(s) = sessions.get(session_id) else {
+            return Err(format!("unknown session {session_id:?}"));
+        };
+        if s.meta.status != Status::Running
+            || s.in_flight
+            || !s.queue.is_empty()
+            || s.meta.background_tasks > 0
+        {
+            return Err("session is active or has queued work".to_owned());
+        }
+        if s.meta.context_usage_stale() || s.meta.context_used < min_context_tokens {
+            return Err("session context does not qualify for renewal".to_owned());
+        }
+        if s.last_activity.elapsed() < min_idle {
+            return Err("session became active before hibernation".to_owned());
+        }
+        let configuration =
+            configuration_behavior(&s.meta.provider, s.meta.provider_behavior.as_ref());
+        if crate::managed_config::cache_protection(&configuration, &s.config_preferences)
+            == Some(true)
+        {
+            let verified_inactive = keepalive_proof.is_some_and(|proof| {
+                s.meta.machine_id == proof.machine_id
+                    && configuration == proof.configuration
+                    && s.last_activity == proof.last_activity
+            });
+            if !verified_inactive {
+                return Err("session has explicit paid cache keepalive enabled".to_owned());
+            }
+        }
+        Ok(())
     }
 }
 

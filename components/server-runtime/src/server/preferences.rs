@@ -130,6 +130,15 @@ pub async fn update_value(
     } else {
         None
     };
+    let _rollover_write = if change.scope == crate::context_rollover::PREFERENCE_SCOPE {
+        Some(
+            super::session_context::rollover::policy_lock()
+                .write()
+                .await,
+        )
+    } else {
+        None
+    };
     match state
         .store
         .as_ref()

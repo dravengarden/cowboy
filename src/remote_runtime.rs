@@ -33,6 +33,7 @@ mod config_sync;
 #[cfg(test)]
 mod context_fence_tests;
 mod declarations;
+mod hibernation;
 mod native_admission;
 mod notice_recovery;
 mod pending_commands;
@@ -126,6 +127,8 @@ pub struct Shared {
     /// `SUBAGENT_CANCEL_PROTOCOL_VERSION` would reject a `CancelSubagent`
     /// frame and drop the whole connection.
     machine_protocol: u16,
+    hibernation_epoch_supported: AtomicBool,
+    connection: Mutex<Option<crate::machine_control::ConnectionToken>>,
     account_stops: Mutex<HashMap<String, account_stop::Waiter>>,
     sent: Mutex<HashSet<String>>,
     /// Commands whose transport handoff has been attempted (`native_admission::send`).
@@ -291,6 +294,8 @@ impl RemoteRuntime {
                 native_fork_protocol: machine_protocol
                     >= crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
                 machine_protocol,
+                hibernation_epoch_supported: AtomicBool::new(false),
+                connection: Mutex::new(None),
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
@@ -358,6 +363,8 @@ impl RemoteRuntime {
                 steering: Mutex::new(HashMap::new()),
                 native_fork_protocol: true,
                 machine_protocol: crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                hibernation_epoch_supported: AtomicBool::new(false),
+                connection: Mutex::new(None),
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
@@ -1333,36 +1340,6 @@ impl RemoteRuntime {
 
     pub fn set_config_option(&self, session_id: &str, config_id: &str, value: serde_json::Value) {
         queue_config_value(&self.shared, session_id, config_id, value);
-    }
-
-    /// Release an idle session's worker on its Machine without deleting the session.
-    pub fn hibernate(&self, session_id: &str) {
-        self.hibernate_epoch(session_id, None);
-    }
-
-    pub fn hibernate_epoch(&self, session_id: &str, expected_worker_epoch: Option<String>) {
-        if self
-            .shared
-            .pending
-            .lock()
-            .has_pending_hibernation(session_id)
-        {
-            return;
-        }
-        let command_id = self.next_id("hibernate");
-        let cmd = CoreCommand::HibernateSession {
-            session_id: session_id.to_owned(),
-            command_id: command_id.clone(),
-            expected_worker_epoch,
-        };
-        self.queue(command_id, cmd);
-    }
-
-    pub fn hibernation_pending(&self, session_id: &str) -> bool {
-        self.shared
-            .pending
-            .lock()
-            .has_pending_hibernation(session_id)
     }
 
     pub fn stop(&self, session_id: &str) {

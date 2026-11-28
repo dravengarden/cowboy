@@ -25,6 +25,11 @@ pub const PACING_HEADER: &str = "x-cowboy-machine-pacing";
 pub const CREDIT: &str = "credit-v1";
 pub const STREAM_HEADER: &str = "x-cowboy-machine-stream";
 pub const STREAM: &str = "deflate-stream-v1";
+/// Host-layer capability header advertising atomic `expected_worker_epoch`
+/// enforcement on `CoreCommand::HibernateSession` without altering the
+/// retained worker wire interface.
+pub const HIBERNATION_EPOCH_HEADER: &str = "x-cowboy-machine-hibernation-epoch";
+pub const HIBERNATION_EPOCH_V1: &str = "epoch-v1";
 const CHUNK_BYTES: usize = 16 * 1024;
 // Chunk bytes sent beyond the receiver's credit: at the measured ~100 KiB/s
 // overlay a small frame waits about a second behind bulk, while a 0.2-1 s

@@ -58,6 +58,7 @@ mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
+pub use context_rollover::KeepaliveInactiveProof;
 pub use hub_queue::{
     HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, MAX_HELD_COMMAND_BYTES,
     SteerSource, SteerSourceKind, TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait,
@@ -1533,6 +1534,7 @@ struct HubInner {
     auth_parents: Mutex<HashMap<String, AuthParentEntry>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
+    rollover_policy_epoch: std::sync::atomic::AtomicU64,
     product_permissions: Mutex<product_permissions::Observations>,
     /// Persisted Busy sessions awaiting an authoritative, connected worker
     /// snapshot after the control plane restarts. Broker registry placeholders
@@ -1816,6 +1818,7 @@ impl Hub {
                 mcp_launch: Mutex::new(None),
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
+                rollover_policy_epoch: std::sync::atomic::AtomicU64::new(0),
                 context_edits: Mutex::new(HashSet::new()),
                 auth_parents: Mutex::new(HashMap::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
@@ -2123,6 +2126,9 @@ impl Hub {
     /// devices. The live patch carries only this document; a reconnect resync
     /// carries every document announced this lifetime.
     pub fn announce_preferences(&self, owner: &str, scope: &str, revision: i64) {
+        if scope == crate::context_rollover::PREFERENCE_SCOPE {
+            self.bump_rollover_policy_epoch();
+        }
         {
             let mut all = self.inner.preference_announcements.lock();
             let scopes = all.entry(owner.to_owned()).or_default();
@@ -2755,16 +2761,6 @@ impl Hub {
         if changed {
             self.broadcast_session(session_id);
         }
-    }
-
-    /// How long ago this Controller last appended an event to the session.
-    #[must_use]
-    pub fn session_idle_for(&self, session_id: &str) -> Option<std::time::Duration> {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map(|session| session.last_activity.elapsed())
     }
 
     /// Runtime-owned prompt guard, excluding channel/preflight ownership.

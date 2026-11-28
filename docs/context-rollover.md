@@ -53,11 +53,22 @@ reaches the dispatcher and all of these hold, Cowboy renews the context first:
   id and no background work, and its context has no staged links, pending
   send or undelivered linked-context prompt. Anything else resumes normally.
 
-A live worker idle past its policy (without explicit paid DeepSeek keepalive
-enabled) is hibernated by a one-minute pass (`hibernate_idle_session`, which
-revalidates activity, queue state, and keepalive under the Supervisor lifecycle
-lock and is refused atomically by the Machine if work started), so its next
-prompt takes the dormant path. Renewal never resets a running
+A live worker idle past its policy is hibernated by a one-minute pass
+(`hibernate_idle_session`, which revalidates activity, queue state, and
+keepalive under the Supervisor lifecycle lock and is refused atomically by the
+Machine if work started), so its next prompt takes the dormant path. When a
+DeepSeek session has explicit paid keepalive enabled alongside an idle renewal
+policy, the pass requires a Machine host that advertises epoch-bound hibernation
+(`x-cowboy-machine-hibernation-epoch: epoch-v1`, independent of the retained
+worker wire interface) and queries its gateway fail-closed:
+while the gateway reports `protected` (or status is unavailable, or the Machine
+predates epoch-bound hibernation) hibernation stays blocked; once the gateway
+reports `inactive` (after the 6-attempt / 26-hour cap, a cache miss/partial
+hit, eviction, or when the session never reached the 64K / 90% threshold) and
+the worker epoch, Machine, gateway configuration, renewal policy, and session
+activity have not changed since the check, the worker hibernates
+(`keepalive_handoff=true`) and hands off cleanly to idle renewal on the next
+prompt. Renewal never resets a running
 worker: the native id is forgotten under the Supervisor lifecycle lock that
 every wake path holds, after re-checking that the session is still dormant
 with the same native id; if it woke meanwhile the recorded renewal is

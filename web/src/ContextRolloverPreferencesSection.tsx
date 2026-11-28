@@ -36,6 +36,7 @@ import {
 } from "./sessionCacheUi";
 import { useStoreSelector } from "./store";
 import { providerDefault, useSubscriptionAccounts } from "./subscriptionAccounts";
+import { usageCacheIntervalLabel } from "./usageHostMap";
 
 function formatContextTokens(tokens: number): string {
   if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
@@ -150,6 +151,17 @@ function ProviderRolloverRow({
       <Stack sx={{ minWidth: 0 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap>
           <Typography variant="body2">{provider.name}</Typography>
+          {provider.keepalive_independent && (
+            <Tooltip title="Supports optional per-session paid gateway keepalive (default 5h30m adaptive interval; actual attempt and age caps are reported per session). On supported Machines, automatically hands off to idle renewal once keepalive expires; older Machines require manual hibernate or Clear after keepalive ends.">
+              <Chip
+                size="small"
+                variant="outlined"
+                data-provider-keepalive-cadence={provider.id}
+                label={`Keepalive · ${usageCacheIntervalLabel(provider.id) || "5h30m"}`}
+                sx={{ height: 19, fontSize: "0.68rem", color: "text.secondary" }}
+              />
+            </Tooltip>
+          )}
           {sevenDay && sevenDay.cachedShare !== null && (
             <Tooltip
               title={`Observed ${sevenDay.observedTurns.toLocaleString()} turn${sevenDay.observedTurns === 1 ? "" : "s"} across registered account(s) in the last 7 days`}

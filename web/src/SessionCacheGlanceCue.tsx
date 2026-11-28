@@ -28,6 +28,7 @@ export function DesktopCacheGlanceButton({
 }): React.JSX.Element | null {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const liveWatermark = useLatestTurnEndSeq(sessionId);
   const { catalog } = useProviderCatalog();
   const sessionMeta = useStoreSelector((snapshot) => snapshot.sessionsById.get(sessionId));
@@ -40,7 +41,10 @@ export function DesktopCacheGlanceButton({
     );
     return entry?.manifest.host.features.includes("cache_protection_v1") === true;
   }, [catalog, sessionMeta]);
-  const { cacheProtection } = useCacheProtectionStatus(supportsKeepalive, sessionId);
+  const { cacheProtection, cacheProtectionUnavailable } = useCacheProtectionStatus(
+    supportsKeepalive,
+    sessionId,
+  );
 
   useEffect(() => {
     const onPrefs = (event: Event): void => {
@@ -49,7 +53,10 @@ export function DesktopCacheGlanceButton({
       setRefreshTick((t) => t + 1);
     };
     const onVisible = (): void => {
-      if (document.visibilityState === "visible") setRefreshTick((t) => t + 1);
+      if (document.visibilityState === "visible") {
+        setClockMs(Date.now());
+        setRefreshTick((t) => t + 1);
+      }
     };
     window.addEventListener(PREFERENCES_CHANGED, onPrefs);
     document.addEventListener("visibilitychange", onVisible);
@@ -73,10 +80,27 @@ export function DesktopCacheGlanceButton({
     return (): void => controller.abort();
   }, [sessionId, liveWatermark, refreshTick, sessionMeta?.status, sessionMeta?.context_used]);
 
-  const current = data && data.session_id === sessionId ? data : null;
+  const livePendingWork = useStoreSelector((snapshot) => {
+    const session = snapshot.sessionsById.get(sessionId);
+    const queueCount = snapshot.queues.get(sessionId)?.length ?? 0;
+    const backgroundTasks = session?.background_tasks ?? 0;
+    const att = session?.attention;
+    const attentionCount = (att?.approvals ?? 0) + (att?.questions ?? 0) + (att?.other ?? 0);
+    return queueCount > 0 || backgroundTasks > 0 || attentionCount > 0;
+  });
+  const current =
+    data && data.session_id === sessionId
+      ? { ...data, pending_work: data.pending_work === true || livePendingWork }
+      : null;
   const cue = useMemo(
-    () => deriveCacheGlanceCue(current, supportsKeepalive ? cacheProtection : null),
-    [current, supportsKeepalive, cacheProtection],
+    () =>
+      deriveCacheGlanceCue(
+        current,
+        supportsKeepalive ? cacheProtection : null,
+        clockMs,
+        supportsKeepalive && cacheProtectionUnavailable,
+      ),
+    [current, supportsKeepalive, cacheProtection, cacheProtectionUnavailable, clockMs],
   );
   if (!cue) return null;
 

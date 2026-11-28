@@ -30,10 +30,10 @@ import {
 } from "./cacheMetricsApi";
 import type { DeepseekCacheProtectionStatus } from "./ComposerSheet";
 import {
-  CacheProtectionDisableButton,
   ContextRolloverSettings,
   useCacheProtectionStatus,
 } from "./ContextRolloverSettings";
+import { BuiltInKeepaliveStatus } from "./SessionKeepaliveStatus";
 import {
   MetricDistribution,
   MetricFacts,
@@ -187,6 +187,31 @@ export function useSessionCacheMetricsData(
       return;
     }
     const remainingMs = COLD_RESUME_ADVISORY_MIN_IDLE_MS - currentData.idle_ms + 1_000;
+    const timer = globalThis.setTimeout(() => {
+      setPolicyRefreshTick((tick) => tick + 1);
+    }, remainingMs);
+    return (): void => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [currentData]);
+
+  // Re-fetch authoritative rollover.due/dormant once displayed idle time crosses
+  // the session's rollover threshold so open cards update even without events.
+  useEffect(() => {
+    if (
+      !currentData ||
+      currentData.active_turn === true ||
+      currentData.strategy.rollover.enabled !== true ||
+      currentData.strategy.rollover.due === true ||
+      typeof currentData.strategy.rollover.idle_minutes !== "number" ||
+      currentData.strategy.rollover.idle_minutes <= 0 ||
+      typeof currentData.idle_ms !== "number"
+    ) {
+      return;
+    }
+    const ttlMs = currentData.strategy.rollover.idle_minutes * 60_000;
+    if (currentData.idle_ms >= ttlMs) return;
+    const remainingMs = Math.min(2_147_483_647, Math.max(1_000, ttlMs - currentData.idle_ms + 1_000));
     const timer = globalThis.setTimeout(() => {
       setPolicyRefreshTick((tick) => tick + 1);
     }, remainingMs);
@@ -524,48 +549,6 @@ function RecentTurnsDisclosure({
   );
 }
 
-function BuiltInKeepaliveStatus({
-  sessionId,
-  status,
-  unavailable,
-  onRevoked,
-}: {
-  sessionId: string;
-  status: DeepseekCacheProtectionStatus | null;
-  unavailable: boolean;
-  onRevoked: () => void;
-}): React.JSX.Element | null {
-  if (!status && !unavailable) return null;
-  const label =
-    status?.state === "protected"
-      ? status.protected_tokens
-        ? `Gateway keepalive · protected ${formatCompactTokens(status.protected_tokens)}`
-        : "Gateway keepalive · protected"
-      : status?.state === "disabled"
-      ? "Gateway keepalive · off"
-      : unavailable
-      ? "Gateway keepalive · status unavailable"
-      : "Gateway keepalive · learning";
-  const color =
-    status?.state === "protected"
-      ? status.configuredEnabled === false
-        ? "warning"
-        : "success"
-      : unavailable
-      ? "warning"
-      : "default";
-  return (
-    <Stack spacing={0.5} alignItems="flex-start">
-      <Chip size="small" variant="outlined" color={color} label={label} />
-      <CacheProtectionDisableButton
-        sessionId={sessionId}
-        status={status}
-        onDisabled={onRevoked}
-      />
-    </Stack>
-  );
-}
-
 function useVisibleClockMs(intervalMs: number): number {
   const [clockMs, setClockMs] = useState(() => Date.now());
   useEffect(() => {
@@ -588,6 +571,9 @@ function PromptCacheControls({
   pollOwnKeepalive,
   ownKeepaliveStatus,
   ownKeepaliveUnavailable,
+  effectiveKeepalive,
+  clockMs,
+  metrics,
   onPolicyChange,
 }: {
   sessionId: string;
@@ -595,8 +581,15 @@ function PromptCacheControls({
   pollOwnKeepalive: boolean;
   ownKeepaliveStatus: DeepseekCacheProtectionStatus | null;
   ownKeepaliveUnavailable: boolean;
+  effectiveKeepalive?: DeepseekCacheProtectionStatus | null | undefined;
+  clockMs: number;
+  metrics?: SessionCacheMetricsResponse | null | undefined;
   onPolicyChange: () => void;
 }): React.JSX.Element {
+  const rolloverIdleMinutes = metrics?.strategy.rollover.enabled
+    ? metrics.strategy.rollover.idle_minutes
+    : null;
+  const handoffSupported = metrics?.strategy.gateway_keepalive.handoff_supported;
   return (
     <Stack spacing={0.75}>
       {keepaliveSlot !== undefined ? (
@@ -606,10 +599,21 @@ function PromptCacheControls({
           sessionId={sessionId}
           status={ownKeepaliveStatus}
           unavailable={ownKeepaliveUnavailable}
+          clockMs={clockMs}
+          rolloverIdleMinutes={rolloverIdleMinutes}
+          handoffSupported={handoffSupported}
+          pendingWork={metrics?.pending_work}
           onRevoked={onPolicyChange}
         />
       ) : null}
-      <ContextRolloverSettings sessionId={sessionId} onPolicyChange={onPolicyChange} />
+      <ContextRolloverSettings
+        sessionId={sessionId}
+        dormant={metrics?.dormant}
+        pendingWork={metrics?.pending_work}
+        keepaliveStatus={effectiveKeepalive}
+        handoffSupported={handoffSupported}
+        onPolicyChange={onPolicyChange}
+      />
     </Stack>
   );
 }
@@ -621,6 +625,7 @@ export function SessionPromptCacheCard({
   readOnly = false,
   refreshKey = 0,
   keepaliveStatus,
+  keepaliveUnavailable,
   keepaliveSlot,
   onPolicyChange,
   onNavigateToDefaults,
@@ -630,6 +635,7 @@ export function SessionPromptCacheCard({
   readOnly?: boolean;
   refreshKey?: number;
   keepaliveStatus?: DeepseekCacheProtectionStatus | null;
+  keepaliveUnavailable?: boolean;
   keepaliveSlot?: ReactNode;
   onPolicyChange?: () => void;
   onNavigateToDefaults?: () => void;
@@ -654,6 +660,8 @@ export function SessionPromptCacheCard({
   const ownKeepalive = useCacheProtectionStatus(pollOwnKeepalive, sessionId);
   const effectiveKeepalive =
     keepaliveStatus ?? (pollOwnKeepalive ? ownKeepalive.cacheProtection : null);
+  const effectiveKeepaliveUnavailable =
+    keepaliveUnavailable ?? (pollOwnKeepalive ? ownKeepalive.cacheProtectionUnavailable : false);
 
   const segments = useMemo(
     () => (currentData ? buildDisjointCacheSegments(currentData.totals) : []),
@@ -676,6 +684,7 @@ export function SessionPromptCacheCard({
           pollOwnKeepalive={pollOwnKeepalive}
           ownKeepaliveStatus={ownKeepalive.cacheProtection}
           ownKeepaliveUnavailable={ownKeepalive.cacheProtectionUnavailable}
+          clockMs={clockMs}
           onPolicyChange={handlePolicyChange}
         />
       </Box>
@@ -689,7 +698,11 @@ export function SessionPromptCacheCard({
   };
   const elapsedMs = loadedAtMs > 0 ? Math.max(0, clockMs - loadedAtMs) : 0;
   const strategyBadge = deriveSessionCacheStrategyBadge(liveData, effectiveKeepalive);
-  const windowState = deriveCacheWindowState(liveData, elapsedMs);
+  const windowState = deriveCacheWindowState(liveData, elapsedMs, {
+    keepaliveStatus: effectiveKeepalive,
+    keepaliveUnavailable: effectiveKeepaliveUnavailable,
+    nowMs: clockMs,
+  });
   const telemetryBadge = formatTelemetryBadge(liveData.capabilities);
   const coldResumeAdvisory = formatColdResumeAdvisory(liveData);
 
@@ -732,6 +745,9 @@ export function SessionPromptCacheCard({
           pollOwnKeepalive={pollOwnKeepalive}
           ownKeepaliveStatus={ownKeepalive.cacheProtection}
           ownKeepaliveUnavailable={ownKeepalive.cacheProtectionUnavailable}
+          effectiveKeepalive={effectiveKeepalive}
+          clockMs={clockMs}
+          metrics={liveData}
           onPolicyChange={handlePolicyChange}
         />
       )}

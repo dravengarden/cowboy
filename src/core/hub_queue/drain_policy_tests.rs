@@ -619,3 +619,98 @@ async fn hibernation_exit_and_unpausing_hibernated_session_revive_queued_work() 
     assert_eq!(revived.session_id, "hib-paused");
     assert_eq!(revived.text, "paused during hibernate");
 }
+
+#[test]
+fn admit_idle_hibernation_gates_deepseek_keepalive_on_verified_inactive_activity() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "ds-keepalive".to_owned(),
+        "claude-deepseek".to_owned(),
+        "/tmp".to_owned(),
+        "t".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.set_status("ds-keepalive", Status::Running, None);
+    {
+        let mut sessions = hub.inner.sessions.lock();
+        let session = sessions.get_mut("ds-keepalive").expect("session exists");
+        session.config_preferences = serde_json::json!({
+            "deepseek_cache_protection": true,
+            "deepseek_cache_protection_owner": true,
+        });
+        session.meta.context_used = 120_000;
+        session.last_activity = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(7 * 3600))
+            .expect("past instant");
+    }
+    let (machine_id, configuration, observed) = hub
+        .keepalive_probe_target("ds-keepalive")
+        .expect("keepalive probe target");
+    let policy_epoch = hub.rollover_policy_epoch();
+    let min_idle = std::time::Duration::from_secs(6 * 3600);
+    let exact_proof = crate::core::KeepaliveInactiveProof {
+        machine_id: machine_id.clone(),
+        configuration: configuration.clone(),
+        last_activity: observed,
+        worker_epoch: "epoch-1".to_owned(),
+    };
+
+    // Fail-closed without verified inactive gateway proof.
+    assert!(
+        hub.admit_idle_hibernation("ds-keepalive", min_idle, 80_000, policy_epoch, None)
+            .is_err()
+    );
+    // Reject if proof timestamp no longer matches latest session activity.
+    let mut stale_activity = exact_proof.clone();
+    stale_activity.last_activity = observed
+        .checked_sub(std::time::Duration::from_secs(10))
+        .expect("earlier instant");
+    assert!(
+        hub.admit_idle_hibernation(
+            "ds-keepalive",
+            min_idle,
+            80_000,
+            policy_epoch,
+            Some(&stale_activity),
+        )
+        .is_err()
+    );
+    // Reject if machine_id or gateway configuration changed since proof capture.
+    let mut wrong_machine = exact_proof.clone();
+    wrong_machine.machine_id = "other-machine".to_owned();
+    assert!(
+        hub.admit_idle_hibernation(
+            "ds-keepalive",
+            min_idle,
+            80_000,
+            policy_epoch,
+            Some(&wrong_machine),
+        )
+        .is_err()
+    );
+    // Reject if renewal policy changed concurrently before admission.
+    hub.bump_rollover_policy_epoch();
+    assert!(
+        hub.admit_idle_hibernation(
+            "ds-keepalive",
+            min_idle,
+            80_000,
+            policy_epoch,
+            Some(&exact_proof),
+        )
+        .is_err()
+    );
+    // Admit once live gateway was proved inactive at matching epoch, machine, config, and activity.
+    let latest_policy_epoch = hub.rollover_policy_epoch();
+    assert!(
+        hub.admit_idle_hibernation(
+            "ds-keepalive",
+            min_idle,
+            80_000,
+            latest_policy_epoch,
+            Some(&exact_proof),
+        )
+        .is_ok()
+    );
+}

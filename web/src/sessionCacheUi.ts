@@ -10,6 +10,20 @@ import {
 import type { DeepseekCacheProtectionStatus } from "./ComposerSheet";
 import { formatIdleMinutesLabel } from "./contextRolloverPreferences";
 import type { MetricTone } from "./InfoMetricVisuals";
+import {
+  formatKeepaliveRuntimeMeta,
+  formatShortIdleMinutes,
+  formatShortRemainingMs,
+  keepaliveScheduleSuffix,
+  type KeepaliveRuntimeMeta,
+} from "./keepaliveRuntimeMeta";
+export {
+  formatKeepaliveRuntimeMeta,
+  formatShortIdleMinutes,
+  formatShortRemainingMs,
+  keepaliveScheduleSuffix,
+  type KeepaliveRuntimeMeta,
+};
 
 export interface SessionCacheStrategyBadge {
   label: string;
@@ -20,7 +34,13 @@ export interface SessionCacheStrategyBadge {
 }
 
 export interface CacheWindowView {
-  kind: "active_turn" | "rollover_window" | "policy_restricted" | "off";
+  kind:
+    | "active_turn"
+    | "keepalive_protected"
+    | "keepalive_unavailable"
+    | "rollover_window"
+    | "policy_restricted"
+    | "off";
   stateLabel: string;
   tone: MetricTone;
   progressPercent: number | null;
@@ -56,20 +76,6 @@ export interface CacheGlanceCue {
 }
 
 export const SPARKLINE_LONG_IDLE_GAP_MS = 30 * 60_000;
-
-export function formatShortIdleMinutes(minutes: number): string {
-  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
-}
-
-export function formatShortRemainingMs(remainingMs: number): string {
-  if (remainingMs <= 0) return "0m";
-  const mins = Math.ceil(remainingMs / 60_000);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const rem = mins % 60;
-  return rem === 0 ? `${hours}h` : `${hours}h ${rem}m`;
-}
 
 export function shareMetricTone(share: number | null): MetricTone {
   if (share === null) return "neutral";
@@ -156,8 +162,19 @@ export function deriveSessionCacheStrategyBadge(
   }
   if (rollover.enabled && rollover.idle_minutes !== null) {
     if (rollover.due) {
+      const label =
+        data.dormant === true
+          ? "Expired · Next send renews"
+          : data.dormant === false
+          ? data.pending_work === true
+            ? "Window expired · Hibernation blocked"
+            : data.strategy.gateway_keepalive.enabled === true &&
+                data.strategy.gateway_keepalive.handoff_supported === false
+            ? "Window expired · Manual renew"
+            : "Window expired · Hibernating"
+          : "Expired · Renews once dormant";
       return {
-        label: "Expired · Next send renews",
+        label,
         tone: "warning",
         paid: false,
         provenance,
@@ -213,11 +230,221 @@ function formatThresholdLine(
   };
 }
 
+function keepaliveProtectedWindowView(
+  data: SessionCacheMetricsResponse,
+  keepaliveStatus: DeepseekCacheProtectionStatus,
+  nowMs: number,
+): CacheWindowView {
+  const retained = keepaliveStatus.configuredEnabled === false;
+  const meta = formatKeepaliveRuntimeMeta(keepaliveStatus, nowMs);
+  let progressPercent: number | null = null;
+  if (
+    typeof keepaliveStatus.last_verified_at_ms === "number" &&
+    typeof keepaliveStatus.next_attempt_at_ms === "number" &&
+    keepaliveStatus.next_attempt_at_ms > keepaliveStatus.last_verified_at_ms
+  ) {
+    const span = keepaliveStatus.next_attempt_at_ms - keepaliveStatus.last_verified_at_ms;
+    const done = Math.max(0, nowMs - keepaliveStatus.last_verified_at_ms);
+    progressPercent = Math.min(100, Math.round((done / span) * 100));
+  }
+  const { rollover, gateway_keepalive: gatewayKeepalive } = data.strategy;
+  const maxAttempts = meta?.maxAttempts ?? 6;
+  const maxAgeLabel = meta?.maxAgeLabel ?? "26h";
+  const thresholdSummary = retained
+    ? "Configured off — gateway snapshot stays active until revoked or cap expires"
+    : rollover.enabled && rollover.idle_minutes !== null
+    ? gatewayKeepalive.handoff_supported === true
+      ? `Auto-handoff: switches to ${formatShortIdleMinutes(rollover.idle_minutes)} idle renewal once keepalive expires (${maxAttempts} refreshes / ${maxAgeLabel} cap) or session hibernates`
+      : gatewayKeepalive.handoff_supported === false
+      ? `Refreshes while idle (${maxAttempts} refreshes / ${maxAgeLabel} cap); once keepalive expires, ${formatShortIdleMinutes(rollover.idle_minutes)} idle renewal requires manual hibernate or Clear on this Machine`
+      : `Refreshes while idle up to ${maxAttempts} times (${maxAgeLabel} cap); ${formatShortIdleMinutes(rollover.idle_minutes)} idle renewal applies once dormant`
+    : `Refreshes while idle up to ${maxAttempts} times (${maxAgeLabel} cap); real prompts preempt immediately`;
+  return {
+    kind: "keepalive_protected",
+    stateLabel: retained ? "Keepalive retained" : "Protected by keepalive",
+    tone: retained ? "warning" : "success",
+    progressPercent,
+    timingLabel: meta?.scheduleSummary ?? meta?.intervalSummary ?? null,
+    thresholdSummary,
+    thresholdMet: true,
+  };
+}
+
+function dueRolloverWindowView(
+  data: SessionCacheMetricsResponse,
+  pct: number,
+  idlePrefix: string,
+  threshold: { summary: string | null; met: boolean | null },
+  keepaliveConfirmedInactive: boolean,
+): CacheWindowView {
+  const { gateway_keepalive: gatewayKeepalive } = data.strategy;
+  // Server `dormant` is authoritative (never infer dormancy from Exited alone,
+  // because a pending hibernation ACK still blocks context reset).
+  const dormant = data.dormant;
+  const blockedByPending = dormant === false && data.pending_work === true;
+  if (keepaliveConfirmedInactive) {
+    if (dormant === true) {
+      return {
+        kind: "rollover_window",
+        stateLabel: "Ready to renew",
+        tone: "warning",
+        progressPercent: pct,
+        timingLabel: `${idlePrefix} · next send renews`,
+        thresholdSummary: "Keepalive inactive & session dormant — next send starts a fresh context",
+        thresholdMet: threshold.met,
+      };
+    }
+    if (dormant === false && gatewayKeepalive.handoff_supported === false) {
+      return {
+        kind: "rollover_window",
+        stateLabel: "Keepalive inactive · Manual renew",
+        tone: "warning",
+        progressPercent: pct,
+        timingLabel: `${idlePrefix} · auto-handoff unavailable on this Machine`,
+        thresholdSummary:
+          "This Machine predates automatic keepalive handoff — hibernate or Clear to start a fresh context",
+        thresholdMet: threshold.met,
+      };
+    }
+    if (blockedByPending) {
+      return {
+        kind: "rollover_window",
+        stateLabel: "Keepalive inactive · Hibernation blocked",
+        tone: "warning",
+        progressPercent: pct,
+        timingLabel: `${idlePrefix} · queued or background work blocks hibernation`,
+        thresholdSummary:
+          "Queued, paused, or background work prevents automatic hibernation; finish or clear it so the session can hibernate and renew",
+        thresholdMet: threshold.met,
+      };
+    }
+    return {
+      kind: "rollover_window",
+      stateLabel: dormant === false && gatewayKeepalive.handoff_supported === true
+        ? "Handing off to renewal"
+        : "Keepalive inactive",
+      tone: "warning",
+      progressPercent: pct,
+      timingLabel: `${idlePrefix} · ${
+        dormant === false && gatewayKeepalive.handoff_supported === true
+          ? "waiting for hibernation"
+          : "renews once dormant"
+      }`,
+      thresholdSummary: dormant === false && gatewayKeepalive.handoff_supported === true
+        ? "Keepalive inactive — waiting for idle hibernation before next send renews"
+        : "Keepalive inactive — next send renews once the session is dormant",
+      thresholdMet: threshold.met,
+    };
+  }
+  if (blockedByPending) {
+    return {
+      kind: "rollover_window",
+      stateLabel: "Window expired · Hibernation blocked",
+      tone: "warning",
+      progressPercent: pct,
+      timingLabel: `${idlePrefix} · queued or background work blocks hibernation`,
+      thresholdSummary:
+        "Queued, paused, or background work prevents automatic hibernation; finish or clear it so the session can hibernate and renew",
+      thresholdMet: threshold.met,
+    };
+  }
+  return {
+    kind: "rollover_window",
+    stateLabel: dormant === true ? "Expired · Next send renews" : "Window expired",
+    tone: "warning",
+    progressPercent: pct,
+    timingLabel: `${idlePrefix} · ${
+      dormant === true
+        ? "next send renews"
+        : dormant === false
+        ? "waiting for hibernation"
+        : "renews once dormant"
+    }`,
+    thresholdSummary: dormant === false
+      ? "Worker hibernates automatically while idle; next send renews once dormant"
+      : threshold.summary,
+    thresholdMet: threshold.met,
+  };
+}
+
+function rolloverWindowView(
+  data: SessionCacheMetricsResponse,
+  idleMinutes: number,
+  elapsedSinceLoadMs: number,
+  threshold: { summary: string | null; met: boolean | null },
+  keepaliveStatus: DeepseekCacheProtectionStatus | null,
+): CacheWindowView {
+  const { rollover } = data.strategy;
+  const ttlMs = idleMinutes * 60_000;
+  const baseIdle = typeof data.idle_ms === "number" ? data.idle_ms : null;
+  const idleMs =
+    baseIdle !== null ? Math.max(0, baseIdle + Math.max(0, elapsedSinceLoadMs)) : null;
+  const windowElapsed = rollover.due || (idleMs !== null && idleMs >= ttlMs);
+  // Server `rollover.due` is authoritative for eligibility; live elapsed time
+  // only advances the visual progress bar and never overrides server `due: false`.
+  const eligible = rollover.due === true;
+  const pct =
+    windowElapsed ? 100 : idleMs !== null ? Math.min(100, Math.round((idleMs / ttlMs) * 100)) : 0;
+  const cooling = !windowElapsed && pct >= 75;
+  const ttlLabel = formatShortIdleMinutes(idleMinutes);
+  const idlePrefix = `Idle ${idleMs !== null ? formatIdleGap(idleMs) : `>${ttlLabel}`} / ${ttlLabel}`;
+  const keepaliveConfirmedInactive =
+    keepaliveStatus?.configuredEnabled === true && keepaliveStatus.state === "inactive";
+  if (windowElapsed && !eligible) {
+    const reason = data.context_stale === true
+      ? "usage refreshing after compaction"
+      : threshold.met === false && rollover.min_context_tokens
+      ? `below ${formatCompactTokens(rollover.min_context_tokens)} threshold`
+      : "renewal not eligible";
+    return {
+      kind: "rollover_window",
+      stateLabel: "Cache window elapsed",
+      tone: "info",
+      progressPercent: pct,
+      timingLabel: `${idlePrefix} · ${reason}`,
+      thresholdSummary: threshold.summary,
+      thresholdMet: threshold.met,
+    };
+  }
+  if (!eligible) {
+    return {
+      kind: "rollover_window",
+      stateLabel: cooling ? "Cooling" : "Warm",
+      tone: cooling ? "info" : "success",
+      progressPercent: idleMs !== null ? pct : 0,
+      timingLabel: idleMs !== null
+        ? `${idlePrefix} · ${formatShortRemainingMs(ttlMs - idleMs)} left`
+        : `Window ${ttlLabel} · waiting for completed turn`,
+      thresholdSummary: threshold.summary,
+      thresholdMet: threshold.met,
+    };
+  }
+  return dueRolloverWindowView(data, pct, idlePrefix, threshold, keepaliveConfirmedInactive);
+}
+
+export interface CacheWindowOptions {
+  keepaliveStatus?: DeepseekCacheProtectionStatus | null | undefined;
+  keepaliveUnavailable?: boolean | undefined;
+  sessionDormant?: boolean | undefined;
+  nowMs?: number | undefined;
+}
+
 export function deriveCacheWindowState(
   data: SessionCacheMetricsResponse,
   elapsedSinceLoadMs = 0,
+  keepaliveOrOptions?: DeepseekCacheProtectionStatus | null | CacheWindowOptions,
+  nowMsArg?: number,
 ): CacheWindowView {
-  const { rollover } = data.strategy;
+  const opts: CacheWindowOptions =
+    keepaliveOrOptions &&
+    typeof keepaliveOrOptions === "object" &&
+    !("state" in keepaliveOrOptions)
+      ? keepaliveOrOptions
+      : { keepaliveStatus: keepaliveOrOptions ?? null, nowMs: nowMsArg };
+  const keepaliveStatus = opts.keepaliveStatus ?? null;
+  const keepaliveUnavailable = opts.keepaliveUnavailable === true;
+  const nowMs = opts.nowMs ?? nowMsArg ?? Date.now();
+  const { rollover, gateway_keepalive: gatewayKeepalive } = data.strategy;
   const threshold = formatThresholdLine(
     data.context_used,
     data.context_stale,
@@ -232,6 +459,28 @@ export function deriveCacheWindowState(
       timingLabel: "Cache stays warm during active turn",
       thresholdSummary: rollover.enabled ? threshold.summary : null,
       thresholdMet: rollover.enabled ? threshold.met : null,
+    };
+  }
+  if (keepaliveStatus?.state === "protected") {
+    return keepaliveProtectedWindowView(data, keepaliveStatus, nowMs);
+  }
+  if (
+    gatewayKeepalive.enabled === true &&
+    (keepaliveUnavailable || keepaliveStatus === null)
+  ) {
+    const idleMs =
+      typeof data.idle_ms === "number"
+        ? Math.max(0, data.idle_ms + Math.max(0, elapsedSinceLoadMs))
+        : null;
+    return {
+      kind: "keepalive_unavailable",
+      stateLabel: "Keepalive status unavailable",
+      tone: "warning",
+      progressPercent: null,
+      timingLabel: idleMs !== null ? `Idle ${formatIdleGap(idleMs)}` : null,
+      thresholdSummary:
+        "Gateway keepalive status could not be verified — automatic handoff is paused fail-closed until confirmed",
+      thresholdMet: threshold.met,
     };
   }
   if (data.capabilities.policy_restricted === true) {
@@ -255,33 +504,13 @@ export function deriveCacheWindowState(
     };
   }
   if (rollover.supported && rollover.enabled && rollover.idle_minutes !== null) {
-    const ttlMs = rollover.idle_minutes * 60_000;
-    const baseIdle = typeof data.idle_ms === "number" ? data.idle_ms : null;
-    const idleMs =
-      baseIdle !== null ? Math.max(0, baseIdle + Math.max(0, elapsedSinceLoadMs)) : null;
-    const expired = rollover.due || (idleMs !== null && idleMs >= ttlMs);
-    const pct =
-      expired
-        ? 100
-        : idleMs !== null
-        ? Math.min(100, Math.round((idleMs / ttlMs) * 100))
-        : 0;
-    const cooling = !expired && pct >= 75;
-    const ttlLabel = formatShortIdleMinutes(rollover.idle_minutes);
-    const timingLabel = expired
-      ? `Idle ${idleMs !== null ? formatIdleGap(idleMs) : `>${ttlLabel}`} / ${ttlLabel} · next send renews`
-      : idleMs !== null
-      ? `Idle ${formatIdleGap(idleMs)} / ${ttlLabel} · ${formatShortRemainingMs(ttlMs - idleMs)} left`
-      : `Window ${ttlLabel} · waiting for completed turn`;
-    return {
-      kind: "rollover_window",
-      stateLabel: expired ? "Expired" : cooling ? "Cooling" : "Warm",
-      tone: expired ? "warning" : cooling ? "info" : "success",
-      progressPercent: idleMs !== null || expired ? pct : 0,
-      timingLabel,
-      thresholdSummary: threshold.summary,
-      thresholdMet: threshold.met,
-    };
+    return rolloverWindowView(
+      data,
+      rollover.idle_minutes,
+      elapsedSinceLoadMs,
+      threshold,
+      keepaliveStatus,
+    );
   }
   const canaryNote =
     typeof rollover.recommended_idle_minutes === "number" &&
@@ -363,10 +592,16 @@ export function buildTurnSparklineBars(turns: readonly TurnCacheFact[]): TurnSpa
 export function deriveCacheGlanceCue(
   data: SessionCacheMetricsResponse | null,
   keepaliveStatus?: DeepseekCacheProtectionStatus | null,
+  nowMs: number = Date.now(),
+  keepaliveUnavailable = false,
 ): CacheGlanceCue | null {
   if (!data) return null;
   const badge = deriveSessionCacheStrategyBadge(data, keepaliveStatus);
-  const win = deriveCacheWindowState(data);
+  const win = deriveCacheWindowState(data, 0, {
+    keepaliveStatus,
+    keepaliveUnavailable,
+    nowMs,
+  });
   const advisory = formatColdResumeAdvisory(data);
   const latestTurn =
     data.recent_turns.length > 0
@@ -398,11 +633,35 @@ export function deriveCacheGlanceCue(
       tooltipLines,
     };
   }
-  if (data.strategy.rollover.due) {
+  const keepaliveUnknown =
+    data.strategy.gateway_keepalive.enabled === true &&
+    (keepaliveUnavailable || keepaliveStatus === null);
+  if (keepaliveUnknown) {
     return {
       showAttention: true,
       tone: "warning",
-      shortLabel: "Cache expired",
+      shortLabel: "Keepalive ?",
+      tooltipLines,
+    };
+  }
+  if (data.strategy.rollover.due) {
+    const dormant = data.dormant;
+    const shortLabel =
+      dormant === true
+        ? "Cache expired"
+        : dormant === false && data.pending_work === true
+        ? "Hibernation blocked"
+        : dormant === false &&
+            !(
+              keepaliveStatus?.configuredEnabled === true &&
+              data.strategy.gateway_keepalive.handoff_supported === false
+            )
+        ? "Hibernating soon"
+        : "Window expired";
+    return {
+      showAttention: true,
+      tone: "warning",
+      shortLabel,
       tooltipLines,
     };
   }

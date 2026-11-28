@@ -204,6 +204,20 @@ pub async fn api_session_hibernate(
     }
 }
 
+fn ensure_positive_u64(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    default: u64,
+) {
+    let valid = object
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|value| value > 0);
+    if !valid {
+        object.insert(key.to_owned(), default.into());
+    }
+}
+
 pub async fn api_session_cache_protection(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -263,6 +277,17 @@ pub async fn api_session_cache_protection(
                 if let Some(Some(worker_enabled)) = applied {
                     object.insert("appliedEnabled".to_owned(), worker_enabled.into());
                 }
+                ensure_positive_u64(
+                    object,
+                    "base_interval_ms",
+                    u64::from(crate::deepseek_cache::base_interval_ms()),
+                );
+                ensure_positive_u64(
+                    object,
+                    "maximum_attempts",
+                    crate::deepseek_cache::MAX_ATTEMPTS,
+                );
+                ensure_positive_u64(object, "maximum_age_ms", crate::deepseek_cache::MAX_AGE_MS);
                 object.insert(
                     "minimumHitTokens".to_owned(),
                     crate::deepseek_cache::minimum_hit_tokens().into(),
@@ -1186,5 +1211,31 @@ pub async fn api_question_page(
             );
             (StatusCode::SERVICE_UNAVAILABLE, "question page unavailable").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_positive_u64;
+
+    #[test]
+    fn ensure_positive_u64_preserves_positive_numbers_and_replaces_invalid_values() {
+        let mut obj = serde_json::Map::new();
+        obj.insert("valid".to_owned(), serde_json::json!(42));
+        obj.insert("zero".to_owned(), serde_json::json!(0));
+        obj.insert("null_val".to_owned(), serde_json::Value::Null);
+        obj.insert("str_val".to_owned(), serde_json::json!("100"));
+
+        ensure_positive_u64(&mut obj, "valid", 99);
+        ensure_positive_u64(&mut obj, "zero", 99);
+        ensure_positive_u64(&mut obj, "null_val", 99);
+        ensure_positive_u64(&mut obj, "str_val", 99);
+        ensure_positive_u64(&mut obj, "missing", 99);
+
+        assert_eq!(obj["valid"], serde_json::json!(42));
+        assert_eq!(obj["zero"], serde_json::json!(99));
+        assert_eq!(obj["null_val"], serde_json::json!(99));
+        assert_eq!(obj["str_val"], serde_json::json!(99));
+        assert_eq!(obj["missing"], serde_json::json!(99));
     }
 }

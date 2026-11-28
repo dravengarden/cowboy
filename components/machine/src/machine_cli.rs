@@ -2,6 +2,7 @@
 
 mod connection_extensions;
 mod post_edit;
+mod transport_headers;
 mod wrap_up_hint;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1234,26 +1235,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     endpoint.set_query(None);
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let mut request = endpoint.as_str().into_client_request()?;
-    request.headers_mut().insert(
-        crate::machine_transport::HEADER,
-        crate::machine_transport::CHUNKED.parse()?,
-    );
-    request.headers_mut().insert(
-        crate::machine_transport::COMPRESSION_HEADER,
-        crate::machine_transport::DEFLATE.parse()?,
-    );
-    request.headers_mut().insert(
-        crate::machine_transport::PACING_HEADER,
-        crate::machine_transport::CREDIT.parse()?,
-    );
-    request.headers_mut().insert(
-        crate::machine_transport::STREAM_HEADER,
-        crate::machine_transport::STREAM.parse()?,
-    );
-    request.headers_mut().insert(
-        crate::machine_lanes::LANES_HEADER,
-        crate::machine_lanes::LANES.parse()?,
-    );
+    transport_headers::attach(&mut request)?;
     post_edit::attach_upgrade_header(&mut request)?;
     let lane_endpoint = endpoint.clone();
     let (mut socket, response) = reconnect::dial(request, retry.dial_bound()).await?;
