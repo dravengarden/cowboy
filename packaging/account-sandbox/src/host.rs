@@ -420,6 +420,58 @@ mod tests {
         assert!(super::loop_source(mountinfo, "/absent").is_err());
     }
 
+    /// The real tools grow a mounted loop image online. Needs root, loop
+    /// devices, `mkfs.ext4`, `losetup` and `resize2fs` on `PATH`:
+    /// `sudo <test binary> --ignored a_mounted_loop_image_grows_online`.
+    #[test]
+    #[ignore = "needs root, loop devices and e2fsprogs"]
+    fn a_mounted_loop_image_grows_online() {
+        use super::Host as _;
+        let which = |name: &str| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|dir| dir.join(name))
+                .find(|path| path.is_file())
+                .unwrap_or_else(|| panic!("{name} is not on PATH"))
+        };
+        let host = super::SystemHost {
+            tools: crate::config::Tools {
+                mkfs_ext4: which("mkfs.ext4"),
+                losetup: which("losetup"),
+                resize2fs: which("resize2fs"),
+                mount: which("mount"),
+                umount: which("umount"),
+                ..crate::config::Tools::default()
+            },
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let (image, home) = (temp.path().join("home.img"), temp.path().join("home"));
+        std::fs::create_dir(&home).unwrap();
+        let file = std::fs::File::create(&image).unwrap();
+        file.set_len(64 << 20).unwrap();
+        host.format_image(&image, 4096, (0, 0)).unwrap();
+        host.mount_image(&image, &home).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            let before = host.filesystem_usage(&home).unwrap();
+            std::fs::write(home.join("data"), vec![7_u8; 40 << 20]).unwrap();
+            file.set_len(256 << 20).unwrap();
+            host.grow_mounted_image(&image, &home).unwrap();
+            let after = host.filesystem_usage(&home).unwrap();
+            assert!(
+                after.size_bytes > before.size_bytes * 3,
+                "{before:?} -> {after:?}"
+            );
+            assert!(after.inodes > before.inodes * 3, "{before:?} -> {after:?}");
+            assert_eq!(std::fs::read(home.join("data")).unwrap().len(), 40 << 20);
+            // Another image's mount point is refused.
+            assert!(
+                host.grow_mounted_image(&temp.path().join("other.img"), &home)
+                    .is_err()
+            );
+        });
+        host.unmount(&home).unwrap();
+        result.unwrap();
+    }
+
     #[test]
     fn a_missing_or_unset_cgroup_is_empty() {
         assert!(!super::cgroup_populated(""));
