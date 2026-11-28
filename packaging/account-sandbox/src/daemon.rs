@@ -77,7 +77,7 @@ const RECENT_EXITS: usize = 64;
 pub const MAX_CONCURRENT_REGISTRATIONS: usize = 2;
 
 #[derive(Default)]
-struct StagingTotals {
+pub(crate) struct StagingTotals {
     count: usize,
     bytes: u64,
 }
@@ -110,6 +110,8 @@ pub struct Daemon {
     pub(crate) owned: Mutex<HashMap<String, Vec<(String, String)>>>,
     exits: Mutex<HashMap<String, ExitSlot>>,
     staging: Mutex<StagingTotals>,
+    /// Serializes home growth with the unmount of a home (`crate::capacity`).
+    pub(crate) capacity: Mutex<()>,
     recent_exits: Mutex<std::collections::VecDeque<(String, Option<i32>)>>,
     exit_signal: Condvar,
     next_connection: AtomicU64,
@@ -142,6 +144,7 @@ impl Daemon {
             owned: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
             staging: Mutex::new(StagingTotals::default()),
+            capacity: Mutex::new(()),
             recent_exits: Mutex::new(std::collections::VecDeque::new()),
             exit_signal: Condvar::new(),
             next_connection: AtomicU64::new(1),
@@ -293,17 +296,33 @@ impl Daemon {
         }
     }
 
-    /// Bytes of runtime registrations staging now.
-    pub(crate) fn staging_bytes(&self) -> u64 {
-        guard(&self.staging).bytes
+    /// The space budget of the state root's filesystem. Its guard
+    /// serializes every commitment of that space (a new image, a growth, a
+    /// staging registration) with the check that admits it.
+    pub(crate) fn budget(&self) -> MutexGuard<'_, StagingTotals> {
+        guard(&self.staging)
+    }
+
+    /// Bytes free on the state root beyond the reserve, the space account
+    /// images may still claim (their unallocated sparse length) and
+    /// registrations staging. An image that cannot be accounted for fails
+    /// the check rather than counting as nothing.
+    pub(crate) fn available_space(&self, staging: &StagingTotals) -> Outcome<u64> {
+        let free = self.host.free_bytes(&self.config.state_root)?;
+        let accounts = self.accounts()?;
+        let committed = crate::capacity::unallocated_image_bytes(&accounts)?;
+        Ok(free
+            .saturating_sub(self.config.free_space_reserve_bytes)
+            .saturating_sub(committed)
+            .saturating_sub(staging.bytes))
     }
 
     pub(crate) fn check_space(&self) -> Outcome<()> {
-        let free = self.host.free_bytes(&self.config.state_root)?;
-        if free < self.config.free_space_reserve_bytes {
+        let staging = self.budget();
+        if self.available_space(&staging)? == 0 {
             return Err(fail(
                 Code::InsufficientSpace,
-                format!("{free} bytes free is below the reserve"),
+                "the state root has no space beyond its reserve and what images and staging may still claim",
             ));
         }
         Ok(())
@@ -350,12 +369,21 @@ impl Daemon {
 
     fn create_image(&self, dir: &OwnedFd, key: &str, meta: &AccountMeta) -> Outcome<()> {
         safefs::remove_file(dir.as_fd(), "home.img")?;
+        // Sparse: blocks are allocated only as the account writes, so the
+        // whole length is committed against the budget before it exists.
+        let staging = self.budget();
+        if self.available_space(&staging)? < self.config.home_image_bytes {
+            return Err(fail(
+                Code::InsufficientSpace,
+                "the state root cannot commit another home image beyond its reserve",
+            ));
+        }
         let file = safefs::create_new(dir.as_fd(), "home.img", 0o600)?;
-        // Sparse: blocks are allocated only as the account writes.
         file.set_len(self.config.home_image_bytes)
             .context("size home image")?;
         file.sync_all()?;
         drop(file);
+        drop(staging);
         let paths = self.paths(key);
         self.host
             .format_image(&paths.image, self.config.home_image_inodes, meta.owner())?;
@@ -459,23 +487,18 @@ impl Daemon {
     /// most [`MAX_CONCURRENT_REGISTRATIONS`] registrations stage at once.
     pub(crate) fn reserve_staging(&self, size: u64) -> Outcome<Staging<'_>> {
         let bytes = size.saturating_mul(2);
-        let mut staging = guard(&self.staging);
+        let mut staging = self.budget();
         if staging.count >= MAX_CONCURRENT_REGISTRATIONS {
             return Err(fail(
                 Code::Limit,
                 "too many runtime registrations in flight",
             ));
         }
-        let free = self.host.free_bytes(&self.config.state_root)?;
-        let needed = self
-            .config
-            .free_space_reserve_bytes
-            .saturating_add(staging.bytes)
-            .saturating_add(bytes);
-        if free < needed {
+        let available = self.available_space(&staging)?;
+        if available < bytes {
             return Err(fail(
                 Code::InsufficientSpace,
-                format!("{free} bytes free cannot stage {bytes} bytes above the reserve"),
+                format!("{available} bytes available above the reserve cannot stage {bytes} bytes"),
             ));
         }
         staging.count += 1;

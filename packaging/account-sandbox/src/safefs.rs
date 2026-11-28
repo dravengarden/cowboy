@@ -295,6 +295,27 @@ pub fn list(dir: BorrowedFd<'_>) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// At most `max` entry names of the directory `dir` (without `.` and `..`
+/// and skipping names that are not UTF-8), in directory order: a bounded
+/// read of a directory an account controls.
+pub fn list_bounded(dir: BorrowedFd<'_>, max: usize) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(dir)? {
+        if names.len() >= max {
+            break;
+        }
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        if let Ok(name) = std::str::from_utf8(name) {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
 /// `bytes` random bytes as lowercase hex.
 pub fn nonce(bytes: usize) -> Result<String> {
     let mut buffer = vec![0_u8; bytes];

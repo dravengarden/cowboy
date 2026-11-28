@@ -95,8 +95,14 @@ impl Daemon {
                 ));
             }
             drop(home);
-            // Never while a capacity check holds the mounted home.
-            let _capacity = crate::capacity::capacity_lock();
+            // Never while a capacity check holds the mounted home, and never
+            // waiting for one under the account lock: the removal is retried.
+            let Some(_capacity) = self.try_capacity_lock() else {
+                return Err(fail(
+                    Code::Conflict,
+                    "a capacity check holds the home; retry the removal",
+                ));
+            };
             self.host.unmount(&paths.home)?;
         }
         for name in safefs::list(dir.as_fd())? {

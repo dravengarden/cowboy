@@ -241,7 +241,10 @@ impl std::io::Read for Unread {
 #[test]
 fn registrations_reserve_staging_space_before_their_body() {
     let f = fixture();
-    let reserve = f.config.free_space_reserve_bytes;
+    // The account's sparse image may still claim its unallocated length.
+    let committed =
+        crate::capacity::unallocated_image_bytes(&f.daemon.accounts().unwrap()).unwrap();
+    let reserve = f.config.free_space_reserve_bytes + committed;
     f.host.free.store(reserve + 300, Ordering::Relaxed);
     let first = f.daemon.reserve_staging(100).unwrap();
     // A second archive of 100 bytes needs 200 more bytes than are free.

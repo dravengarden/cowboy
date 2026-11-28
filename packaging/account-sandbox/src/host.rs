@@ -398,11 +398,9 @@ impl Host for SystemHost {
             "home is not the root of its filesystem"
         );
         let device = home_stat.st_dev;
-        ensure!(
-            rustix::fs::major(device) == LOOP_MAJOR,
-            "home is not on a loop device"
-        );
-        let path = format!("/dev/loop{}", rustix::fs::minor(device));
+        let (major, minor) = (rustix::fs::major(device), rustix::fs::minor(device));
+        ensure!(major == LOOP_MAJOR, "home is not on a loop device");
+        let path = loop_device_node(major, minor)?;
         let loop_device = rustix::fs::open(
             path.as_str(),
             rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
@@ -426,18 +424,49 @@ impl Host for SystemHost {
             status.lo_offset == 0 && status.lo_sizelimit == 0,
             "{path} maps only part of its backing file"
         );
-        crate::raw::loop_set_capacity(loop_device.as_fd())
-            .with_context(|| format!("refresh the capacity of {path}"))?;
-        let device_bytes = crate::raw::block_device_bytes(loop_device.as_fd())?;
         let (blocks, block_size) = ext4_geometry(loop_device.as_fd())?;
+        let filesystem_bytes = blocks.saturating_mul(block_size);
+        let image_bytes = u64::try_from(image_stat.st_size).unwrap_or(0);
+        // Never let the device shrink under the filesystem: refresh only
+        // toward a longer image.
+        ensure!(
+            image_bytes >= filesystem_bytes,
+            "the home image ({image_bytes} bytes) is shorter than its filesystem ({filesystem_bytes})"
+        );
+        if image_bytes > crate::raw::block_device_bytes(loop_device.as_fd())? {
+            crate::raw::loop_set_capacity(loop_device.as_fd())
+                .with_context(|| format!("refresh the capacity of {path}"))?;
+        }
+        let device_bytes = crate::raw::block_device_bytes(loop_device.as_fd())?;
+        ensure!(
+            device_bytes >= filesystem_bytes,
+            "{path} ({device_bytes} bytes) is smaller than its filesystem ({filesystem_bytes})"
+        );
         let device_blocks = device_bytes / block_size;
-        if device_blocks <= blocks {
+        if device_blocks == blocks {
             return Ok(false);
         }
         crate::raw::ext4_resize(home, device_blocks)
             .with_context(|| format!("grow the filesystem on {path} to {device_blocks} blocks"))?;
         Ok(true)
     }
+}
+
+/// The device node of block device `major:minor`, named by the kernel in
+/// sysfs (a loop device's minor is not its index when partitions are
+/// enabled); the caller verifies the node's device number after opening.
+fn loop_device_node(major: u32, minor: u32) -> Result<String> {
+    let uevent = std::fs::read_to_string(format!("/sys/dev/block/{major}:{minor}/uevent"))
+        .with_context(|| format!("read the uevent of block device {major}:{minor}"))?;
+    let name = uevent
+        .lines()
+        .find_map(|line| line.strip_prefix("DEVNAME="))
+        .with_context(|| format!("block device {major}:{minor} has no name"))?;
+    ensure!(
+        name.starts_with("loop") && name.bytes().all(|b| b.is_ascii_alphanumeric()),
+        "block device {major}:{minor} is named {name:?}, not a loop device"
+    );
+    Ok(format!("/dev/{name}"))
 }
 
 /// Whether `/var/run` is a directory of its own rather than a symlink.

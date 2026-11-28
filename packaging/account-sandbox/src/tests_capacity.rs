@@ -118,7 +118,9 @@ fn growth_charges_the_space_every_image_may_still_claim() {
     f.set_home_usage(usage(REPORTED_4G, 1024));
     let refused = f.start(Mode::Probe, 0).unwrap_err();
     assert!(
-        refused.message.contains("bytes free on the host"),
+        refused
+            .message
+            .contains("beyond the reserve and what images"),
         "{}",
         refused.message
     );
@@ -126,6 +128,57 @@ fn growth_charges_the_space_every_image_may_still_claim() {
     f.host.free.store(reserve + 9 * GIB, Ordering::Relaxed);
     f.start(Mode::Probe, 0).unwrap();
     assert_eq!(f.image_len(), 8 * GIB);
+}
+
+#[test]
+fn new_images_and_staging_share_the_budget_growth_draws_on() {
+    let f = fixture();
+    let reserve = f.config.free_space_reserve_bytes;
+    // Room for the existing sparse image's claim plus 3 GiB.
+    f.host.free.store(reserve + 7 * GIB, Ordering::Relaxed);
+    // A second 4 GiB image would claim more than is left.
+    let other = f.call(crate::protocol::Request::EnsureAccount {
+        service_id: "svc".into(),
+        account_id: "other".into(),
+    });
+    assert_eq!(code(other), Code::InsufficientSpace);
+    // Staging 2 GiB (an archive of 1 GiB) leaves too little to double.
+    let staged = f.daemon.reserve_staging(GIB).unwrap();
+    f.host.free.store(reserve + 9 * GIB, Ordering::Relaxed);
+    f.set_home_usage(usage(REPORTED_4G, 1024));
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::InsufficientSpace);
+    drop(staged);
+    f.start(Mode::Probe, 0).unwrap();
+    assert_eq!(f.image_len(), 8 * GIB);
+}
+
+#[test]
+fn a_small_legacy_home_needs_only_an_eighth_of_itself_free() {
+    let f = fixture_with(|config| {
+        config.home_image_bytes = 64 << 20;
+        config.home_image_max_bytes = 64 << 20;
+    });
+    // A 64 MiB legacy home (about 62 MiB of filesystem) needs about 7.8 MiB.
+    let size = (64 << 20) / 100 * 97;
+    f.set_home_usage(usage(size, 10 << 20));
+    f.start(Mode::Probe, 0).unwrap();
+    f.set_home_usage(usage(size, 7 << 20));
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::InsufficientSpace);
+}
+
+#[test]
+fn a_start_does_not_wait_for_another_homes_resize() {
+    let f = fixture();
+    f.set_home_usage(usage(REPORTED_4G, 1024));
+    let busy = f.daemon.capacity_lock();
+    let refused = f.start(Mode::Probe, 0).unwrap_err();
+    assert!(
+        refused.message.contains("retry shortly"),
+        "{}",
+        refused.message
+    );
+    drop(busy);
+    f.start(Mode::Probe, 0).unwrap();
 }
 
 #[test]
