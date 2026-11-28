@@ -9,7 +9,8 @@
 mod launch_gate;
 mod teardown;
 pub(super) use launch_gate::{
-    DrainContentionError, SpawnedLaunchGuard, prepare_transient_unit_with_owner_check,
+    DrainContentionError, RetryableRegistrationError, SpawnedLaunchGuard,
+    prepare_transient_unit_with_owner_check,
 };
 
 use super::*;
@@ -1275,15 +1276,21 @@ impl Broker {
                 return Err("previous crashed worker teardown is still unconfirmed; retry".into());
             }
         }
-        let (orphaned, emit_epoch, queued_rejections) = {
+        let (orphaned, emit_epoch, queued_rejections, session_for_cache) = {
+            let sessions = self.sessions.lock();
             let workers = self.workers.lock();
+            let mut session_states = self.session_states.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
             if workers.contains_key(session_id) {
                 return Err("crashed worker reconnected during drain; retry".into());
             }
-            state.active.remove(session_id);
+            let confirmed_active_epoch = state
+                .active
+                .remove(session_id)
+                .filter(|active| active.confirmed)
+                .map(|active| active.epoch);
             let orphaned = drain_pending_for_session(&mut state.pending, session_id);
             let emit = unconfirmed
                 .as_ref()
@@ -1293,20 +1300,33 @@ impl Broker {
                         .get(session_id)
                         .is_some_and(|recorded| recorded.epoch == entry.epoch)
                 })
-                .map(|entry| entry.epoch.clone());
-            let rejections = if emit.is_some() {
+                .map(|entry| entry.epoch.clone())
+                .or(confirmed_active_epoch);
+            let (rejections, session_for_cache) = if emit.is_some() {
                 state.unconfirmed_teardown.remove(session_id);
-                classify_and_drain_queued_commands(&mut pending_cmds, &mut dispatched, session_id)
+                state.trusted_epoch_pids.remove(session_id);
+                session_states.insert(session_id.to_owned(), WorkerState::Crashed);
+                (
+                    classify_and_drain_queued_commands(
+                        &mut pending_cmds,
+                        &mut dispatched,
+                        session_id,
+                    ),
+                    sessions.get(session_id).cloned(),
+                )
             } else {
-                Vec::new()
+                (Vec::new(), None)
             };
-            (orphaned, emit, rejections)
+            (orphaned, emit, rejections, session_for_cache)
         };
         for (sid, cid) in orphaned {
             self.command_rejected(&sid, cid, "crashed worker exited during drain".into());
         }
         for (cid, reason) in queued_rejections {
             self.command_rejected(session_id, cid, reason);
+        }
+        if let Some(session) = session_for_cache {
+            self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
         }
         if let Some(epoch) = emit_epoch {
             self.send_crashed_worker_drained(session_id, &epoch);
@@ -3024,5 +3044,57 @@ mod tests {
         );
         assert!(broker.startup_failures.lock().get("s-r21-m1").is_none());
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn orphan_stop_reservation_is_mutually_exclusive_with_worker_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let guard = broker
+            .try_reserve_orphan_stop("s-r22-h1")
+            .expect("unowned session admits orphan stop reservation");
+
+        let (w_tx, _w_rx) = mpsc::unbounded_channel();
+        let err = broker
+            .register_worker_inner(
+                WorkerRegistration {
+                    session_id: "s-r22-h1".into(),
+                    epoch: "ep-1".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 101,
+                    tx: w_tx,
+                },
+                true,
+                Some(("dc-h1".into(), RetiredLaunch::VerifiedNone)),
+            )
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<RetryableRegistrationError>().is_some(),
+            "registration during orphan stop reservation must defer without terminal Reject (R22-H1)"
+        );
+
+        drop(guard);
+        let (w_tx2, _w_rx2) = mpsc::unbounded_channel();
+        broker
+            .register_worker_inner(
+                WorkerRegistration {
+                    session_id: "s-r22-h1".into(),
+                    epoch: "ep-1".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 102,
+                    tx: w_tx2,
+                },
+                true,
+                Some(("dc-h1".into(), RetiredLaunch::VerifiedNone)),
+            )
+            .unwrap();
+        assert!(
+            broker.try_reserve_orphan_stop("s-r22-h1").is_none(),
+            "attached draining worker must block orphan stop reservation (R22-H1)"
+        );
     }
 }

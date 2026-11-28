@@ -422,6 +422,7 @@ struct Broker {
     /// draining worker). Before this bit is set, a returning crashed-drain
     /// worker may still attach to finish replaying its final outbox (R20-H2).
     spawned_launches: Mutex<HashSet<String>>,
+    orphan_stopping_sessions: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
     permanently_deleted_sessions: Mutex<HashSet<String>>,
@@ -508,6 +509,7 @@ impl Broker {
             startup_failures: Mutex::new(HashMap::new()),
             launching: Mutex::new(HashSet::new()),
             spawned_launches: Mutex::new(HashSet::new()),
+            orphan_stopping_sessions: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
             permanently_deleted_sessions: Mutex::new(HashSet::new()),
@@ -1282,6 +1284,13 @@ impl Broker {
         let mut workers = self.workers.lock();
         if resumed_drain.is_some() && self.spawned_launches.lock().contains(&session_id) {
             anyhow::bail!("session {session_id} launch is already in progress");
+        }
+        if self.orphan_stopping_sessions.lock().contains(&session_id) {
+            return Err(anyhow::Error::new(
+                crashed_drain::RetryableRegistrationError(format!(
+                    "session {session_id} orphan unit stop is in progress"
+                )),
+            ));
         }
         if let Some(existing) = workers.get(&session_id)
             && existing.epoch != epoch
@@ -2089,51 +2098,13 @@ impl Broker {
             return;
         }
         self.awaiting_reconnect.lock().remove(&session.session_id);
-        self.session_states
-            .lock()
-            .insert(session.session_id.clone(), WorkerState::Starting);
         if !launch_reserved && !self.launching.lock().insert(session.session_id.clone()) {
             return;
         }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             let result = broker.spawn_with_fallback(session.clone(), None).await;
-            broker.launching.lock().remove(&session.session_id);
-            if let Err(error) = result {
-                let cancelled = broker.cancelled_sessions.lock();
-                if cancelled.contains(&session.session_id) {
-                    tracing::debug!(
-                        session = %session.session_id,
-                        %error,
-                        "deleted session launch stopped"
-                    );
-                    return;
-                }
-                if broker
-                    .resetting_sessions
-                    .lock()
-                    .contains_key(&session.session_id)
-                {
-                    tracing::debug!(
-                        session = %session.session_id,
-                        %error,
-                        "superseded worker launch stopped for context reset"
-                    );
-                    return;
-                }
-                tracing::error!(session = %session.session_id, reason = crate::logs::failure_reason(&error), error = %error, "worker launch failed");
-                broker
-                    .startup_failures
-                    .lock()
-                    .insert(session.session_id.clone(), error.to_string());
-                broker.publish_session_state(&session.session_id, WorkerState::Crashed);
-                broker.command_rejected(
-                    &session.session_id,
-                    format!("ensure:{}", session.session_id),
-                    error.to_string(),
-                );
-                drop(cancelled);
-            }
+            broker.finish_ensure_launch(&session.session_id, result);
         });
     }
 
@@ -2266,6 +2237,9 @@ impl Broker {
         );
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
+        self.sessions
+            .lock()
+            .insert(session_id.clone(), session.clone());
         self.resetting_sessions.lock().remove(&session_id);
         self.ensure_session_in_lifecycle(session, &_cleanup_guard, false)
             .await;
@@ -2451,8 +2425,7 @@ impl Broker {
         }
         self.awaiting_reconnect.lock().remove(&session_id);
         self.pending_commands.lock().remove(&session_id);
-        let (prev_state, had_recently_drained) =
-            self.mark_dormant_exited_and_invalidate_drain(&session_id);
+        let _ = self.mark_dormant_exited_and_invalidate_drain(&session_id);
         if let Some(mut snapshot) = snapshot {
             snapshot.state = WorkerState::Exited;
             snapshot.current_turn_id = None;
@@ -2466,10 +2439,6 @@ impl Broker {
             self.send_controller(Frame::Snapshot {
                 worker: Box::new(snapshot),
             });
-        } else if session.is_some()
-            && (had_recently_drained || prev_state == Some(WorkerState::Crashed))
-        {
-            self.publish_ownerless_crashed_snapshot(&session_id);
         }
         // Retain the declaration, native thread and launch fence. The account
         // lifecycle must separately authorize any future resume.
@@ -2559,26 +2528,12 @@ impl Broker {
                 broker.publish_session_state(&session_id, WorkerState::Crashed);
                 return;
             }
-            tracing::error!(
-                session = %session_id,
-                "declared worker never reconnected; applying session-level extreme recovery"
-            );
-            let stop = Command::new("systemctl")
-                .args(["--user", "stop", &unit])
-                .status();
-            match tokio::time::timeout(Duration::from_secs(10), stop).await {
-                Ok(Ok(status)) if status.success() => {}
-                Ok(Ok(status)) => {
-                    tracing::warn!(session = %session_id, %status, "stopping missing worker unit failed")
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!(session = %session_id, %error, "stopping missing worker unit failed")
-                }
-                Err(_) => {
-                    tracing::warn!(session = %session_id, "stopping missing worker unit timed out")
-                }
+            if broker
+                .stop_unreconnected_unit_if_unowned(&session_id, &unit)
+                .await
+            {
+                broker.publish_session_state(&session_id, WorkerState::Crashed);
             }
-            broker.publish_session_state(&session_id, WorkerState::Crashed);
         });
     }
 
@@ -2629,6 +2584,12 @@ impl Broker {
                 Ok(())
             }
             Err(error) => {
+                if error
+                    .downcast_ref::<crashed_drain::DrainContentionError>()
+                    .is_some()
+                {
+                    return Err(error);
+                }
                 if !worker_generation_failure_allows_fallback(&error) {
                     self.clear_generation_failures_for_session(&selected.session_id);
                     self.unpin_fallback(&selected.session_id);
@@ -4209,9 +4170,14 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 false,
                 resumed_drain,
             ) {
-                let _ = tx.send(Frame::Reject {
-                    reason: error.to_string(),
-                });
+                if error
+                    .downcast_ref::<crashed_drain::RetryableRegistrationError>()
+                    .is_none()
+                {
+                    let _ = tx.send(Frame::Reject {
+                        reason: error.to_string(),
+                    });
+                }
                 drop(tx);
                 let _ = writer_task.await;
                 return Ok(());

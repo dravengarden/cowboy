@@ -212,14 +212,62 @@ fn command_supported_for_readmission(
 pub(super) fn acknowledge(
     shared: &Shared,
     command_id: &str,
+    command: Option<&CoreCommand>,
     accepted: bool,
-    reason: Option<String>,
+    reason: Option<&str>,
 ) {
+    if !matches!(
+        command,
+        Some(CoreCommand::QuiesceAccountSession { .. } | CoreCommand::ReadmitAccountSession { .. })
+    ) {
+        return;
+    }
+    if accepted
+        && let Some(CoreCommand::QuiesceAccountSession {
+            session_id,
+            account_id,
+            ..
+        }) = command
+    {
+        // Dormant quiesce during account revocation cannot project through
+        // named-account snapshot admission once credentials are disabled;
+        // project `Exited` directly from the correlated, authorized stop
+        // confirmation after rechecking Machine ownership and binding (R22-M4).
+        let fence = shared.projection_fence.lock();
+        if !*fence {
+            shared.crashed_worker_sightings.lock().remove(session_id);
+            shared.draining_crashed_epochs.lock().remove(session_id);
+            let has_live_worker = shared
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(crate::runtime_wire::WorkerSnapshot::has_connected_owner);
+            if !has_live_worker {
+                let _proj = shared.hub.runtime_projection_guard();
+                if shared.hub.accepts_runtime_projection(session_id)
+                    && shared.hub.session_info(session_id).is_some_and(|info| {
+                        info.meta.status == crate::core::Status::Crashed
+                            && info.meta.provider_account_id == *account_id
+                            && shared
+                                .machine_id
+                                .as_deref()
+                                .is_none_or(|machine| info.meta.machine_id == machine)
+                    })
+                {
+                    shared.hub.set_status(
+                        session_id,
+                        crate::core::Status::Exited,
+                        Some("account worker stopped".to_owned()),
+                    );
+                }
+            }
+        }
+    }
     if let Some(waiter) = shared.account_stops.lock().remove(command_id) {
         let outcome = if accepted {
             Outcome::Stopped
         } else {
-            Outcome::Refused(reason.unwrap_or_else(|| "account stop refused".into()))
+            Outcome::Refused(reason.unwrap_or("account stop refused").to_owned())
         };
         let _ = waiter.sender.send(outcome);
     }

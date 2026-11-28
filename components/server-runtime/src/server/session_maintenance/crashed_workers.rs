@@ -151,7 +151,7 @@ impl Observed {
                             }
                         }
                     };
-                    if now >= eligible_since {
+                    if !entry.unprojected_named_crash && now >= eligible_since {
                         drain_due.push((
                             eligible_since,
                             entry.first_seen,

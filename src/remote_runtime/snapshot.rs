@@ -711,20 +711,21 @@ pub(super) fn observe_crashed_event(
         }
     }
     let mut sightings = shared.crashed_worker_sightings.lock();
-    if sightings
-        .get(session_id)
-        .is_none_or(|entry| entry.worker_epoch != worker_epoch)
-    {
-        if let Some(worker) = shared.workers.lock().get(session_id).cloned()
-            && worker.worker_epoch == worker_epoch
-            && worker.has_connected_owner()
-        {
-            sightings.insert(
-                session_id.to_owned(),
-                SightingActivity::from_snapshot(&worker),
-            );
-        } else {
-            return;
+    match sightings.get(session_id) {
+        Some(entry) if entry.worker_epoch != worker_epoch => return,
+        Some(_) => {}
+        None => {
+            if let Some(worker) = shared.workers.lock().get(session_id).cloned()
+                && worker.worker_epoch == worker_epoch
+                && worker.has_connected_owner()
+            {
+                sightings.insert(
+                    session_id.to_owned(),
+                    SightingActivity::from_snapshot(&worker),
+                );
+            } else {
+                return;
+            }
         }
     }
     let worker_watermark = shared
@@ -1740,6 +1741,45 @@ mod crashed_drain_tests {
         assert!(
             !drain_crashed_epoch_admitted(&rt.shared, "s-r21-m4", "ep-stale"),
             "stale projected epoch must be denied once raw sighting tracks replacement (R21-M4)"
+        );
+    }
+
+    #[tokio::test]
+    async fn late_event_for_stale_cached_epoch_never_overwrites_newer_raw_sighting() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "s-r22-m5".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        let rt = super::super::RemoteRuntime::for_test(hub, Vec::new());
+        rt.connect_for_test();
+
+        rt.shared
+            .workers
+            .lock()
+            .insert("s-r22-m5".into(), crashed_snapshot("s-r22-m5", "ep-old"));
+        observe_crashed_sighting(&rt.shared, &crashed_snapshot("s-r22-m5", "ep-new"));
+
+        observe_crashed_event(
+            &rt.shared,
+            &("s-r22-m5".into(), "ep-old".into()),
+            99,
+            &RuntimeEvent::Status {
+                state: WorkerState::Crashed,
+                detail: Some("late".into()),
+            },
+        );
+        assert!(
+            drain_crashed_epoch_admitted(&rt.shared, "s-r22-m5", "ep-new"),
+            "newer raw sighting epoch must remain authoritative (R22-M5)"
+        );
+        assert!(
+            !drain_crashed_epoch_admitted(&rt.shared, "s-r22-m5", "ep-old"),
+            "stale cached epoch must not hijack raw sighting via delayed event (R22-M5)"
         );
     }
 }

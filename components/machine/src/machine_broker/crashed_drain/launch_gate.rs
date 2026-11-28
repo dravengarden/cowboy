@@ -7,7 +7,7 @@ const RETURNING_DRAIN_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Session-local deferral returned when replacement launch must wait for or
 /// yield to a returning crashed-worker drain; must never quarantine a worker
-/// generation (R21-M6).
+/// generation (R21-M6, R22-M6).
 #[derive(Debug)]
 pub(in crate::machine_broker) struct DrainContentionError(pub(in crate::machine_broker) String);
 
@@ -19,6 +19,22 @@ impl std::fmt::Display for DrainContentionError {
 
 impl std::error::Error for DrainContentionError {}
 
+/// Transient registration deferral while an orphan systemd unit stop is in
+/// flight; `handle_peer` closes the socket cleanly without sending terminal
+/// `Frame::Reject` (R22-H1).
+#[derive(Debug)]
+pub(in crate::machine_broker) struct RetryableRegistrationError(
+    pub(in crate::machine_broker) String,
+);
+
+impl std::fmt::Display for RetryableRegistrationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RetryableRegistrationError {}
+
 pub(in crate::machine_broker) struct SpawnedLaunchGuard<'a> {
     broker: &'a Broker,
     session_id: String,
@@ -28,6 +44,42 @@ impl Drop for SpawnedLaunchGuard<'_> {
     fn drop(&mut self) {
         self.broker.spawned_launches.lock().remove(&self.session_id);
     }
+}
+
+/// Exclusive reservation preventing worker registration from attaching while an
+/// orphan unit stop is verified and executed (R22-H1).
+pub(in crate::machine_broker) struct OrphanStopGuard<'a> {
+    broker: &'a Broker,
+    session_id: String,
+}
+
+impl Drop for OrphanStopGuard<'_> {
+    fn drop(&mut self) {
+        self.broker
+            .orphan_stopping_sessions
+            .lock()
+            .remove(&self.session_id);
+    }
+}
+
+async fn inspect_transient_unit(unit: &str) -> Result<(String, String, String)> {
+    let output = Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            unit,
+            "--property=LoadState",
+            "--property=ActiveState",
+            "--property=InvocationID",
+        ])
+        .output()
+        .await
+        .with_context(|| format!("checking transient worker unit {unit}"))?;
+    let fields = String::from_utf8_lossy(&output.stdout);
+    let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
+    let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
+    let invocation_id = systemd_show_value(&fields, "InvocationID").unwrap_or_default();
+    Ok((load_state, active_state, invocation_id))
 }
 
 pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
@@ -46,20 +98,7 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
             deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
             continue;
         }
-        let output = Command::new("systemctl")
-            .args([
-                "--user",
-                "show",
-                unit,
-                "--property=LoadState",
-                "--property=ActiveState",
-            ])
-            .output()
-            .await
-            .with_context(|| format!("checking transient worker unit {unit}"))?;
-        let fields = String::from_utf8_lossy(&output.stdout);
-        let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
-        let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
+        let (load_state, active_state, invocation_id) = inspect_transient_unit(unit).await?;
         if transient_unit_collected(&load_state) {
             return Ok(());
         }
@@ -67,34 +106,48 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
             && matches!(active_state.as_str(), "active" | "activating")
             && started.elapsed() >= ORPHAN_EXIT_GRACE
         {
-            if let Some((broker, session_id)) = broker
-                && !broker.should_stop_orphan_unit(session_id)
+            let _stop_guard = if let Some((broker, session_id)) = broker {
+                let Some(guard) = broker.try_reserve_orphan_stop(session_id) else {
+                    broker.wait_for_returning_crashed_drain(session_id).await?;
+                    started = tokio::time::Instant::now();
+                    deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
+                    continue;
+                };
+                Some(guard)
+            } else {
+                None
+            };
+            // Re-inspect while holding the exclusive orphan-stop reservation so
+            // we only stop the exact systemd invocation inspected above (R22-H1).
+            let (current_load, current_active, current_invocation) =
+                inspect_transient_unit(unit).await?;
+            if transient_unit_collected(&current_load) {
+                return Ok(());
+            }
+            if !matches!(current_active.as_str(), "active" | "activating")
+                || (!invocation_id.is_empty() && current_invocation != invocation_id)
             {
-                broker.wait_for_returning_crashed_drain(session_id).await?;
                 started = tokio::time::Instant::now();
                 deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
                 continue;
             }
-            tracing::warn!(%unit, %active_state, "recycling orphaned transient worker unit");
+            tracing::warn!(
+                %unit,
+                active_state = %current_active,
+                invocation_id = %current_invocation,
+                "recycling orphaned transient worker unit"
+            );
             let status = Command::new("systemctl")
                 .args(["--user", "stop", unit])
                 .status()
                 .await
                 .with_context(|| format!("stopping orphaned transient worker unit {unit}"))?;
             if !status.success() {
-                let output = Command::new("systemctl")
-                    .args(["--user", "show", unit, "--property=LoadState"])
-                    .output()
-                    .await
-                    .with_context(|| {
-                        format!("rechecking transient worker unit {unit} after stop")
-                    })?;
-                let fields = String::from_utf8_lossy(&output.stdout);
-                let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
-                if transient_unit_collected(&load_state) {
+                let (recheck_load, _, _) = inspect_transient_unit(unit).await?;
+                if transient_unit_collected(&recheck_load) {
                     return Ok(());
                 }
-                anyhow::bail!("systemctl stop {unit} exited {status} (LoadState={load_state})");
+                anyhow::bail!("systemctl stop {unit} exited {status} (LoadState={recheck_load})");
             }
             stopped_orphan = true;
             continue;
@@ -116,6 +169,80 @@ impl Broker {
         let unit = worker_unit_name(&self.args.socket, session_id);
         prepare_transient_unit_with_owner_check(Some((self, session_id)), &unit).await?;
         Ok(unit)
+    }
+
+    pub(in crate::machine_broker) fn try_reserve_orphan_stop(
+        &self,
+        session_id: &str,
+    ) -> Option<OrphanStopGuard<'_>> {
+        let workers = self.workers.lock();
+        if workers.contains_key(session_id)
+            || self.spawned_launches.lock().contains(session_id)
+            || self.has_any_crashed_drain_fence_locked(&workers, session_id)
+        {
+            return None;
+        }
+        if !self
+            .orphan_stopping_sessions
+            .lock()
+            .insert(session_id.to_owned())
+        {
+            return None;
+        }
+        Some(OrphanStopGuard {
+            broker: self,
+            session_id: session_id.to_owned(),
+        })
+    }
+
+    /// Reconnect watchdog helper using the same exclusive orphan-stop
+    /// reservation and systemd `InvocationID` binding as Ensure (R22-H1).
+    pub(in crate::machine_broker) async fn stop_unreconnected_unit_if_unowned(
+        &self,
+        session_id: &str,
+        unit: &str,
+    ) -> bool {
+        let Some(_stop_guard) = self.try_reserve_orphan_stop(session_id) else {
+            return false;
+        };
+        if self.launching.lock().contains(session_id) {
+            return false;
+        }
+        let Ok((load_state, active_state, invocation_id)) =
+            tokio::time::timeout(Duration::from_secs(10), inspect_transient_unit(unit))
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("timeout")))
+        else {
+            return false;
+        };
+        if transient_unit_collected(&load_state)
+            || !matches!(active_state.as_str(), "active" | "activating")
+        {
+            return true;
+        }
+        tracing::error!(
+            session = %session_id,
+            invocation_id = %invocation_id,
+            "declared worker never reconnected; applying session-level extreme recovery"
+        );
+        let stop = Command::new("systemctl")
+            .args(["--user", "stop", unit])
+            .status();
+        match tokio::time::timeout(Duration::from_secs(10), stop).await {
+            Ok(Ok(status)) if status.success() => true,
+            Ok(Ok(status)) => {
+                tracing::warn!(session = %session_id, %status, "extreme recovery stop failed");
+                true
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(session = %session_id, %error, "extreme recovery stop error");
+                true
+            }
+            Err(_) => {
+                tracing::warn!(session = %session_id, "extreme recovery stop timed out");
+                true
+            }
+        }
     }
 
     pub(in crate::machine_broker) async fn wait_for_returning_crashed_drain(
@@ -177,7 +304,7 @@ impl Broker {
             }
             // Canonical lock order: workers -> session_states -> spawned_launches -> crashed_drains.
             // Initialize Starting strictly after any returning drain has settled
-            // so readiness polling cannot read the retired worker's Crashed state (R21-M1).
+            // so readiness polling cannot read the retired worker's Crashed state (R21-M1, R22-M1).
             let mut session_states = self.session_states.lock();
             self.spawned_launches.lock().insert(session_id.to_owned());
             self.crashed_drains
@@ -223,5 +350,59 @@ impl Broker {
             .lock()
             .recently_drained
             .remove(session_id);
+    }
+    pub(in crate::machine_broker) fn finish_ensure_launch(
+        &self,
+        session_id: &str,
+        result: Result<()>,
+    ) {
+        if let Err(error) = result {
+            if error.downcast_ref::<DrainContentionError>().is_some() {
+                self.launching.lock().remove(session_id);
+                self.command_rejected(
+                    session_id,
+                    format!("ensure:{session_id}"),
+                    error.to_string(),
+                );
+                return;
+            }
+            // Keep `launching` owned through failure publication so a
+            // concurrent retry cannot acquire the slot and read this
+            // attempt's Crashed state (R22-M1).
+            let cancelled = self.cancelled_sessions.lock();
+            if cancelled.contains(session_id) {
+                drop(cancelled);
+                self.launching.lock().remove(session_id);
+                tracing::debug!(session = %session_id, %error, "deleted session launch stopped");
+                return;
+            }
+            if self.resetting_sessions.lock().contains_key(session_id) {
+                drop(cancelled);
+                self.launching.lock().remove(session_id);
+                tracing::debug!(
+                    session = %session_id,
+                    %error,
+                    "superseded worker launch stopped for context reset"
+                );
+                return;
+            }
+            tracing::error!(
+                session = %session_id,
+                reason = crate::logs::failure_reason(&error),
+                error = %error,
+                "worker launch failed"
+            );
+            self.startup_failures
+                .lock()
+                .insert(session_id.to_owned(), error.to_string());
+            self.publish_session_state(session_id, WorkerState::Crashed);
+            self.command_rejected(
+                session_id,
+                format!("ensure:{session_id}"),
+                error.to_string(),
+            );
+            drop(cancelled);
+        }
+        self.launching.lock().remove(session_id);
     }
 }

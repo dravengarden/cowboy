@@ -2310,15 +2310,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                         .unwrap_or_else(|| "the subagent could not be stopped".to_owned()),
                 );
             }
-            if matches!(
-                &command,
-                Some(
-                    CoreCommand::QuiesceAccountSession { .. }
-                        | CoreCommand::ReadmitAccountSession { .. }
-                )
-            ) {
-                account_stop::acknowledge(shared, &command_id, accepted, reason.clone());
-            }
+            account_stop::acknowledge(
+                shared,
+                &command_id,
+                command.as_ref(),
+                accepted,
+                reason.as_deref(),
+            );
             if let Some(CoreCommand::Prompt {
                 trace: Some(trace), ..
             }) = &command

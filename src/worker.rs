@@ -3236,8 +3236,14 @@ mod tests {
         )
         .await
         .unwrap();
+        let ack = loop {
+            match read_frame(&mut reader).await.unwrap() {
+                Some(Frame::Heartbeat) => continue,
+                other => break other,
+            }
+        };
         assert!(matches!(
-            read_frame(&mut reader).await.unwrap(),
+            ack,
             Some(Frame::CommandAck {
                 accepted: true,
                 ref command_id,

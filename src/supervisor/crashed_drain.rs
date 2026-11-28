@@ -30,19 +30,13 @@ impl Supervisor {
         if worker.worker_epoch != expected_worker_epoch {
             return Ok(false);
         }
-        let named = !meta.provider_account_id.is_default();
-        if meta.status != Status::Crashed && !named {
-            return Ok(false);
-        }
-        if named {
-            // Named-account admission can stop projecting activity either before
-            // or after Hub records `Crashed`, leaving stale in-flight or
-            // background counts; trust fresh epoch-bound Machine idle evidence
-            // alongside active runtime prompt state.
-            if !worker.idle || runtime.has_pending_prompt(session_id) {
-                return Ok(false);
-            }
-        } else if !worker.idle
+        // Only automatically drain sessions whose Hub lifecycle already
+        // reached `Status::Crashed` with no in-flight prompt. An unprojected
+        // named-account crash whose Hub is still Busy stays owned by the
+        // account lifecycle (`QuiesceAccountSession`) rather than draining
+        // out from under Hub (R22-M3).
+        if meta.status != Status::Crashed
+            || !worker.idle
             || runtime.has_pending_prompt(session_id)
             || self.hub.session_has_in_flight_prompt(session_id)
             || meta.background_tasks > 0
