@@ -28,6 +28,8 @@ use crate::units::{
 pub const ACCOUNTS_DIR: &str = "accounts";
 pub const UNITS_DIR: &str = "units";
 const POLL: Duration = Duration::from_millis(5);
+/// Longest wait for the space budget while holding an account lock.
+const BUDGET_WAIT: Duration = Duration::from_secs(2);
 /// Interval of [`Daemon::sweep_units`].
 pub const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -425,16 +427,23 @@ impl Daemon {
         safefs::remove_file(dir.as_fd(), "home.img")?;
         // Sparse: blocks are allocated only as the account writes, so the
         // whole length is committed against the budget before it exists.
-        // Holding the account lock, never wait for a growth's allocation:
-        // the provisioning is retried.
-        let staging = match self.staging.try_lock() {
-            Ok(staging) => staging,
-            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => {
-                return Err(fail(
-                    Code::Conflict,
-                    "the space budget is busy; retry the provisioning",
-                ));
+        // Holding the account lock, wait only briefly for the budget: a
+        // growth holds it across one block's allocation, so a longer hold
+        // means stalled storage and the provisioning is refused instead.
+        let deadline = Instant::now() + BUDGET_WAIT;
+        let staging = loop {
+            match self.staging.try_lock() {
+                Ok(staging) => break staging,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(fail(
+                        Code::Conflict,
+                        "the space budget stayed busy; retry the provisioning",
+                    ));
+                }
             }
         };
         if self.available_space(&staging)? < self.config.home_image_bytes {

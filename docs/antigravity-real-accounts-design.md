@@ -1137,8 +1137,9 @@ rather than a fixed size (`packaging/account-sandbox/src/capacity.rs`):
 - An account whose first image was refused for space keeps
   `image_ready=false`; its logout cleanup retires the refused generation
   without mounting a home (none exists, so no token can), so revocation and
-  removal are never blocked by it. Provisioning never waits for the budget
-  under the account lock: a busy budget is a retryable `conflict`.
+  removal are never blocked by it. Provisioning waits at most 2 s for the budget
+  under the account lock (a growth holds it for one block's allocation);
+  longer, it is a retryable `conflict`.
 
 **Not in this revision.** Conversations no recoverable Cowboy session
 references (sessions purged from Trash, conversations of failed starts:
