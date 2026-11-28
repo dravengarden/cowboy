@@ -77,11 +77,9 @@ mod tests {
 
     #[test]
     fn account_sandbox_requires_sdk_3_6_custody_and_ipv4() {
-        let manifest = antigravity();
-        assert_eq!(
-            manifest.runtime.isolation,
-            Some(RuntimeIsolationPolicy::AccountSandboxV1)
-        );
+        let mut manifest = antigravity();
+        assert_eq!(manifest.runtime.isolation, None);
+        manifest.runtime.isolation = Some(RuntimeIsolationPolicy::AccountSandboxV1);
         build_package(manifest.clone()).unwrap();
         assert_eq!(
             serde_json::to_value(RuntimeIsolationPolicy::AccountSandboxV1).unwrap(),
@@ -122,8 +120,8 @@ mod tests {
 
     #[test]
     fn absent_isolation_keeps_the_serialized_contract() {
-        let mut manifest = antigravity();
-        manifest.runtime.isolation = None;
+        let manifest = antigravity();
+        assert_eq!(manifest.runtime.isolation, None);
         let value = serde_json::to_value(&manifest.runtime).unwrap();
         assert!(value.get("isolation").is_none());
         let unknown = serde_json::from_value::<RuntimeIsolationPolicy>(serde_json::json!(

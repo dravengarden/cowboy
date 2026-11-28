@@ -19,8 +19,8 @@ machine-host = ["cowboy/machine-host", "cowboy-server/machine-host", "cowboy-mac
 [dev-dependencies]
 cowboy = { version = "0.1.0", path = "../..", features = ["full", "machine-host", "test-support"] }
 cowboy-machine = { version = "0.1.0", path = "../machine", features = ["full", "machine-host", "test-support"] }
-cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
-cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
+cowboy-plugin-sdk = { version = "=1.20.1", path = "../plugin-sdk" }
+cowboy-provider-sdk = { version = "=3.7.1", path = "../provider-sdk" }
 cowboy-server = { version = "0.1.0", path = "../server", features = ["full", "machine-host", "test-support"] }
 cowboy-wire = { version = "0.1.0", path = "../wire", features = ["test-fixtures"] }
 anyhow = "1"

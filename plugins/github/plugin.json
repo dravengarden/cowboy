@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "github",
-  "version": "0.2.15",
-  "component_release": "3.121.0",
+  "version": "0.2.16",
+  "component_release": "3.164.0",
   "publisher": "cowboy-first-party",
   "kind": "workspace_extension",
   "entrypoint": "contract.json",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cowboy.plugin-sdk",
-      "version": "1.20.0"
+      "version": "1.20.1"
     }
   ]
 }

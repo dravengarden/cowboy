@@ -20,7 +20,7 @@ test-support = ["cowboy/test-support", "cowboy-server-runtime/test-support"]
 [dependencies]
 cowboy = { version = "0.1.0", path = "../.." }
 cowboy-codeact-runtime = { path = "../codeact-runtime" }
-cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
+cowboy-provider-sdk = { version = "=3.7.1", path = "../provider-sdk" }
 cowboy-server-runtime = { version = "0.1.0", path = "../server-runtime" }
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }

@@ -354,6 +354,14 @@ impl MachinePluginStore {
             return Ok(());
         }
         let account = self.for_account(account_id)?;
+        if self
+            .account_sandbox
+            .get()
+            .is_none_or(|host| !host.socket.exists())
+            && !account.has_sandboxed_native_profile(provider)?
+        {
+            return Ok(());
+        }
         let units = match account.account_sandbox_units() {
             Ok(units) => units,
             // The daemon has no such account, so it runs no unit of it.
@@ -418,9 +426,12 @@ mod tests {
 
     #[test]
     fn sandboxed_providers_are_unavailable_without_a_reachable_daemon() {
-        let antigravity = package(include_str!(
+        let mut antigravity = package(include_str!(
             "../../../../plugins/antigravity/provider.json"
         ));
+        assert!(!sandboxed(&antigravity));
+        antigravity.manifest.runtime.isolation =
+            Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1);
         let codex = package(include_str!("../../../../plugins/codex/provider.json"));
         assert!(sandboxed(&antigravity) && !sandboxed(&codex));
         let root = tempfile::tempdir().unwrap();

@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "antigravity",
-  "version": "0.2.43",
+  "version": "0.2.44",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.7.0",
+  "sdk_version": "3.7.1",
   "display": {
     "name": "Antigravity",
     "vendor": "Google",
@@ -274,16 +274,16 @@
     "dependencies": [
       {
         "id": "cowboy-antigravity-launch",
-        "version": "1.1.2",
+        "version": "1.1.3",
         "source": "cowboy:components/provider-runtime/packages/antigravity-launch",
-        "integrity": "sha256:0bb166ed52e0ed76af99307d90cd233d7a28296200458305bae828cac6f39918",
+        "integrity": "sha256:fe326aafd7e66ce1715ece74cacc600f0d6544aee9263147d5571dec01062e12",
         "private": true
       },
       {
         "id": "cowboy-antigravity-acp",
-        "version": "1.0.33",
+        "version": "1.0.34",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:03a21381d692f398dbb17b816d9c55cc842a3640a316b36be4f1f9a492486bcb",
+        "integrity": "sha256:9546cc784803211a23355371ff8b95ed59c03af7b64627402587f4488b3823e8",
         "private": true
       },
       {
@@ -329,8 +329,7 @@
       "provider.native-custody.v1",
       "provider.managed-profiles.v1"
     ],
-    "network": "ipv4_only_v1",
-    "isolation": "account_sandbox_v1"
+    "network": "ipv4_only_v1"
   },
   "authentication": {
     "schema_version": 1,

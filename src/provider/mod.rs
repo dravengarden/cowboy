@@ -2256,6 +2256,8 @@ mod account_sandbox_tests {
         let source: cowboy_provider_sdk::StandardProviderSource =
             serde_json::from_str(include_str!("../../plugins/antigravity/provider.json")).unwrap();
         let mut runtime = source.compile().unwrap().runtime;
+        assert_eq!(runtime.isolation, None);
+        runtime.isolation = Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1);
         let launch = crate::account_sandbox::Launch {
             socket: crate::account_sandbox::DEFAULT_SOCKET.into(),
             service_id: "service".into(),

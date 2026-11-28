@@ -70,10 +70,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
 rand = "0.8"
-cowboy-provider-sdk = { version = "=3.7.0", path = "../provider-sdk" }
+cowboy-provider-sdk = { version = "=3.7.1", path = "../provider-sdk" }
 cowboy-wire = { version = "0.1.0", path = "../wire", optional = true }
 tempfile = "3"
-cowboy-plugin-sdk = { version = "=1.20.0", path = "../plugin-sdk" }
+cowboy-plugin-sdk = { version = "=1.20.1", path = "../plugin-sdk" }
 chacha20poly1305 = { version = "0.10", optional = true }
 x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
 ed25519-dalek = { version = "2", optional = true }

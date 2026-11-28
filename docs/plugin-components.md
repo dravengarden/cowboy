@@ -88,6 +88,15 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.164.0 retires `account_sandbox_v1` from `antigravity` 0.2.44
+(retaining `ipv4_only_v1` via the Machine's direct IPv4-only `systemd-run --user`
+unit wrapper and persistent per-account home) and updates `cowboy-antigravity-launch`
+1.1.3 and `cowboy-antigravity-acp` 1.0.34 for direct split execution, stdin
+file-helper apply, simplified evidence/plan-gate, and direct `--cowboy-usage`
+collection; it also advances `cowboy.provider-sdk` 3.7.1, `cowboy.plugin-sdk`
+1.20.1, `cowboy.provider-ui` 3.8.1, `cowboy.provider-authoring` 1.0.20,
+`cowboy.provider-runtime` 1.3.40, and every Plugin one patch version.
+
 Component release 3.163.0 records provider-runtime 1.3.39, whose
 `cowboy-antigravity-acp` 1.0.33 removes the artificial proxy-hosted subagent
 concurrency (`2`) and per-turn (`8`) caps (retaining active-turn settled
