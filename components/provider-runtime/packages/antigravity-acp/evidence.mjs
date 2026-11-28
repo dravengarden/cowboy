@@ -1,10 +1,13 @@
-// Backend refusal evidence for one Antigravity turn (design R1-7, R2-12,
-// R3-10). `agy` reports Google's refusals (account verification, location,
-// quota) as ordinary agent text with `stopReason: end_turn`, so the turn's
-// outcome is read from the unit's own `agy` log instead: only backend status
-// fields (HTTP code, `google.rpc` status and `ErrorInfo.reason`), never model
-// or message text. The exact lines are documented in this package's README.
-import { randomUUID } from "node:crypto";
+// Backend refusal evidence for one Antigravity turn.
+// `agy` may surface explicit Google backend refusals (account verification,
+// location, quota) as ordinary agent text with `stopReason: end_turn`, so
+// Cowboy scans the turn's `agy` log window strictly for structured backend
+// status fields (HTTP code, `google.rpc` status and `ErrorInfo.reason`), never
+// model or message text.
+//
+// Missing logs, truncated windows, crashes, and unrecognized errors never
+// synthesize an account-parking `unknown_refusal`: only explicit proven Google
+// refusals transition account state.
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -16,7 +19,7 @@ export const CLASSES = Object.freeze([
   "suspended",
   "unknown_refusal",
 ]);
-// Highest first: the class a turn settles to when several refusals appear.
+// Highest first: the class a turn settles to when several explicit refusals appear.
 export const PRECEDENCE = [
   "suspended",
   "verification_required",
@@ -49,10 +52,56 @@ function monotonicDeltaMs(fromDayMs, toDayMs) {
   return delta >= 0 && delta <= DAY_MS ? delta : undefined;
 }
 
+// One successful model request (a backend step) of the turn.
+const SUCCESS = new RegExp(
+  `${PREFIX}http_helpers\\.go:\\d+\\] URL: https://[a-z0-9.-]+\\.googleapis\\.com/v1internal:streamGenerateContent\\?alt=sse Trace: 0x[0-9a-f]+ ResponseID: \\S+$`,
+);
+// The agent loop's terminal failure of a backend step: status and code.
+const STEP_FAILURE = new RegExp(
+  `${PREFIX}errorreport\\.go:\\d+\\] (?:agent executor error: )?generating and executing: ([A-Z_]+) \\(code (\\d{3})\\)`,
+);
+// A failed attempt the agent loop retries: status and code.
+const RETRY = new RegExp(
+  `${PREFIX}run\\.go:\\d+\\] Run: attempt \\d+ failed \\(([A-Z_]+) \\(code (\\d{3})\\)`,
+);
+const TRANSIENT_CODES = new Set([500, 502, 503, 504]);
+const transient = (record) => record.kind === "retry" && TRANSIENT_CODES.has(record.code);
+const DISPATCH = new RegExp(
+  `${PREFIX}(?:server\\.go:\\d+\\] Sending user message to conversation \\S+ \\(items=\\d+, media=\\d+\\)$|prompt\\.go:\\d+\\] Responding to pending ask_question for session )`,
+);
+const PROMPT_RECEIPT = new RegExp(
+  `${PREFIX}server\\.go:\\d+\\] ACP Request received: session/prompt$`,
+);
+const REQUEST_FAILURE = new RegExp(
+  `${PREFIX}http_helpers\\.go:\\d+\\] Failed to make code assist backend request \\((https://[^)\\s]+)\\): \\{$`,
+);
+
+/** Legacy 1.5.9 stream barrier pattern (retained for parsing older logs). */
+export function barrierPattern(sessionId) {
+  return new RegExp(
+    `${PREFIX}server\\.go:\\d+\\] Stream goroutine exited for ${escape(sessionId)}, sending completion signal$`,
+  );
+}
+
+/** Legacy barrier method name (no longer sent as a synthetic RPC). */
+export const BARRIER_METHOD = "_cowboy/evidence_barrier";
+
+/** Legacy request barrier line pattern. */
+export function requestBarrierPattern(nonce) {
+  return new RegExp(
+    `${PREFIX}server\\.go:\\d+\\] ACP Request received: ${escape(`${BARRIER_METHOD}/${nonce}`)}$`,
+  );
+}
+
+function escape(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Extract strictly numeric, content-free backend step timing diagnostics from
- * one turn's log window through its barrier. Never reads URLs, Trace IDs,
- * Response IDs, or text content.
+ * one turn's log window. Never reads URLs, Trace IDs, Response IDs, or text
+ * content. When neither `sessionId` nor `nonce` is given, scans the entire
+ * non-truncated turn window cleanly without requiring a synthetic barrier RPC.
  */
 export function parseStepTimings(text, sessionId, nonce) {
   const lines = text.split("\n");
@@ -85,7 +134,10 @@ export function parseStepTimings(text, sessionId, nonce) {
       transientRetries += 1;
     }
   }
-  if (!sawBarrier && stepTimes.length === 0 && transientRetries === 0) {
+  const matched = barrier
+    ? sawBarrier
+    : stepTimes.length > 0 || transientRetries > 0 || anchorMs !== undefined;
+  if (!matched && stepTimes.length === 0 && transientRetries === 0) {
     return undefined;
   }
   let firstStepOffsetMs = null;
@@ -107,86 +159,18 @@ export function parseStepTimings(text, sessionId, nonce) {
   }
   return {
     schema: 1,
-    barrier_matched: sawBarrier,
-    backend_steps: sawBarrier ? stepTimes.length : null,
-    transient_retries: sawBarrier ? transientRetries : null,
-    first_step_offset_ms: sawBarrier ? firstStepOffsetMs : null,
-    step_span_ms: sawBarrier ? stepSpanMs : null,
-    max_inter_step_ms: sawBarrier ? maxInterStepMs : null,
+    barrier_matched: matched,
+    backend_steps: matched ? stepTimes.length : null,
+    transient_retries: matched ? transientRetries : null,
+    first_step_offset_ms: matched ? firstStepOffsetMs : null,
+    step_span_ms: matched ? stepSpanMs : null,
+    max_inter_step_ms: matched ? maxInterStepMs : null,
   };
 }
-// One successful model request (a backend step) of the turn.
-const SUCCESS = new RegExp(
-  `${PREFIX}http_helpers\\.go:\\d+\\] URL: https://[a-z0-9.-]+\\.googleapis\\.com/v1internal:streamGenerateContent\\?alt=sse Trace: 0x[0-9a-f]+ ResponseID: \\S+$`,
-);
-// The agent loop's terminal failure of a backend step: status and code.
-const STEP_FAILURE = new RegExp(
-  `${PREFIX}errorreport\\.go:\\d+\\] (?:agent executor error: )?generating and executing: ([A-Z_]+) \\(code (\\d{3})\\)`,
-);
-// A failed attempt the agent loop retries: status and code.
-const RETRY = new RegExp(
-  `${PREFIX}run\\.go:\\d+\\] Run: attempt \\d+ failed \\(([A-Z_]+) \\(code (\\d{3})\\)`,
-);
-// The only retried failures that count as transient backend capacity; every
-// other retried failure (an account refusal, or a code not known here) is
-// evidence of a refusal and parks the account rather than passing as ok.
-const TRANSIENT_CODES = new Set([500, 502, 503, 504]);
-const transient = (record) => record.kind === "retry" && TRANSIENT_CODES.has(record.code);
-// `agy` handing the prompt to its agent loop: a new user message, or the
-// answer to a pending `ask_question`. Its absence in a turn's window (with
-// no backend record either) is what proves a rejected prompt never left the
-// process (`localRejection` in `proxy.mjs`).
-const DISPATCH = new RegExp(
-  `${PREFIX}(?:server\\.go:\\d+\\] Sending user message to conversation \\S+ \\(items=\\d+, media=\\d+\\)$|prompt\\.go:\\d+\\] Responding to pending ask_question for session )`,
-);
-// `agy` reading a prompt request (logged before it handles it).
-const PROMPT_RECEIPT = new RegExp(
-  `${PREFIX}server\\.go:\\d+\\] ACP Request received: session/prompt$`,
-);
-// A failed backend request whose structured error follows as JSON lines.
-const REQUEST_FAILURE = new RegExp(
-  `${PREFIX}http_helpers\\.go:\\d+\\] Failed to make code assist backend request \\((https://[^)\\s]+)\\): \\{$`,
-);
 
 /**
- * The stream barrier `agy` 1.5.9 writes after the last backend step of a
- * turn. From 1.5.10 the conversation stream outlives the turn (it carries a
- * woken agent's replies between turns), so the line no longer marks a turn's
- * end; it is read only by an `AgyLog` without a barrier request.
- */
-export function barrierPattern(sessionId) {
-  return new RegExp(
-    `${PREFIX}server\\.go:\\d+\\] Stream goroutine exited for ${escape(sessionId)}, sending completion signal$`,
-  );
-}
-
-/**
- * The request the proxy sends `agy` once a turn has replied, as
- * `<method>/<nonce>`. `agy` answers it "Method not found", but it logs every
- * request it reads before handling it (`ACP Request received: <method>`, in
- * 1.5.9 and 1.5.14 alike), so that line follows every line the turn logged
- * before its reply: the turn's barrier.
- */
-export const BARRIER_METHOD = "_cowboy/evidence_barrier";
-
-/** The line `agy` writes when it reads the barrier request `nonce` names. */
-export function requestBarrierPattern(nonce) {
-  return new RegExp(
-    `${PREFIX}server\\.go:\\d+\\] ACP Request received: ${escape(`${BARRIER_METHOD}/${nonce}`)}$`,
-  );
-}
-
-function escape(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Parse log text into backend records: `success`, `step_failure` (status,
- * code) and `request_failure` (status, code, reasons), `prompt` (`agy` read
- * a `session/prompt`) and `dispatch` (a prompt reached its agent loop). Structured JSON is
- * read only from a request failure's own block and only for its `code`,
- * `status` and `details[].reason` fields. The barrier is the request
- * barrier `nonce` names when given, else the session's stream barrier.
+ * Parse log text into backend records: `success`, `step_failure`,
+ * `request_failure`, `prompt`, `dispatch`, and optional `barrier`.
  */
 export function parseRecords(text, sessionId, nonce) {
   const lines = text.split("\n");
@@ -258,34 +242,42 @@ function structuredError(block) {
       reasons,
     };
   } catch {
-    // An unreadable block is still a failed backend request.
     return { status: undefined, code: undefined, reasons: [] };
   }
 }
 
-/** The class one refusal record maps to. */
+/**
+ * The explicit Google refusal class a backend failure record proves, or `null`
+ * when the failure is not a known account-level Google refusal.
+ */
 export function refusalClass({ status, code, reasons = [] }) {
   if (reasons.includes("VALIDATION_REQUIRED")) return "verification_required";
   if (reasons.includes("UNSUPPORTED_LOCATION")) return "location_unsupported";
   if (status === "RESOURCE_EXHAUSTED" || code === 429) return "rate_limited";
-  return "unknown_refusal";
+  return null;
 }
 
 /**
- * Classify a turn from the records of its window. `prior` holds request
- * failures earlier in the same process log: a step failure that carries no
- * reason of its own takes the reason of the latest earlier failure with the
- * same status and code (`agy` logs the structured error of a refused account
- * once, from its background quota request, and the turn's step failure
- * repeats only status and code).
+ * Classify a turn from the records of its window. Only explicit proven Google
+ * backend refusals (`verification_required`, `location_unsupported`,
+ * `rate_limited`, `suspended`) produce a non-`ok` class; missing barriers,
+ * zero backend steps, or unrecognized errors never park the account.
  */
-export function classify(records, { prior = [], stopReason } = {}) {
+export function classify(records, { prior = [] } = {}) {
   const barrier = records.some((record) => record.kind === "barrier");
   const successes = records.filter((record) => record.kind === "success").length;
   const known = [...prior, ...records].filter((record) => record.kind === "request_failure");
   const refusals = [];
+  const classes = new Set();
   for (const record of records) {
-    if (record.kind === "request_failure") refusals.push(record);
+    if (record.kind === "request_failure") {
+      const klass = refusalClass(record);
+      if (klass) {
+        refusals.push(record);
+        classes.add(klass);
+      }
+      continue;
+    }
     if (transient(record)) continue;
     if (record.kind === "step_failure" || record.kind === "retry") {
       const source = known.findLast(
@@ -294,11 +286,14 @@ export function classify(records, { prior = [], stopReason } = {}) {
           failure.code === record.code &&
           failure.reasons.length,
       );
-      refusals.push({ ...record, reasons: source ? source.reasons : [] });
+      const enriched = { ...record, reasons: source ? source.reasons : [] };
+      const klass = refusalClass(enriched);
+      if (klass) {
+        refusals.push(enriched);
+        classes.add(klass);
+      }
     }
   }
-  // Prompt receipts and dispatches count only through the turn's barrier:
-  // another session's prompt read after it is not this turn's.
   const end = records.findIndex((record) => record.kind === "barrier");
   const turn = end < 0 ? records : records.slice(0, end);
   const evidence = {
@@ -313,27 +308,12 @@ export function classify(records, { prior = [], stopReason } = {}) {
       reasons: reasons ?? [],
     })),
   };
-  if (refusals.length) {
-    const classes = new Set(refusals.map(refusalClass));
+  if (classes.size > 0) {
     return { class: PRECEDENCE.find((name) => classes.has(name)), ...evidence };
   }
-  // Without the barrier the turn's backend steps may still be running or
-  // refusing: the outcome is ambiguous and parks the account, cancelled or
-  // not. A turn the client cancelled after its barrier may have had no
-  // backend step at all; it is not a refusal.
-  if (!barrier) return { class: "unknown_refusal", ...evidence };
-  if (stopReason === "cancelled") return { class: "ok", ...evidence };
-  if (successes === 0) return { class: "unknown_refusal", ...evidence };
   return { class: "ok", ...evidence };
 }
 
-/**
- * The log of one `agy acp` process (`acp-server-<time>-<pid>.log` in its
- * HOME) read with a per-turn byte cursor and a bounded reader. `request`
- * sends `agy` one JSON-RPC message: with it every turn settles on its own
- * barrier request (see `BARRIER_METHOD`); without it, on the 1.5.9 stream
- * barrier.
- */
 const STEP_TIMINGS = new WeakMap();
 
 /** Retrieve content-free step timings associated with a `settle()` result. */
@@ -341,14 +321,17 @@ export function stepTimingsFor(classified) {
   return classified && typeof classified === "object" ? STEP_TIMINGS.get(classified) : undefined;
 }
 
+/**
+ * Non-blocking reader for one `agy acp` process log (`acp-server-*-<pid>.log`).
+ * Performs one bounded read at turn end strictly for explicit Google refusals
+ * and numeric step timing diagnostics; never polls or sends synthetic RPCs.
+ */
 export class AgyLog {
-  constructor(directory, pid, { pollMs = 100, barrierTimeoutMs = 10000, request } = {}) {
+  constructor(directory, pid) {
     this.directory = directory;
     this.pid = pid;
-    this.pollMs = pollMs;
-    this.barrierTimeoutMs = barrierTimeoutMs;
-    this.request = request;
     this.path = undefined;
+    this.childExited = false;
   }
 
   async locate() {
@@ -362,7 +345,7 @@ export class AgyLog {
     return this.path;
   }
 
-  /** The cursor of a turn about to start. */
+  /** The cursor of a turn about to start (best-effort; `undefined` if no log yet). */
   async mark() {
     try {
       return (await stat(await this.locate())).size;
@@ -383,71 +366,44 @@ export class AgyLog {
     }
   }
 
-  /**
-   * Settle a finished turn: wait for its barrier line (bounded), then
-   * classify. Missing or unreadable evidence is `unknown_refusal`. Called
-   * only after the turn's reply has arrived: its barrier request is sent
-   * now, with a nonce no earlier line can carry.
-   */
   markExited() {
     this.childExited = true;
   }
 
-  async settle(cursor, sessionId, stopReason) {
+  /**
+   * Settle a finished turn with a single bounded log read (plus one re-read if
+   * the child exited mid-read). Missing or unreadable logs cleanly return `ok`.
+   */
+  async settle(cursor, _sessionId, _stopReason) {
     if (cursor === undefined) return classify([]);
-    let nonce;
-    if (this.request) {
-      nonce = randomUUID();
-      try {
-        // Its reply answers nothing the proxy waits for and is dropped.
-        this.request({
-          jsonrpc: "2.0",
-          id: `cowboy-evidence-${nonce}`,
-          method: `${BARRIER_METHOD}/${nonce}`,
-          params: {},
-        });
-      } catch {
-        return classify([], {});
-      }
-    }
-    const deadline = Date.now() + this.barrierTimeoutMs;
     try {
-      for (;;) {
-        const exitedBeforeStat = this.childExited;
+      let windowText;
+      let truncated = false;
+      for (let pass = 0; pass < 2; pass++) {
+        const exitedBefore = this.childExited;
         const size = (await stat(await this.locate())).size;
-        if (size - cursor > MAX_WINDOW) {
-          if (!exitedBeforeStat && this.childExited) continue;
-          // Never classify a truncated tail that omits an earlier prefix of the turn.
-          return classify([], {});
-        }
-        const windowText = await this.read(cursor, size);
-        const records = parseRecords(windowText, sessionId, nonce);
-        if (records.some((record) => record.kind === "barrier")) {
-          const timings = parseStepTimings(windowText, sessionId, nonce);
-          const prior = parseRecords(
-            await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
-            undefined,
-          );
-          const result = classify(records, { prior, stopReason });
-          if (timings) STEP_TIMINGS.set(result, timings);
-          return result;
-        }
-        if (!exitedBeforeStat && this.childExited) continue;
-        if (exitedBeforeStat || Date.now() >= deadline) {
-          const timings = parseStepTimings(windowText, sessionId, nonce);
-          const prior = parseRecords(
-            await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
-            undefined,
-          );
-          if (!exitedBeforeStat && this.childExited) continue;
-          const result = classify(records, { prior, stopReason });
-          if (timings) STEP_TIMINGS.set(result, timings);
-          return result;
-        }
-        await new Promise((resolve) => setTimeout(resolve, this.pollMs));
+        const span = Math.max(0, size - cursor);
+        truncated = span > MAX_WINDOW;
+        const from = truncated ? size - MAX_WINDOW : cursor;
+        windowText = await this.read(from, size);
+        if (exitedBefore || !this.childExited) break;
       }
+      const records = parseRecords(windowText);
+      const needsPrior = records.some(
+        (record) =>
+          (record.kind === "step_failure" || record.kind === "retry") && !transient(record),
+      );
+      const prior = needsPrior
+        ? parseRecords(await this.read(Math.max(0, cursor - MAX_WINDOW), cursor))
+        : [];
+      const result = classify(records, { prior });
+      if (!truncated) {
+        const timings = parseStepTimings(windowText);
+        if (timings) STEP_TIMINGS.set(result, timings);
+      }
+      return result;
     } catch {
-      return classify([], {});
+      return classify([]);
     }
   }
 }

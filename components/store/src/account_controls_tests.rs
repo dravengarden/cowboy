@@ -395,9 +395,13 @@ fn signals_map_to_account_transitions() {
         (violation.state, violation.reason.as_str()),
         (AccountState::NeedsAttention, "policy_violation:run_command")
     );
-    let unknown = signal_transition(&Signal::Unclassified).unwrap();
-    assert_eq!(unknown.state, AccountState::UnknownRefusal);
-    assert!(!unknown.stop_units);
+    // Unclassified errors and unknown_refusal fail only that session turn;
+    // they never park the entire account.
+    assert_eq!(signal_transition(&Signal::Unclassified), None);
+    assert_eq!(
+        signal_transition(&Signal::Refused(AccountState::UnknownRefusal)),
+        None
+    );
 }
 
 #[test]
@@ -549,9 +553,6 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     ];
     for (key, value) in [
         ("class", serde_json::json!("unknown_refusal")),
-        ("barrier", serde_json::json!(false)),
-        ("prompts", serde_json::json!(0)),
-        ("prompts", serde_json::json!(2)),
         ("dispatches", serde_json::json!(1)),
         ("successes", serde_json::json!(1)),
         ("transient", serde_json::json!(1)),
@@ -563,14 +564,7 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     ] {
         unproven.push(rejected("image_answer", with(key, value)));
     }
-    for key in [
-        "barrier",
-        "prompts",
-        "dispatches",
-        "successes",
-        "transient",
-        "refusals",
-    ] {
+    for key in ["dispatches", "successes", "transient", "refusals"] {
         unproven.push(rejected("image_answer", without(key)));
     }
     for ending in unproven {

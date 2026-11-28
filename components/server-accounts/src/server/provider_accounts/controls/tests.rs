@@ -298,8 +298,8 @@ async fn backend_signals_set_the_account_state_and_stop_its_units() {
     // A normal ending changes nothing.
     end(&controls, &fake, "s1", "EndTurn").await;
     assert_eq!(control(&controls).await.state, AccountState::Ok);
-    // Vendor text naming a refusal, or any unclassified error, is
-    // unknown_refusal.
+    // Vendor text naming a refusal, or any unclassified error, leaves the
+    // account healthy (failing only the affected session turn).
     end(
         &controls,
         &fake,
@@ -307,19 +307,7 @@ async fn backend_signals_set_the_account_state_and_stop_its_units() {
         "error: upstream: antigravity_backend_refusal:ok",
     )
     .await;
-    let unknown = control(&controls).await;
-    assert_eq!(unknown.state, AccountState::UnknownRefusal);
-    controls
-        .enter(
-            &unknown,
-            AccountState::Ok,
-            "owner_clear",
-            None,
-            Some(unknown.revision),
-            false,
-        )
-        .await
-        .unwrap();
+    assert_eq!(control(&controls).await.state, AccountState::Ok);
     end(
         &controls,
         &fake,

@@ -1198,7 +1198,7 @@ test("R5-M5: settleExit({ force: true }) finalizes unfinalized prompt on normal 
   assert.ok(reply?.error, "must emit explicit terminal error instead of bare EOF");
 });
 
-test("evidence.settle reads final post-exit bytes appended after initial stat", async () => {
+test("evidence.settle reads final post-exit bytes appended during the initial read", async () => {
   const { mkdtempSync, writeFileSync, appendFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -1206,10 +1206,7 @@ test("evidence.settle reads final post-exit bytes appended after initial stat", 
   const dir = mkdtempSync(join(tmpdir(), "cowboy-ev-exit-"));
   const logFile = join(dir, "acp-server-1-4242.log");
   writeFileSync(logFile, "initial line\n");
-  const reader = new AgyLog(dir, 4242, {
-    barrierTimeoutMs: 5000,
-    pollMs: 500,
-  });
+  const reader = new AgyLog(dir, 4242);
   const cursor = await reader.mark();
   const origRead = reader.read.bind(reader);
   let reads = 0;
@@ -1219,21 +1216,20 @@ test("evidence.settle reads final post-exit bytes appended after initial stat", 
     if (reads === 1) {
       appendFileSync(
         logFile,
-        "I1124 10:00:00.000000 4242 server.go:1] Stream goroutine exited for sess-ev, sending completion signal\n",
+        "I1124 10:00:00.000000 4242 errorreport.go:1] generating and executing: RESOURCE_EXHAUSTED (code 429)\n",
       );
       reader.markExited();
     }
     return data;
   };
   const started = Date.now();
-  const verdict = await reader.settle(cursor, "sess-ev", "cancelled");
-  assert.ok(Date.now() - started < 1000, "must not sleep 500ms/5s after childExited");
+  const verdict = await reader.settle(cursor, "sess-ev", "end_turn");
+  assert.ok(Date.now() - started < 1000, "must settle without polling");
   assert.equal(reads, 3, "pre-exit read + fresh post-exit read + prior window read");
-  assert.equal(verdict.barrier, true);
-  assert.equal(verdict.class, "ok");
+  assert.equal(verdict.class, "rate_limited");
 });
 
-test("R7-16/17: evidence.settle fails closed on oversize window and rechecks mid-read childExited past deadline", async () => {
+test("evidence.settle handles oversize windows cleanly without synthesizing unknown_refusal", async () => {
   const { mkdtempSync, writeFileSync, appendFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -1242,47 +1238,16 @@ test("R7-16/17: evidence.settle fails closed on oversize window and rechecks mid
   const dirBig = mkdtempSync(join(tmpdir(), "cowboy-ev-big-"));
   const bigLog = join(dirBig, "acp-server-1-4243.log");
   writeFileSync(bigLog, "header\n");
-  const bigReader = new AgyLog(dirBig, 4243, { barrierTimeoutMs: 500, pollMs: 20 });
+  const bigReader = new AgyLog(dirBig, 4243);
   const bigCursor = await bigReader.mark();
   appendFileSync(
     bigLog,
-    "prompt refused: policy\n" +
-      "x".repeat(4 * 1024 * 1024 + 128) +
-      "\nI1124 10:00:00.000000 4243 http_helpers.go:1] URL: https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1234 ResponseID: r1\n" +
-      "I1124 10:00:00.000000 4243 server.go:1] Stream goroutine exited for sess-big, sending completion signal\n",
+    "x".repeat(4 * 1024 * 1024 + 128) +
+      "\nI1124 10:00:00.000000 4243 http_helpers.go:1] URL: https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1234 ResponseID: r1\n",
   );
   bigReader.markExited();
   const bigVerdict = await bigReader.settle(bigCursor, "sess-big", "end_turn");
-  assert.equal(
-    bigVerdict.class,
-    "unknown_refusal",
-    "oversize window must fail closed without tail truncation",
-  );
-  assert.equal(bigVerdict.barrier, false);
-
-  const dirDead = mkdtempSync(join(tmpdir(), "cowboy-ev-dead-"));
-  const deadLog = join(dirDead, "acp-server-1-4244.log");
-  writeFileSync(deadLog, "header\n");
-  const deadReader = new AgyLog(dirDead, 4244, { barrierTimeoutMs: 1, pollMs: 50 });
-  const deadCursor = await deadReader.mark();
-  const origRead = deadReader.read.bind(deadReader);
-  let deadReads = 0;
-  deadReader.read = async (from, to) => {
-    deadReads += 1;
-    await new Promise((r) => setTimeout(r, 15));
-    const data = await origRead(from, to);
-    if (deadReads === 1) {
-      appendFileSync(
-        deadLog,
-        "I1124 10:00:00.000000 4244 server.go:1] Stream goroutine exited for sess-dead, sending completion signal\n",
-      );
-      deadReader.markExited();
-    }
-    return data;
-  };
-  const deadVerdict = await deadReader.settle(deadCursor, "sess-dead", "cancelled");
-  assert.equal(deadVerdict.barrier, true);
-  assert.equal(deadVerdict.class, "ok");
+  assert.equal(bigVerdict.class, "ok");
 });
 
 test("cancelled proxy reservation awaiting runtime readiness or failing prep gets exactly one terminal reply", async () => {

@@ -673,10 +673,6 @@ export class Subagents {
         check();
       }
       child.cursor = await runtime.evidence.mark();
-      // Without a cursor the child's backend outcome could not be settled.
-      if (child.cursor === undefined) {
-        throw new ToolError("Antigravity's log is unavailable, so no subagent was started.");
-      }
       check();
       child.state = "running";
       child.announced = true;
@@ -855,20 +851,23 @@ export class Subagents {
     // started when agy answered (or start it now if not yet running).
     await (child.facadeCleanup ?? proxy.facade.endTurn(child.id).catch(() => {}));
     const runtime = await proxy.runtime;
-    let settled = await runtime.evidence
+    const settled = await runtime.evidence
       .settle(child.cursor, child.id, message.result?.stopReason)
-      .catch(() => ({ class: "unknown_refusal" }));
+      .catch(() => ({
+        class: "ok",
+        successes: 0,
+        barrier: false,
+        prompts: 0,
+        dispatches: 0,
+        transient: 0,
+        refusals: [],
+      }));
     if (proxy.turns.get(child.id) === turn) {
       proxy.clearStaleReplayTools?.(child.id, turn);
       proxy.turns.delete(child.id);
     }
     if (!RUNNING.has(child.state)) return;
     const violation = turn?.violation;
-    // As for the parent: an errored prompt whose evidence reads clean is an
-    // outcome nobody can prove, never a clean one.
-    if (message.error !== undefined && settled.class === "ok") {
-      settled = { ...settled, class: "unknown_refusal" };
-    }
     // The parent's reply carries the worst of what its children settled to.
     if (settled.class !== "ok") (child.parentTurn.childBackends ??= []).push(settled);
     if (violation !== undefined) {

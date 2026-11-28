@@ -408,12 +408,7 @@ async function connectedRuntime({
         : [paths.relay, socketPath, channel],
       env: [],
     }),
-    // A turn settles on a barrier request written to `agy` like the
-    // proxy's own (one whole frame per message); before the proxy is
-    // attached nothing is sent and the turn settles `unknown_refusal`.
-    evidence: new AgyLog(join(home, ".gemini", "antigravity-cli", "log"), agyPid, {
-      request: (message) => proxy?.agent(message),
-    }),
+    evidence: new AgyLog(join(home, ".gemini", "antigravity-cli", "log"), agyPid),
   };
   return runtime;
 }

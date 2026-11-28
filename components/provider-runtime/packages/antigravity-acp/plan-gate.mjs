@@ -1,5 +1,5 @@
 // Mode classification, mode generations, and attempt-scoped UI call correlation
-// for Antigravity (R3).
+// for Antigravity.
 //
 // In restricted modes (`plan`, `"switching"`, `undefined`, or any unrecognized
 // mode string), Cowboy enforces mode policy directly inside `Facade.answerOnce`
@@ -39,7 +39,6 @@ export const PLAN_REFUSED_TOOLS = Object.freeze(new Set(["WriteFile", "EditFile"
 const TERMINAL = new Set(["completed", "failed"]);
 /** Bounded active announcements tracked per session for UI presentation. */
 export const MAX_WAITING = 64;
-const MAX_DIGEST_DEPTH = 64;
 
 /** Strip `mcp_cowboy_` from an ACP tool name, or `undefined`. */
 export function stripFacadePrefix(name) {
@@ -69,7 +68,6 @@ export function isPlanEffectiveMode(mode) {
   return !isUnrestrictedMode(mode);
 }
 
-/** Whether top-level `toolSummary` is presentation-only for `toolName`. */
 function isBuiltinFacadeTool(toolName) {
   return (
     PLAN_ALLOWED_TOOLS.has(toolName) ||
@@ -78,79 +76,35 @@ function isBuiltinFacadeTool(toolName) {
   );
 }
 
-/** Recursively feed canonical JSON tokens into `hash`; returns false on invalid/cyclic input. */
-function hashCanonical(hash, value, depth, seen) {
-  if (depth > MAX_DIGEST_DEPTH) return false;
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    hash.update(JSON.stringify(value));
-    return true;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return false;
-    hash.update(JSON.stringify(value));
-    return true;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return false;
-    seen.add(value);
-    hash.update("[");
-    for (let i = 0; i < value.length; i++) {
-      if (i > 0) hash.update(",");
-      const item = value[i];
-      if (item === undefined) hash.update("null");
-      else if (!hashCanonical(hash, item, depth + 1, seen)) {
-        seen.delete(value);
-        return false;
-      }
-    }
-    hash.update("]");
-    seen.delete(value);
-    return true;
-  }
-  if (typeof value === "object") {
-    if (seen.has(value)) return false;
-    seen.add(value);
-    const keys = Object.keys(value)
-      .filter((key) => value[key] !== undefined)
-      .sort();
-    hash.update("{");
-    for (let i = 0; i < keys.length; i++) {
-      if (i > 0) hash.update(",");
-      const key = keys[i];
-      hash.update(JSON.stringify(key));
-      hash.update(":");
-      if (!hashCanonical(hash, value[key], depth + 1, seen)) {
-        seen.delete(value);
-        return false;
-      }
-    }
-    hash.update("}");
-    seen.delete(value);
-    return true;
-  }
-  return false;
-}
-
-/**
- * Deterministic SHA-256 digest of a tool call's arguments for UI correlation,
- * supporting arbitrarily large payloads (e.g. > 128 KiB file writes) without
- * collapsing distinct payloads together. Strips top-level `toolSummary` only
- * when `stripSummary` is true (built-in facade tools).
- */
+/** Deterministic SHA-256 key of a tool call's arguments for UI card correlation. */
 export function argsDigest(input, { stripSummary = true } = {}) {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return undefined;
   const target = stripSummary ? (({ toolSummary: _s, ...rest }) => rest)(input) : input;
-  const hash = createHash("sha256");
-  if (!hashCanonical(hash, target, 0, new Set())) return undefined;
-  return hash.digest("hex");
+  try {
+    const serialized = JSON.stringify(target, (_key, value) => {
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new Error("non-finite number");
+      }
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const sorted = {};
+        for (const key of Object.keys(value).sort()) {
+          if (value[key] !== undefined) sorted[key] = value[key];
+        }
+        return sorted;
+      }
+      return value;
+    });
+    if (typeof serialized !== "string") return undefined;
+    return createHash("sha256").update(serialized).digest("hex");
+  } catch {
+    return undefined;
+  }
 }
 
-/** Whether a turn record is still open for binding UI progress/results. */
 function isTurnLive(turn) {
   return turn !== undefined && !turn.cancelled && !turn.closed;
 }
 
-/** Attempt identity for `turn` (distinguishes correction retries sharing one turn). */
 function attemptOf(turn) {
   return turn?.attempt;
 }
@@ -164,109 +118,10 @@ export class PlanGate {
     this.modeGens = new Map();
     /** Announced active ACP `cowboy` calls per session: sessionId -> Array<Entry>. */
     this.waiting = new Map();
-    /** Facade call object -> `{ turn, attempt, admittedSeq }` captured at admission. */
+    /** Facade call object -> `{ turn, attempt }` captured at admission. */
     this.callAttempts = new WeakMap();
     /** Facade call object -> `{ entry, id, turn, attempt, digest }` bound for UI callbacks. */
     this.bound = new WeakMap();
-    this.taintedCalls = new WeakSet();
-    /** Monotonic sequence for ordering call admissions vs diff-card contradictions (R6-M2). */
-    this.seq = 0;
-    /**
-     * Live turn object -> Map<`${sessionId}\0${name}`, Map<attempt, { toolWide: number, byDigest: Map<string, number> }>>
-     * Exact collisions taint only their digest up to `MAX_WAITING` per bucket,
-     * folding overflow into `toolWide`; inputless/contradicted/evicted cards
-     * taint tool-wide (R7-L1, R10-L1). Out-of-turn events retain no history.
-     */
-    this.turnAmbiguities = new WeakMap();
-    /** Live turn object -> Map<`${sessionId}\0${id}`, { diffNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4, R9-L1). */
-    this.turnEvicted = new WeakMap();
-    /** Live turn object -> Set<attempt> whose announcements experienced MAX_WAITING eviction (R11-L2). */
-    this.evictedAttempts = new WeakMap();
-  }
-
-  markEvictedAttempt(turn, attempt) {
-    if (!turn || typeof turn !== "object") return;
-    let attempts = this.evictedAttempts.get(turn);
-    if (!attempts) {
-      attempts = new Set();
-      this.evictedAttempts.set(turn, attempts);
-    }
-    attempts.add(attempt);
-    turn.announcementEvicted = true;
-  }
-
-  hasEvictedAttempt(turn, attempt) {
-    if (!turn || typeof turn !== "object") return false;
-    return this.evictedAttempts.get(turn)?.has(attempt) ?? false;
-  }
-
-  ambiguityBucket(sessionId, turn, attempt, name, create = false) {
-    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return undefined;
-    let byKey = this.turnAmbiguities.get(turn);
-    if (!byKey) {
-      if (!create) return undefined;
-      byKey = new Map();
-      this.turnAmbiguities.set(turn, byKey);
-    }
-    const key = `${sessionId}\0${name}`;
-    let byAttempt = byKey.get(key);
-    if (!byAttempt) {
-      if (!create) return undefined;
-      byAttempt = new Map();
-      byKey.set(key, byAttempt);
-    }
-    let bucket = byAttempt.get(attempt);
-    if (!bucket) {
-      if (!create) return undefined;
-      bucket = { toolWide: 0, byDigest: new Map() };
-      byAttempt.set(attempt, bucket);
-    }
-    return bucket;
-  }
-
-  recordDiffAmbiguity(sessionId, turn, attempt, name, digest = undefined) {
-    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return;
-    const seq = ++this.seq;
-    const bucket = this.ambiguityBucket(sessionId, turn, attempt, name, true);
-    if (!bucket) return;
-    if (digest === undefined) {
-      if (seq > bucket.toolWide) bucket.toolWide = seq;
-      bucket.byDigest.clear();
-      return;
-    }
-    if (bucket.byDigest.has(digest)) {
-      bucket.byDigest.delete(digest);
-    } else if (bucket.byDigest.size >= MAX_WAITING) {
-      const oldest = bucket.byDigest.entries().next().value;
-      if (oldest) {
-        bucket.byDigest.delete(oldest[0]);
-        if (oldest[1] > bucket.toolWide) bucket.toolWide = oldest[1];
-      }
-    }
-    bucket.byDigest.set(digest, seq);
-  }
-
-  latestDiffAmbiguity(sessionId, turn, attempt, name, digest) {
-    const bucket = this.ambiguityBucket(sessionId, turn, attempt, name, false);
-    if (!bucket) return 0;
-    if (digest === undefined) {
-      let best = bucket.toolWide;
-      for (const seq of bucket.byDigest.values()) {
-        if (seq > best) best = seq;
-      }
-      return best;
-    }
-    return Math.max(bucket.toolWide, bucket.byDigest.get(digest) ?? 0);
-  }
-
-  evictedMap(turn, create = false) {
-    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return undefined;
-    let map = this.turnEvicted.get(turn);
-    if (!map && create) {
-      map = new Map();
-      this.turnEvicted.set(turn, map);
-    }
-    return map;
   }
 
   /** Current mode generation for `ownerId`. */
@@ -289,8 +144,7 @@ export class PlanGate {
 
   /**
    * Clear waiting announcements belonging to `turn` (or all announcements for
-   * `sessionId` when `turn` is `undefined`), returning unresolved `toolCallId`s
-   * so subsequent correction attempts of the same turn can taint them.
+   * `sessionId` when `turn` is `undefined`), returning unresolved `toolCallId`s.
    */
   clearTurn(sessionId, turn) {
     if (typeof sessionId !== "string") return [];
@@ -314,9 +168,8 @@ export class PlanGate {
   /**
    * Record one `tool_call` or `tool_call_update` emitted by `agy` for UI
    * progress/result attachment. Validates `name` and `rawInput` against an
-   * existing entry (and its bound call's digest) BEFORE removing terminal
-   * entries, returning `{ contradicted }` so the proxy can drop buffered
-   * results for contradicted calls.
+   * existing entry before removing terminal entries, returning `{ contradicted,
+   * contradictedIds, evictedId }` so the proxy can drop stale buffered results.
    */
   trackUpdate(sessionId, update, turn) {
     const id = update?.toolCallId;
@@ -325,326 +178,116 @@ export class PlanGate {
     }
     const list = this.waiting.get(sessionId) ?? [];
     const attempt = attemptOf(turn);
-    const isDiffBearing = (toolName) => toolName === "WriteFile" || toolName === "EditFile";
-    const isDiffName = (fullName) => isDiffBearing(stripFacadePrefix(fullName));
     const incomingName = typeof update.name === "string" ? update.name : undefined;
     const existing = list.find((entry) => entry.id === id);
-    const evictedMap = this.evictedMap(turn, false);
-    const evictedKey = `${sessionId}\0${id}`;
-    const evictedRecord = !existing ? evictedMap?.get(evictedKey) : undefined;
     let contradicted = false;
     if (existing) {
-      if (existing.turn !== turn || existing.attempt !== attempt) {
+      if (
+        existing.turn !== turn ||
+        existing.attempt !== attempt ||
+        (incomingName !== undefined && incomingName !== existing.name)
+      ) {
         existing.ambiguous = true;
-        existing.inputContradicted = true;
-        contradicted = true;
-      }
-      if (incomingName !== undefined && incomingName !== existing.name) {
-        // R8-M3 / R9-L1: Retain only diff-bearing revised identities (at most
-        // WriteFile and EditFile) so repeated malformed renames stay O(1).
-        if (isDiffName(incomingName)) existing.diffNames.add(incomingName);
-        existing.ambiguous = true;
-        existing.inputContradicted = true;
         contradicted = true;
       }
       if (update.rawInput !== undefined) {
-        const stripSummary = isBuiltinFacadeTool(existing.toolName);
-        const digest = argsDigest(update.rawInput, { stripSummary });
-        if (digest === undefined) {
+        const digest = argsDigest(update.rawInput, {
+          stripSummary: isBuiltinFacadeTool(existing.toolName),
+        });
+        if (
+          digest === undefined ||
+          (existing.hasInput && existing.digest !== digest) ||
+          (existing.boundDigest !== undefined && existing.boundDigest !== digest)
+        ) {
           existing.ambiguous = true;
-          existing.inputContradicted = true;
           contradicted = true;
         } else if (!existing.hasInput) {
           existing.hasInput = true;
           existing.digest = digest;
-          if (existing.boundDigest !== undefined && existing.boundDigest !== digest) {
-            existing.ambiguous = true;
-            existing.inputContradicted = true;
-            contradicted = true;
-          }
-        } else if (existing.digest !== digest) {
-          existing.ambiguous = true;
-          existing.inputContradicted = true;
-          contradicted = true;
         }
       }
-      if (existing.ambiguous) {
-        contradicted = true;
-        if (existing.boundCall) {
-          this.taintedCalls.add(existing.boundCall);
-          this.bound.delete(existing.boundCall);
-          existing.boundCall = undefined;
-        }
-      }
-    }
-    const taintToolPeers = (peerName, targetTurn, targetAttempt, excludeId) => {
-      const affected = [];
-      if (!isDiffName(peerName)) return affected;
-      this.recordDiffAmbiguity(sessionId, targetTurn, targetAttempt, peerName);
-      for (const item of list) {
-        if (
-          item.id !== excludeId &&
-          item.diffNames.has(peerName) &&
-          item.turn === targetTurn &&
-          item.attempt === targetAttempt
-        ) {
-          item.ambiguous = true;
-          if (item.boundCall) {
-            this.taintedCalls.add(item.boundCall);
-            this.bound.delete(item.boundCall);
-            item.boundCall = undefined;
-          }
-          affected.push(item.id);
-        }
-      }
-      return affected;
-    };
-    const detectDiffCollisions = (target) => {
-      const affected = [];
-      if (!target || target.diffNames.size === 0) return affected;
-      const toolWideTarget =
-        Boolean(target.inputContradicted) || (target.ambiguous && !target.hasInput);
-      for (const diffName of target.diffNames) {
-        if (toolWideTarget) {
-          this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, diffName);
-        } else if (target.ambiguous && target.hasInput && target.digest !== undefined) {
-          this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, diffName, target.digest);
-        }
-        const peers = list.filter(
-          (item) =>
-            item.id !== target.id &&
-            item.diffNames.has(diffName) &&
-            item.turn === target.turn &&
-            item.attempt === target.attempt,
-        );
-        const collides = (a, b) =>
-          !a.hasInput ||
-          !b.hasInput ||
-          Boolean(a.inputContradicted) ||
-          Boolean(b.inputContradicted) ||
-          (a.digest !== undefined && a.digest === b.digest);
-        const hits = peers.filter((peer) => collides(target, peer));
-        if (hits.length > 0) {
-          const exactOnly =
-            target.hasInput &&
-            !target.inputContradicted &&
-            target.digest !== undefined &&
-            hits.every(
-              (peer) => peer.hasInput && !peer.inputContradicted && peer.digest === target.digest,
-            );
-          this.recordDiffAmbiguity(
-            sessionId,
-            target.turn,
-            target.attempt,
-            diffName,
-            exactOnly ? target.digest : undefined,
-          );
-          for (const item of [target, ...hits]) {
-            item.ambiguous = true;
-            if (item.boundCall) {
-              this.taintedCalls.add(item.boundCall);
-              this.bound.delete(item.boundCall);
-              item.boundCall = undefined;
-            }
-            affected.push(item.id);
-          }
-        }
-      }
-      return affected;
-    };
-    // R6-M1 / R7-M3 / R8-M3 / R8-M4: Propagate collisions across ALL retained
-    // alias identities BEFORE removing terminal entries, and catch late/terminal
-    // revisions on ANY evicted card (including evicted non-edit cards renamed to an edit).
-    const existingAffected = existing ? detectDiffCollisions(existing) : [];
-    if (evictedRecord) {
-      if (incomingName !== undefined && isDiffName(incomingName)) {
-        evictedRecord.diffNames.add(incomingName);
-      }
-      if (evictedRecord.diffNames.size > 0) {
-        contradicted = true;
-        for (const diffName of evictedRecord.diffNames) {
-          existingAffected.push(...taintToolPeers(diffName, turn, evictedRecord.attempt, id));
-        }
+      if (existing.ambiguous && existing.boundCall) {
+        this.bound.delete(existing.boundCall);
+        existing.boundCall = undefined;
       }
     }
     if (TERMINAL.has(update.status)) {
       const left = list.filter((entry) => entry.id !== id);
       if (left.length) this.waiting.set(sessionId, left);
       else this.waiting.delete(sessionId);
-      if (evictedRecord) evictedMap?.delete(evictedKey);
-      const contradictedIds = contradicted
-        ? [...new Set([id, ...existingAffected])]
-        : [...new Set(existingAffected)];
-      return { contradicted: contradictedIds.length > 0, contradictedIds };
+      return contradicted ? { contradicted: true, contradictedIds: [id] } : { contradicted: false };
     }
-    if (existing || evictedRecord) {
-      const contradictedIds = contradicted
-        ? [...new Set([id, ...existingAffected])]
-        : [...new Set(existingAffected)];
-      return { contradicted: contradictedIds.length > 0, contradictedIds };
+    if (existing) {
+      return contradicted ? { contradicted: true, contradictedIds: [id] } : { contradicted: false };
     }
-    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) {
-      return { contradicted: false, contradictedIds: [] };
+    const bare = stripFacadePrefix(update.name);
+    if (bare === undefined || !isTurnLive(turn)) {
+      return { contradicted: false };
     }
-    const name = update.name;
-    const toolName = stripFacadePrefix(name);
-    if (toolName === undefined) return { contradicted: false, contradictedIds: [] };
-    const stripSummary = isBuiltinFacadeTool(toolName);
-    const hasRaw = update.rawInput !== undefined;
-    const digest = hasRaw ? argsDigest(update.rawInput, { stripSummary }) : undefined;
-    const tainted = Boolean(turn?.taintedToolCallIds?.has(id));
     let evictedId;
     if (list.length >= MAX_WAITING) {
       const evicted = list.shift();
-      if (evicted) {
-        evicted.ambiguous = true;
-        evictedId = evicted.id;
-        if (evicted.boundCall) {
-          this.taintedCalls.add(evicted.boundCall);
-          this.bound.delete(evicted.boundCall);
-        }
-        // R7-M3 / R8-M4: Retain ALL evicted card IDs (including non-edit cards)
-        // so a late or terminal revision renaming an evicted card to an edit can
-        // still invalidate surviving peers.
-        const map = this.evictedMap(evicted.turn, true);
-        if (map) {
-          if (map.size >= MAX_WAITING * 4) {
-            const oldest = map.keys().next().value;
-            if (oldest !== undefined) map.delete(oldest);
-          }
-          map.set(`${sessionId}\0${evicted.id}`, {
-            diffNames: new Set(evicted.diffNames),
-            attempt: evicted.attempt,
-          });
-        }
-        for (const diffName of evicted.diffNames) {
-          this.recordDiffAmbiguity(sessionId, evicted.turn, evicted.attempt, diffName);
-        }
-        this.markEvictedAttempt(evicted.turn, evicted.attempt);
+      evictedId = evicted?.id;
+      if (evicted?.boundCall) {
+        this.bound.delete(evicted.boundCall);
+        evicted.boundCall = undefined;
       }
     }
-    const added = {
+    const hasRaw = update.rawInput !== undefined;
+    const digest = hasRaw
+      ? argsDigest(update.rawInput, { stripSummary: isBuiltinFacadeTool(bare) })
+      : undefined;
+    list.push({
       id,
-      name,
-      diffNames: new Set(isDiffName(name) ? [name] : []),
-      toolName,
+      name: update.name,
+      toolName: bare,
       turn,
       attempt,
       hasInput: hasRaw && digest !== undefined,
       digest,
-      ambiguous: tainted || (hasRaw && digest === undefined),
       boundCall: undefined,
       boundDigest: undefined,
-    };
-    list.push(added);
-    const affected = detectDiffCollisions(added);
+      ambiguous: hasRaw && digest === undefined,
+    });
     this.waiting.set(sessionId, list);
-    return { contradicted: affected.length > 0, contradictedIds: affected, evictedId };
+    return { contradicted: false, evictedId };
   }
 
-  /**
-   * Capture `call`'s turn and attempt lifetime at `Facade` admission and
-   * eagerly bind it to an unambiguous matching announcement in the same live
-   * attempt.
-   */
+  /** Capture `call`'s turn and attempt lifetime at `Facade` admission. */
   admitCall(call, turn) {
-    if (!call || typeof call !== "object" || this.taintedCalls.has(call)) return;
+    if (!call || typeof call !== "object") return;
     const attempt = attemptOf(turn);
-    const prev = this.callAttempts.get(call);
-    const admittedSeq =
-      prev && prev.turn === turn && prev.attempt === attempt ? prev.admittedSeq : ++this.seq;
-    this.callAttempts.set(call, { turn, attempt, admittedSeq });
+    this.callAttempts.set(call, { turn, attempt });
     if (turn !== undefined && !isTurnLive(turn)) return;
     this.matchUnbound(call, turn, attempt);
   }
 
-  /** Match `call` to an unbound waiting entry in the exact same `(turn, attempt)`. */
   matchUnbound(call, turn, attempt) {
     const list = this.waiting.get(call.sessionId) ?? [];
     const name = `${FACADE_PREFIX}${call.name}`;
-    const stripSummary = isBuiltinFacadeTool(call.name);
-    const digest = argsDigest(call.args === undefined ? {} : call.args, { stripSummary });
+    const digest = argsDigest(call.args === undefined ? {} : call.args, {
+      stripSummary: isBuiltinFacadeTool(call.name),
+    });
     const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
-    const liveSameTool = list.filter(
-      (item) =>
-        (isDiffBearing ? item.diffNames.has(name) : item.name === name) &&
-        item.turn === turn &&
-        item.attempt === attempt,
+    const sameTool = list.filter(
+      (item) => item.name === name && item.turn === turn && item.attempt === attempt,
     );
-    const unbound = liveSameTool.filter((item) => !item.boundCall && !item.ambiguous);
+    const unbound = sameTool.filter((item) => !item.boundCall && !item.ambiguous);
     let entry;
-    if (isDiffBearing) {
-      // R6-M2: If a diff-bearing card for this tool/turn/attempt contradicted
-      // itself or collided AFTER this unbound call was admitted (even if that
-      // card already terminated before result delivery), permanently taint `call`.
-      const admitted = this.callAttempts.get(call);
-      if (
-        admitted &&
-        admitted.admittedSeq < this.latestDiffAmbiguity(call.sessionId, turn, attempt, name, digest)
-      ) {
-        this.taintedCalls.add(call);
-        return undefined;
-      }
-      // R4-M5: If ANY compatible live edit announcement is already tainted
-      // ambiguous (even if it is the sole remaining live card after a sibling
-      // terminated), permanently taint `call` so it cannot later rebind.
-      const compatibleLive =
-        digest !== undefined
-          ? liveSameTool.filter(
-              (item) => !item.hasInput || Boolean(item.inputContradicted) || item.digest === digest,
-            )
-          : liveSameTool;
-      if (compatibleLive.some((item) => item.ambiguous)) {
-        this.taintedCalls.add(call);
-        return undefined;
-      }
-    }
     if (digest !== undefined) {
-      const exactLive = liveSameTool.filter((item) => item.hasInput && item.digest === digest);
-      const inputlessLive = liveSameTool.filter((item) => !item.hasInput);
       const exactUnbound = unbound.filter((item) => item.hasInput && item.digest === digest);
-      if (
-        isDiffBearing &&
-        (exactLive.length > 1 || (exactLive.length >= 1 && inputlessLive.length > 0))
-      ) {
-        // M-Proxy-6 & M13: Collisions across bound/unbound/inputless edit announcements taint all affected entries and calls permanently.
-        this.taintedCalls.add(call);
-        for (const item of [...exactLive, ...inputlessLive]) {
-          item.ambiguous = true;
-          if (item.boundCall) {
-            this.taintedCalls.add(item.boundCall);
-            this.bound.delete(item.boundCall);
-            item.boundCall = undefined;
-          }
-        }
-      } else if (exactUnbound.length >= 1) {
-        if (!this.hasEvictedAttempt(turn, attempt)) entry = exactUnbound[0];
-      } else if (!this.hasEvictedAttempt(turn, attempt)) {
-        // R8-L1: Only taint on inputless fallback when an inputless live card actually exists.
-        if (isDiffBearing && inputlessLive.length > 0 && liveSameTool.length > 1) {
-          // R3-M6: Permanently taint the incoming call and colliding entries on inputless ambiguity.
-          this.taintedCalls.add(call);
-          for (const item of inputlessLive) {
-            item.ambiguous = true;
-            if (item.boundCall) {
-              this.taintedCalls.add(item.boundCall);
-              this.bound.delete(item.boundCall);
-              item.boundCall = undefined;
-            }
-          }
-        } else {
-          const inputless = unbound.filter((item) => !item.hasInput);
-          if (inputless.length === 1) entry = inputless[0];
-        }
-      }
-    } else if (!this.hasEvictedAttempt(turn, attempt) && unbound.length === 1) {
-      if (!isDiffBearing || liveSameTool.length === 1) {
-        entry = unbound[0];
+      if (exactUnbound.length === 1) {
+        entry = exactUnbound[0];
+      } else if (exactUnbound.length > 1) {
+        if (!isDiffBearing) entry = exactUnbound[0];
       } else {
-        this.taintedCalls.add(call);
+        const inputless = unbound.filter((item) => !item.hasInput);
+        if (inputless.length === 1 && (!isDiffBearing || sameTool.length === 1)) {
+          entry = inputless[0];
+        }
       }
-    } else if (isDiffBearing && liveSameTool.length > 1) {
-      this.taintedCalls.add(call);
+    } else if (unbound.length === 1 && (!isDiffBearing || sameTool.length === 1)) {
+      entry = unbound[0];
     }
     if (!entry) return undefined;
     entry.boundCall = call;
@@ -653,14 +296,9 @@ export class PlanGate {
     return entry.id;
   }
 
-  /**
-   * The ACP `toolCallId` one facade `call` answers for UI presentation
-   * (`toolProgress`, `toolResult`). Enforces `(turn, attempt)` lifetime,
-   * suppresses bindings contradicted by later `tool_call_update` input, and
-   * omits ambiguous matches.
-   */
+  /** Return the ACP `toolCallId` bound to `call` for UI progress/result attachment. */
   bind(call, currentTurn) {
-    if (!call || typeof call !== "object" || this.taintedCalls.has(call)) return undefined;
+    if (!call || typeof call !== "object") return undefined;
     const currentAttempt = attemptOf(currentTurn);
     if (this.callAttempts.has(call)) {
       const admitted = this.callAttempts.get(call);
@@ -669,8 +307,8 @@ export class PlanGate {
     } else if (currentTurn !== undefined && !isTurnLive(currentTurn)) {
       return undefined;
     }
-    if (this.bound.has(call)) {
-      const binding = this.bound.get(call);
+    const binding = this.bound.get(call);
+    if (binding) {
       if (binding.turn !== currentTurn || binding.attempt !== currentAttempt) return undefined;
       if (binding.turn !== undefined && !isTurnLive(binding.turn)) return undefined;
       if (binding.entry.ambiguous) return undefined;

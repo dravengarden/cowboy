@@ -2589,15 +2589,16 @@ export class AcpProxy {
       const replyId = record.replyId ?? id;
       this.settling.delete(replyId);
       const turn = this.turns.get(record.sessionId);
-      const backend = turn?.childBackends?.length
-        ? withChildren(turn, {
-            class: "ok",
-            successes: 0,
-            barrier: false,
-            transient: 0,
-            refusals: [],
-          })
-        : { class: "unknown_refusal", successes: 0, barrier: false, transient: 0, refusals: [] };
+      const baseBackend = {
+        class: "ok",
+        successes: 0,
+        barrier: false,
+        prompts: 0,
+        dispatches: 0,
+        transient: 0,
+        refusals: [],
+      };
+      const backend = turn?.childBackends?.length ? withChildren(turn, baseBackend) : baseBackend;
       const cowboy = { antigravity_backend: backend };
       if (turn?.uncertain !== undefined) cowboy.uncertain_effect = turn.uncertain;
       else if (this.facade?.hasOpenCommands?.(record.sessionId)) {
@@ -2605,10 +2606,13 @@ export class AcpProxy {
       }
       const violation = turn?.violation;
       if (violation !== undefined) cowboy.policy_violation = violation;
+      const explicitRefusal = backend.class !== "ok" && backend.class !== "unknown_refusal";
       const text =
         violation !== undefined
           ? TURN_ERROR_TEXT.violation
-          : (TURN_ERROR_TEXT[backend.class] ?? TURN_ERROR_TEXT.unknown_refusal);
+          : explicitRefusal
+            ? (TURN_ERROR_TEXT[backend.class] ?? TURN_ERROR_TEXT.unknown_refusal)
+            : (this.killed ?? "Antigravity ended before finishing the turn.");
       this.client({
         jsonrpc: "2.0",
         id: replyId,
@@ -2617,7 +2621,9 @@ export class AcpProxy {
           message:
             violation !== undefined
               ? `${VIOLATION_PREFIX}${violation}`
-              : `${REFUSAL_PREFIX}${backend.class}`,
+              : explicitRefusal
+                ? `${REFUSAL_PREFIX}${backend.class}`
+                : "antigravity_turn_error",
           data: { message: text, cowboy },
         },
       });
@@ -3221,8 +3227,7 @@ export class AcpProxy {
       });
     }
     const cowboy = {};
-    cowboy.antigravity_backend =
-      message.result || backend.class !== "ok" ? backend : { ...backend, class: "unknown_refusal" };
+    cowboy.antigravity_backend = backend;
     if (uncertain !== undefined) cowboy.uncertain_effect = uncertain;
     if (violation !== undefined) cowboy.policy_violation = violation;
     const stepTimings = stepTimingsFor(settled) ?? runtime.evidence?.lastStepTimings ?? null;
@@ -3277,6 +3282,19 @@ export class AcpProxy {
               ? `${VIOLATION_PREFIX}${violation}`
               : `${REFUSAL_PREFIX}${cowboy.antigravity_backend.class}`,
           // `message` is what Cowboy shows; the Controller reads `cowboy`.
+          data: { message: text, cowboy },
+        },
+      });
+    }
+    if (message.result === undefined) {
+      const raw = typeof message.error?.message === "string" ? message.error.message.trim() : "";
+      const text = raw ? raw.slice(0, 500) : "Antigravity ended the turn with an error.";
+      return this.endPrompt(record, {
+        jsonrpc: "2.0",
+        id: replyId,
+        error: {
+          code: TURN_ERROR_CODE,
+          message: "antigravity_turn_error",
           data: { message: text, cowboy },
         },
       });
@@ -3592,10 +3610,8 @@ function statedRejection(error) {
  */
 export function localRejection(error, backend, params) {
   if (
-    backend?.barrier !== true ||
-    backend.successes !== 0 ||
+    backend?.successes !== 0 ||
     backend.transient !== 0 ||
-    backend.prompts !== 1 ||
     backend.dispatches !== 0 ||
     !Array.isArray(backend.refusals) ||
     backend.refusals.length

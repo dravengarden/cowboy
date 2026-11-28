@@ -6,7 +6,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::fs::{File, Metadata, OpenOptions};
-use std::io::{Read as _, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Component, Path, PathBuf};
 
@@ -33,7 +33,8 @@ pub enum Command {
     Realpath { path: PathBuf },
     /// Compare-and-swap one file against the caller's buffered digest, then
     /// publish the spliced result atomically. The request is JSON, either
-    /// inline as base64 or in a private payload file this call consumes.
+    /// inline as base64, a private payload file this call consumes, or `-`
+    /// to read one bounded newline-delimited JSON line from stdin.
     Apply {
         #[arg(long, conflicts_with = "request_file")]
         request: Option<String>,
@@ -581,9 +582,30 @@ fn verify(path: &Path, expect: &str, size: usize) -> Result<Value> {
     Ok(outcome("applied", &published, size))
 }
 
+/// Read one bounded newline-delimited JSON request line from `reader` without
+/// waiting for EOF (so open `process/write` pipes complete as soon as `\n`
+/// arrives).
+fn read_request_line(reader: impl std::io::Read, limit: usize) -> Result<Vec<u8>> {
+    let mut buffered = BufReader::new(reader.take((limit + 1) as u64));
+    let mut data = Vec::new();
+    buffered.read_until(b'\n', &mut data)?;
+    ensure!(data.len() <= limit, "request exceeds limit");
+    if data.last() == Some(&b'\n') {
+        data.pop();
+    }
+    if data.last() == Some(&b'\r') {
+        data.pop();
+    }
+    ensure!(!data.is_empty(), "empty request");
+    Ok(data)
+}
+
 fn apply_request(inline: Option<String>, payload: Option<PathBuf>) -> Result<ApplyRequest> {
     let raw = match (inline, payload) {
         (Some(inline), None) => base64::engine::general_purpose::STANDARD.decode(inline)?,
+        (None, Some(payload)) if payload == Path::new("-") => {
+            read_request_line(std::io::stdin().lock(), PAYLOAD_LIMIT)?
+        }
         (None, Some(payload)) => {
             // A private one-shot file the caller wrote; consumed here.
             let data = read(&payload, PAYLOAD_LIMIT);
@@ -987,5 +1009,19 @@ mod tests {
         let unknown =
             base64::engine::general_purpose::STANDARD.encode(br#"{"schema":1,"extra":1}"#);
         assert!(apply_request(Some(unknown), None).is_err());
+    }
+
+    #[test]
+    fn read_request_line_reads_one_bounded_json_line_without_eof() {
+        let json = br#"{"schema":1,"path":"/x","base":"absent","expect":"0000000000000000000000000000000000000000000000000000000000000000","splices":[],"staleTempSeconds":60}"#;
+        let mut with_tail = json.to_vec();
+        with_tail.extend_from_slice(b"\nignored-trailing-data");
+        let parsed: ApplyRequest =
+            serde_json::from_slice(&read_request_line(&with_tail[..], PAYLOAD_LIMIT).unwrap())
+                .unwrap();
+        assert_eq!(parsed.stale_temp_seconds, 60);
+        assert!(read_request_line(&b""[..], PAYLOAD_LIMIT).is_err());
+        assert!(read_request_line(&b"\n"[..], PAYLOAD_LIMIT).is_err());
+        assert!(read_request_line(&b"123456\n"[..], 4).is_err());
     }
 }

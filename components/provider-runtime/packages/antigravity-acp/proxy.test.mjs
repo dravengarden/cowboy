@@ -317,9 +317,9 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
   // and nothing else.
   const text = LOCAL_REJECTIONS[0].text;
   const clean = {
-    class: "unknown_refusal",
+    class: "ok",
     successes: 0,
-    barrier: true,
+    barrier: false,
     prompts: 1,
     dispatches: 0,
     transient: 0,
@@ -344,13 +344,10 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
   // without this prompt's receipt (truncated) or with another prompt, or
   // one that could not be read, is not proof.
   for (const backend of [
-    { ...clean, barrier: false },
     { ...clean, dispatches: 1 },
     { ...clean, successes: 1 },
     { ...clean, transient: 1 },
     { ...clean, refusals: [{ status: "PERMISSION_DENIED", code: 403, reasons: [] }] },
-    { ...clean, prompts: 0 },
-    { ...clean, prompts: 2 },
     { ...clean, dispatches: undefined },
   ]) {
     assert.equal(localRejection(error, backend, image), undefined);
@@ -396,7 +393,7 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
     await made.proxy.fromClient(request(9, "session/prompt", { sessionId: "s", ...image }));
     await setup?.(made.proxy);
     await made.proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: failure });
-    assert.equal(made.client.at(-1).error.message, `${REFUSAL_PREFIX}unknown_refusal`);
+    assert.equal(made.client.at(-1).error.message, "antigravity_turn_error");
   };
   // Another error, or the same one after a dispatch, stays unproven.
   await unproven(undefined, clean, { code: -32603, message: "boom" });
@@ -431,7 +428,7 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
   });
   release();
   await replied;
-  assert.equal(settling.client.at(-1).error.message, `${REFUSAL_PREFIX}unknown_refusal`);
+  assert.equal(settling.client.at(-1).error.message, "antigravity_turn_error");
 });
 
 test("cancel and an unknown facade outcome end the turn", async () => {
@@ -594,8 +591,7 @@ test("a violation survives an agent error reply and unsafe names are not echoed"
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "cancelled" } });
   assert.equal(client.at(-1).error.message, `${VIOLATION_PREFIX}unknown`);
-  // The vendor error is classified too: no refusal record proves success.
-  assert.equal(client.at(-1).error.data.cowboy.antigravity_backend.class, "unknown_refusal");
+  assert.equal(client.at(-1).error.data.cowboy.antigravity_backend.class, "ok");
   // Outside a turn there is nothing to end.
   await proxy.fromAgent(
     toolUpdate({
@@ -656,11 +652,11 @@ test("an unknown effect is reported when the turn ends with an error", async () 
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: { code: -32603, message: "stopped" } });
   const error = client.at(-1);
   assert.equal(error.id, 9);
-  assert.equal(error.error.message, "antigravity_backend_refusal:unknown_refusal");
+  assert.equal(error.error.message, "antigravity_turn_error");
   assert.equal(error.error.data.cowboy.uncertain_effect, "process/start");
 });
 
-test("every vendor error ending is classified; an unclassified one is unknown_refusal", async () => {
+test("an ordinary vendor error fails only the turn without parking the account", async () => {
   const { proxy, client } = harness();
   await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", prompt: [] }));
   await proxy.fromAgent({
@@ -669,8 +665,8 @@ test("every vendor error ending is classified; an unclassified one is unknown_re
     error: { code: -32603, message: "Internal error: antigravity_backend_refusal:ok" },
   });
   const error = client.at(-1).error;
-  assert.equal(error.message, "antigravity_backend_refusal:unknown_refusal");
-  assert.equal(error.data.cowboy.antigravity_backend.class, "unknown_refusal");
+  assert.equal(error.message, "antigravity_turn_error");
+  assert.equal(error.data.cowboy.antigravity_backend.class, "ok");
 });
 
 const TIER = {

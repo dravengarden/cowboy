@@ -95,7 +95,6 @@ export function isRefusedInput(detail: string | null): boolean {
     cowboy.policy_violation === undefined &&
     cowboy.uncertain_effect === undefined &&
     plainObject(backend) && backend.class === "not_dispatched" &&
-    backend.barrier === true && backend.prompts === 1 &&
     backend.dispatches === 0 && backend.successes === 0 &&
     backend.transient === 0 && Array.isArray(backend.refusals) &&
     backend.refusals.length === 0;

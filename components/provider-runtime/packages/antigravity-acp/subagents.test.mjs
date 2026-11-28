@@ -1250,12 +1250,16 @@ test("a model choice list too large to forward is sent empty, as a complete sele
 test("an abandoned child's late configuration update never reaches the worker", async () => {
   const made = await parent();
   const { proxy, client, control } = made;
-  // The child opens, then cannot start: agy's log is unavailable. Its close is
-  // still unanswered when the late update arrives.
-  control.mark = undefined;
+  // The child opens, then cannot start because replaying the parent's model
+  // setting is refused. Its close is still unanswered when the late update arrives.
+  await proxy.fromClient(
+    request(2, "session/set_config_option", { sessionId: "s", configId: "model", value: "m-2" }),
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: {} });
+  control.fail.set("session/set_config_option", "bad model");
   control.ignore.add("session/close");
   control.newResult = () => configOptions("m-new");
-  await assert.rejects(startChild(made), /log is unavailable/);
+  await assert.rejects(startChild(made), /refused the session's model settings/);
   await flush();
   client.length = 0;
   // A late update for that session would be read as the parent's configuration.
@@ -1346,14 +1350,15 @@ test("a refused model setting fails the start and leaves nothing behind", async 
   assert.equal(proxy.subagents.live("s").length, 0);
 });
 
-test("without a log cursor no subagent starts", async () => {
+test("a missing log cursor does not block starting a subagent", async () => {
   const made = await parent();
   const { proxy, agent, control } = made;
   control.mark = undefined;
-  await assert.rejects(startChild(made), /log is unavailable/);
-  assert.equal(sent(agent, "session/prompt").length, 0);
-  assert.equal(sent(agent, "session/close").length, 1);
-  assert.equal(proxy.subagents.live("s").length, 0);
+  const id = await startChild(made);
+  assert.equal(sent(agent, "session/prompt").length, 1);
+  assert.equal(proxy.subagents.live("s").length, 1);
+  await endPrompt(made, id);
+  assert.equal((await proxy.subagents.wait("s", id, 0)).state, "completed");
 });
 
 test("a settled child's channel and facade session are revoked", async () => {
@@ -1461,7 +1466,7 @@ test("a silent child ends the unit at the native deadline; an answered one is no
   assert.equal((await answered.proxy.subagents.wait("s", id, 0)).state, "cancelled");
 });
 
-test("an errored child prompt with clean evidence is an unproven outcome for the parent too", async () => {
+test("an ordinary errored child prompt fails only the child, leaving the parent turn healthy", async () => {
   const made = await parent();
   const { proxy, agent } = made;
   const id = await startChild(made);
@@ -1472,9 +1477,11 @@ test("an errored child prompt with clean evidence is an unproven outcome for the
     error: { code: -32603, message: "vendor error" },
   });
   await flush();
-  assert.equal((await proxy.subagents.wait("s", id, 0)).state, "failed");
+  const result = await proxy.subagents.wait("s", id, 0);
+  assert.equal(result.state, "failed");
+  assert.match(result.error, /vendor error/);
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } });
-  assert.match(made.client.at(-1).error.message, /antigravity_backend_refusal:unknown_refusal/);
+  assert.equal(made.client.at(-1).result?.stopReason, "end_turn");
 });
 
 test("a forced exit answers a parent reply that was already being settled, once, after its rows", async () => {
@@ -1727,7 +1734,7 @@ test("an agy the proxy ended answers the open prompt with what it knows", async 
   assert.equal(error.id, 9);
   assert.equal(error.error.message, `${VIOLATION_PREFIX}run_command`);
   assert.equal(error.error.data.cowboy.policy_violation, "run_command");
-  assert.equal(error.error.data.cowboy.antigravity_backend.class, "unknown_refusal");
+  assert.equal(error.error.data.cowboy.antigravity_backend.class, "ok");
   // Said once.
   client.length = 0;
   proxy.settleExit();

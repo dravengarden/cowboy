@@ -565,9 +565,8 @@ pub fn is_prompt_rejection(ending: &str) -> bool {
 
 /// Whether a prompt rejection is the proxy's complete, consistent result: a
 /// known code, the same code in `cowboy`, no violation or possible effect,
-/// and not-dispatched evidence that itself proves it (its barrier, exactly
-/// one prompt receipt, and zero dispatches, successes, transient retries and
-/// refusals). Anything missing or contradictory stays unclassified.
+/// and not-dispatched evidence with zero dispatches, successes, transient
+/// retries and refusals.
 fn prompt_rejection(code: &str, cowboy: &serde_json::Map<String, serde_json::Value>) -> bool {
     let Some(backend) = cowboy
         .get("antigravity_backend")
@@ -581,8 +580,6 @@ fn prompt_rejection(code: &str, cowboy: &serde_json::Map<String, serde_json::Val
         && cowboy.get("uncertain_effect").is_none()
         && cowboy.get("prompt_rejected").and_then(|v| v.as_str()) == Some(code)
         && backend.get("class").and_then(|v| v.as_str()) == Some(NOT_DISPATCHED)
-        && backend.get("barrier").and_then(serde_json::Value::as_bool) == Some(true)
-        && count("prompts") == Some(1)
         && count("dispatches") == Some(0)
         && count("successes") == Some(0)
         && count("transient") == Some(0)
@@ -595,16 +592,23 @@ fn prompt_rejection(code: &str, cowboy: &serde_json::Map<String, serde_json::Val
 /// The account transition a signal causes: the state to enter (never lower
 /// than the current one; the store compares), its reason, and whether the
 /// account's units stop. `None` changes nothing.
+///
+/// Only proven backend refusals (`verification_required`,
+/// `location_unsupported`, `rate_limited`, `suspended`) and executed built-in
+/// policy violations change account state. Unclassified runtime errors,
+/// crashes, and missing evidence fail only the affected turn without parking
+/// every session on the account.
 #[must_use]
 pub fn signal_transition(signal: &Signal) -> Option<Transition> {
     let (state, reason) = match signal {
-        Signal::None => return None,
+        Signal::None
+        | Signal::Unclassified
+        | Signal::Refused(AccountState::Ok | AccountState::UnknownRefusal) => return None,
         Signal::Refused(state) => (*state, state.as_str().to_owned()),
         Signal::PolicyViolation(tool) => (
             AccountState::NeedsAttention,
             format!("policy_violation:{tool}"),
         ),
-        Signal::Unclassified => (AccountState::UnknownRefusal, "unknown_refusal".to_owned()),
     };
     Some(Transition {
         state,
