@@ -26,6 +26,20 @@ async function verifyAppleProject(read: (path: string) => Promise<string>): Prom
 }
 
 // Read-only: never repair, unlink or copy a borrowed native project.
+function verifyCustomUrlSchemes(iosInfo: string, macInfo: string): void {
+  const schemeRe =
+    /<key>CFBundleURLTypes<\/key>[\s\S]*?<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>top\.thundersparrow\.cowboy<\/string>\s*<\/array>/;
+  for (const [label, plist] of [
+    ["iOS", iosInfo],
+    ["macOS", macInfo],
+  ] as const) {
+    requireValue(
+      schemeRe.test(plist),
+      `${label} Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy`,
+    );
+  }
+}
+
 export async function verifyNativeShell(repository: string): Promise<void> {
   const root = await realpath(repository);
   const native = resolve(root, "apps/native-shell");
@@ -84,18 +98,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "iOS scene lifecycle requires Tao 0.37.1 or newer",
   );
   const iosInfo = await read("tauri/Info.ios.plist");
-  const macInfo = await read("tauri/Info.plist");
-  for (const [label, plist] of [
-    ["iOS", iosInfo],
-    ["macOS", macInfo],
-  ] as const) {
-    requireValue(
-      /<key>CFBundleURLTypes<\/key>[\s\S]*?<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>top\.thundersparrow\.cowboy<\/string>\s*<\/array>/.test(
-        plist,
-      ),
-      `${label} Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy`,
-    );
-  }
+  verifyCustomUrlSchemes(iosInfo, await read("tauri/Info.plist"));
   const conformanceInfo = await read("apple/Conformance/Info.plist");
   const conformanceMain = await read("apple/Conformance/main.mm");
   requireValue(
