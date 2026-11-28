@@ -411,6 +411,11 @@ struct Broker {
     /// a bad Cowboy worker rollout.
     startup_failures: Mutex<HashMap<String, String>>,
     launching: Mutex<HashSet<String>>,
+    /// Sessions whose replacement worker process has actually been spawned
+    /// (past `prepare_transient_unit` and past waiting for any returning
+    /// draining worker). Before this bit is set, a returning crashed-drain
+    /// worker may still attach to finish replaying its final outbox (R20-H2).
+    spawned_launches: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
     permanently_deleted_sessions: Mutex<HashSet<String>>,
@@ -496,6 +501,7 @@ impl Broker {
             session_states: Mutex::new(HashMap::new()),
             startup_failures: Mutex::new(HashMap::new()),
             launching: Mutex::new(HashSet::new()),
+            spawned_launches: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
             permanently_deleted_sessions: Mutex::new(HashSet::new()),
@@ -1268,7 +1274,7 @@ impl Broker {
                 .get_or_insert_with(|| generation.clone());
         }
         let mut workers = self.workers.lock();
-        if resumed_drain.is_some() && self.launching.lock().contains(&session_id) {
+        if resumed_drain.is_some() && self.spawned_launches.lock().contains(&session_id) {
             anyhow::bail!("session {session_id} launch is already in progress");
         }
         if let Some(existing) = workers.get(&session_id)
@@ -2442,6 +2448,7 @@ impl Broker {
         self.session_states
             .lock()
             .insert(session_id.clone(), WorkerState::Exited);
+        self.invalidate_recently_drained(&session_id);
         if let Some(mut snapshot) = snapshot {
             snapshot.state = WorkerState::Exited;
             snapshot.current_turn_id = None;
@@ -2508,6 +2515,7 @@ impl Broker {
         self.session_states
             .lock()
             .insert(id.clone(), WorkerState::Exited);
+        self.invalidate_recently_drained(id);
         self.account_quiesced_sessions.lock().remove(id);
         self.cancelled_sessions.lock().remove(id);
         Ok(())
@@ -2731,7 +2739,7 @@ impl Broker {
             .lock()
             .insert(session.session_id.clone(), WorkerState::Starting);
         let _admission = self.admit_launch(&session.session_id).await?;
-        let mut worker_exit = self.spawn_worker(session).await?;
+        let (mut worker_exit, _spawned_launch_guard) = self.spawn_worker(session).await?;
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         loop {
             if self.cancelled_sessions.lock().contains(&session.session_id) {
@@ -3251,7 +3259,8 @@ impl Broker {
         {
             return;
         }
-        let Some(old_generation) = self.replacing.lock().remove(&session_id) else {
+        let old_generation = self.replacing.lock().remove(&session_id);
+        let Some(old_generation) = old_generation else {
             let mut snapshot = peer.snapshot;
             snapshot.state = WorkerState::Crashed;
             snapshot.current_turn_id = None;
@@ -3353,7 +3362,12 @@ impl Broker {
     async fn spawn_worker(
         &self,
         session: &StartSession,
-    ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
+    ) -> Result<(
+        oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>,
+        crashed_drain::SpawnedLaunchGuard<'_>,
+    )> {
+        self.wait_for_returning_crashed_drain(&session.session_id)
+            .await?;
         let provider = self.resolve_launch_provider(session).await?;
         let session_environment = self.prepare_launch_environment(session, &provider).await?;
         let worker_command = self.launch_worker_command(session).await?;
@@ -3533,6 +3547,9 @@ impl Broker {
         // await point. Pre-verify any carried release off Tokio before taking locks.
         let carry_proof =
             account_worker::prepare_carry_async(&self.args.provider_store, session).await?;
+        let spawned_guard = self
+            .acquire_spawned_launch_slot(&session.session_id)
+            .await?;
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
@@ -3668,7 +3685,7 @@ impl Broker {
             }
             let _ = exit_tx.send(result);
         });
-        Ok(exit_rx)
+        Ok((exit_rx, spawned_guard))
     }
 }
 
@@ -9814,7 +9831,7 @@ mod tests {
             native_fork: None,
         };
 
-        let replacement_exit = broker
+        let (replacement_exit, _spawned_launch_guard) = broker
             .spawn_worker(&session)
             .await
             .expect("spawn replacement after previous owner exits");

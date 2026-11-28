@@ -457,6 +457,38 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin + Send>(
         write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
         return Ok(SendOutcome::Sent);
     }
+    if let CoreCommand::DrainCrashedWorker {
+        ref session_id,
+        ref worker_epoch,
+        ..
+    } = command
+    {
+        // Stop-only admission: validate the session, Machine ownership, and
+        // exact worker epoch independently of whether a named account can
+        // currently launch (expired/revoked credentials must still allow
+        // retiring an already-attached crashed worker, R20-M2).
+        let Some(meta) = shared.hub.session_info(session_id).map(|info| info.meta) else {
+            return Ok(SendOutcome::Denied);
+        };
+        if shared
+            .machine_id
+            .as_deref()
+            .is_some_and(|machine| meta.machine_id != machine)
+            || shared
+                .native_store
+                .lock()
+                .as_ref()
+                .is_some_and(|(machine, _)| meta.machine_id != *machine)
+            || !super::snapshot::drain_crashed_epoch_admitted(shared, session_id, worker_epoch)
+        {
+            return Ok(SendOutcome::Denied);
+        }
+        if !reserve_for_write(shared, expected, &command) {
+            return Ok(SendOutcome::Skipped);
+        }
+        write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
+        return Ok(SendOutcome::Sent);
+    }
     let meta = command
         .session_id()
         .and_then(|id| shared.hub.session_info(id))
@@ -854,5 +886,67 @@ mod tests {
                 "a stale plan is deferred, not reported"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn drain_crashed_worker_uses_stop_only_admission_when_portable_account_lacks_ready_key() {
+        use crate::store::provider_accounts::{Change, Mutation, MutationResult};
+        let root = tempfile::tempdir().unwrap();
+        let store = fixture_store(root.path()).await;
+        let MutationResult::Applied(created) = store
+            .mutate_provider_accounts(
+                OWNER,
+                "create-expired",
+                &Mutation {
+                    expected_revision: 0,
+                    change: Change::Create {
+                        provider_id: "codex-deepseek".into(),
+                        label: "DeepSeek".into(),
+                    },
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("create portable account");
+        };
+        let account = created.account_id;
+        // Deliberately do NOT store a Ready credential key for this portable account.
+        let session = meta("codex-deepseek", &account, 1);
+        let hub = crate::core::Hub::new();
+        hub.project_persisted_session(session.clone());
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![]);
+        *runtime.shared.native_store.lock() = Some(("hawk".into(), store.clone()));
+
+        assert!(
+            !portable_admitted(&runtime.shared, &store, OWNER, &session).await,
+            "sanity: launch admission must be denied without a Ready key"
+        );
+
+        let cmd = CoreCommand::DrainCrashedWorker {
+            session_id: session.id.clone(),
+            command_id: "drain-expired-1".into(),
+            worker_epoch: "ep-expired-1".into(),
+            acknowledged_uncertain_sequence: 0,
+        };
+        let mut wire = Vec::new();
+        let outcome = send(&runtime.shared, &mut wire, None, cmd.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            SendOutcome::Sent,
+            "DrainCrashedWorker must pass stop-only admission even when portable account credentials expired (R20-M2)"
+        );
+        assert!(!wire.is_empty());
+
+        // Wrong Machine must still be denied.
+        *runtime.shared.native_store.lock() = Some(("falcon".into(), store));
+        let mut denied_wire = Vec::new();
+        let denied = send(&runtime.shared, &mut denied_wire, None, cmd)
+            .await
+            .unwrap();
+        assert_eq!(denied, SendOutcome::Denied);
+        assert!(denied_wire.is_empty());
     }
 }

@@ -36,6 +36,9 @@ fn admit_epoch(shared: &Shared, session_id: &str, epoch: &str, native: Option<&s
             workers.remove(session_id);
         }
     }
+    if class != crate::core::RuntimeEpoch::Current {
+        clear_draining_crashed_epoch_if_matches(shared, session_id, epoch);
+    }
     class == crate::core::RuntimeEpoch::Current
 }
 
@@ -221,6 +224,8 @@ pub(super) struct SightingActivity {
     pending_prompt_count: u64,
     native_cycle_active: bool,
     uncertain_effect: Option<crate::runtime_wire::UncertainEffect>,
+    agent_session_id: Option<String>,
+    launch: Option<crate::runtime_wire::StartSession>,
 }
 
 impl SightingActivity {
@@ -237,6 +242,8 @@ impl SightingActivity {
             pending_prompt_count: worker.pending_prompt_count,
             native_cycle_active: worker.native_cycle_active || worker.native_cycle_id.is_some(),
             uncertain_effect: worker.uncertain_effect.clone(),
+            agent_session_id: worker.agent_session_id.clone(),
+            launch: worker.launch.clone(),
         }
     }
 
@@ -442,13 +449,14 @@ fn authorize_draining_crashed_epoch_locked(
         return false;
     }
     let _proj = shared.hub.runtime_projection_guard();
-    if shared.hub.classify_runtime_epoch(
+    if !admit_epoch(
+        shared,
         &worker.session_id,
         &worker.worker_epoch,
         worker.agent_session_id.as_deref(),
-    ) != crate::core::RuntimeEpoch::Current
-        || !shared.hub.matches_runtime_snapshot_binding(worker)
+    ) || !shared.hub.matches_runtime_snapshot_binding(worker)
     {
+        clear_draining_crashed_epoch_if_matches(shared, &worker.session_id, &worker.worker_epoch);
         return false;
     }
     {
@@ -814,6 +822,131 @@ pub(super) fn handle_crashed_worker_drained_frame(
 /// confirms cooperative exit + sandbox teardown. A draining worker never emits
 /// `CrashedDrainCompleted` while holding an unacknowledged `uncertain_effect`,
 /// so retirement needs no store persistence or async retry.
+/// Stop-only epoch check for `CoreCommand::DrainCrashedWorker` in
+/// `native_admission::send`: validates the exact epoch is not retired or
+/// superseded by a replacement worker, independent of launch credentials (R20-M2).
+pub(super) fn drain_crashed_epoch_admitted(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+) -> bool {
+    if is_retired_crashed_epoch(shared, session_id, worker_epoch)
+        || shared.resetting.lock().contains(session_id)
+    {
+        return false;
+    }
+    if shared
+        .workers
+        .lock()
+        .get(session_id)
+        .is_some_and(|worker| worker.has_connected_owner() && worker.worker_epoch != worker_epoch)
+    {
+        return false;
+    }
+    if shared
+        .crashed_worker_sightings
+        .lock()
+        .get(session_id)
+        .is_some_and(|entry| entry.worker_epoch != worker_epoch)
+    {
+        return false;
+    }
+    true
+}
+
+fn has_pending_replacement_command(shared: &Shared, session_id: &str) -> bool {
+    shared.pending.lock().values().any(|command| match command {
+        super::CoreCommand::EnsureSession { session } => session.session_id == session_id,
+        super::CoreCommand::RecoverExecutionSession { session, .. }
+        | super::CoreCommand::ReadmitAccountSession { session, .. } => {
+            session.session_id == session_id
+        }
+        super::CoreCommand::StopSession {
+            session_id: owner,
+            command_id,
+        } => owner == session_id && command_id.starts_with("reset-"),
+        _ => false,
+    })
+}
+
+fn retired_owner_matches_meta(
+    shared: &Shared,
+    meta: &crate::model::SessionMeta,
+    cached_worker: Option<&WorkerSnapshot>,
+    matched_sighting: Option<&SightingActivity>,
+    matched_draining: Option<&DrainingCrashedEpoch>,
+) -> bool {
+    if let Some(worker) = cached_worker {
+        return shared.hub.matches_runtime_snapshot_binding(worker);
+    }
+    if let Some(launch) = matched_sighting.and_then(|sighting| sighting.launch.as_ref()) {
+        if launch.provider != meta.provider
+            || launch.provider_account_id != meta.provider_account_id
+            || launch.provider_auth_generation != meta.provider_auth_generation
+        {
+            return false;
+        }
+        if let Some(expected) = meta.execution_binding.as_ref()
+            && launch.execution_binding.as_ref() != Some(expected)
+        {
+            return false;
+        }
+        return true;
+    }
+    if let Some(expected) = meta.execution_binding.as_ref() {
+        return matched_draining.and_then(|entry| entry.execution_binding.as_ref())
+            == Some(expected);
+    }
+    true
+}
+
+fn maybe_mark_retired_unprojected_crash(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    cached_worker: Option<&WorkerSnapshot>,
+    matched_sighting: Option<&SightingActivity>,
+    matched_draining: Option<&DrainingCrashedEpoch>,
+) {
+    if shared.resetting.lock().contains(session_id)
+        || shared.optimistic_revivals.lock().contains(session_id)
+        || has_pending_replacement_command(shared, session_id)
+    {
+        return;
+    }
+    let owner_native_id = cached_worker
+        .and_then(|worker| worker.agent_session_id.as_deref())
+        .or_else(|| matched_sighting.and_then(|sighting| sighting.agent_session_id.as_deref()));
+    let cached_was_starting =
+        cached_worker.is_some_and(|worker| worker.state == WorkerState::Starting);
+    let _proj = shared.hub.runtime_projection_guard();
+    if shared.hub.accepts_runtime_projection(session_id)
+        && admit_epoch(shared, session_id, worker_epoch, owner_native_id)
+        && shared.hub.session_info(session_id).is_some_and(|info| {
+            shared
+                .machine_id
+                .as_deref()
+                .is_none_or(|machine| info.meta.machine_id == machine)
+                && retired_owner_matches_meta(
+                    shared,
+                    &info.meta,
+                    cached_worker,
+                    matched_sighting,
+                    matched_draining,
+                )
+                && (matches!(info.meta.status, Status::Busy | Status::Running)
+                    || (cached_was_starting && info.meta.status == Status::Starting)
+                    || shared.hub.session_has_in_flight_prompt(session_id))
+        })
+    {
+        shared.hub.set_status(
+            session_id,
+            Status::Crashed,
+            Some("crashed worker exited during drain".to_owned()),
+        );
+    }
+}
+
 pub(super) fn retire_crashed_worker_drained(shared: &Shared, session_id: &str, worker_epoch: &str) {
     let fence = shared.projection_fence.lock();
     if *fence {
@@ -821,54 +954,59 @@ pub(super) fn retire_crashed_worker_drained(shared: &Shared, session_id: &str, w
     }
     let already_retired = is_retired_crashed_epoch(shared, session_id, worker_epoch);
     record_retired_crashed_epoch(shared, session_id, worker_epoch);
-    clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
-    {
-        let mut sightings = shared.crashed_worker_sightings.lock();
-        if sightings
-            .get(session_id)
-            .is_some_and(|entry| entry.worker_epoch == worker_epoch)
-        {
-            sightings.remove(session_id);
+    let (matched_draining, draining_replaced) = {
+        let mut draining = shared.draining_crashed_epochs.lock();
+        match draining.get(session_id) {
+            Some(entry) if entry.worker_epoch == worker_epoch => {
+                (draining.remove(session_id), false)
+            }
+            Some(_) => (None, true),
+            None => (None, false),
         }
-    }
-    let has_replacement_owner = {
+    };
+    let (matched_sighting, sighting_replaced) = {
+        let mut sightings = shared.crashed_worker_sightings.lock();
+        match sightings.get(session_id) {
+            Some(entry) if entry.worker_epoch == worker_epoch => {
+                (sightings.remove(session_id), false)
+            }
+            Some(_) => (None, true),
+            None => (None, false),
+        }
+    };
+    let (cached_worker, worker_replaced) = {
         let mut workers = shared.workers.lock();
         let replaced = workers.get(session_id).is_some_and(|worker| {
             worker.has_connected_owner() && worker.worker_epoch != worker_epoch
         });
-        if workers
+        let removed = if workers
             .get(session_id)
             .is_some_and(|worker| worker.worker_epoch == worker_epoch)
         {
-            workers.remove(session_id);
-        }
-        replaced
+            workers.remove(session_id)
+        } else {
+            None
+        };
+        (removed, replaced)
     };
+    let had_matching_owner =
+        cached_worker.is_some() || matched_sighting.is_some() || matched_draining.is_some();
+    let has_replacement_owner = worker_replaced || sighting_replaced || draining_replaced;
     // Retiring an unprojected crash (e.g. a named worker whose crash snapshot
-    // failed account admission while Hub was still Busy) must clear the stuck
-    // live status and in-flight guard while preserving held prompts, skipped
-    // whenever a replacement owns the session, a reset is active, or Clear
-    // already fenced this epoch (R17-M4).
-    if !already_retired && !has_replacement_owner && !shared.resetting.lock().contains(session_id) {
-        let _proj = shared.hub.runtime_projection_guard();
-        if shared.hub.accepts_runtime_projection(session_id)
-            && shared
-                .hub
-                .classify_runtime_epoch(session_id, worker_epoch, None)
-                == crate::core::RuntimeEpoch::Current
-            && shared.hub.session_info(session_id).is_some_and(|info| {
-                matches!(
-                    info.meta.status,
-                    Status::Busy | Status::Starting | Status::Running
-                ) || shared.hub.session_has_in_flight_prompt(session_id)
-            })
-        {
-            shared.hub.set_status(
-                session_id,
-                Status::Crashed,
-                Some("crashed worker exited during drain".to_owned()),
-            );
-        }
+    // failed account admission while Hub was still Busy) may clear the stuck
+    // live status ONLY when this exact epoch is still the tracked owner,
+    // matches the session's current Machine and binding, has no successor
+    // sighting or replacement launch in flight, and has not been fenced by
+    // Clear (R17-M4, R20-M1).
+    if !already_retired && had_matching_owner && !has_replacement_owner {
+        maybe_mark_retired_unprojected_crash(
+            shared,
+            session_id,
+            worker_epoch,
+            cached_worker.as_ref(),
+            matched_sighting.as_ref(),
+            matched_draining.as_ref(),
+        );
     }
     let mut pending = shared.pending.lock();
     let sent = shared.sent.lock();
@@ -1502,6 +1640,7 @@ mod crashed_drain_tests {
         rt.connect_for_test();
 
         hub.set_status("s-retire", Status::Busy, None);
+        observe_crashed_sighting(&rt.shared, &crashed_snapshot("s-retire", "200-1"));
         retire_crashed_worker_drained(&rt.shared, "s-retire", "200-1");
         assert_eq!(
             hub.session_info("s-retire").unwrap().meta.status,
@@ -1549,5 +1688,105 @@ mod crashed_drain_tests {
         observe_crashed_sighting(&rt.shared, &ownerless);
         assert!(!is_draining_crashed_epoch(&rt.shared, "s-retire", "200-3"));
         let _ = Frame::Heartbeat;
+    }
+
+    #[tokio::test]
+    async fn clear_reclassification_on_draining_worker_evicts_cache_and_revokes_cleanup_grant() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "s-h3".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_setting(
+            format!(
+                "{}s-h3",
+                crate::core::settings_keys::SESSION_CLEARED_NATIVE_PREFIX
+            ),
+            serde_json::json!(["native-cleared"]),
+        );
+
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        rt.connect_for_test();
+
+        // First sighting has no native ID yet, so it enters workers and draining_crashed_epochs.
+        let mut unidentified = crashed_snapshot("s-h3", "ep-h3");
+        unidentified.agent_session_id = None;
+        unidentified.crashed_drain_active = true;
+        observe_frame_snapshot(&rt.shared, &unidentified);
+        assert!(project_snapshot(&rt.shared, &unidentified));
+        assert!(rt.shared.workers.lock().contains_key("s-h3"));
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-h3", "ep-h3"));
+
+        // Later snapshot reveals the discarded native ID from before Clear.
+        let mut identified = unidentified.clone();
+        identified.agent_session_id = Some("native-cleared".into());
+        observe_frame_snapshot(&rt.shared, &identified);
+        assert!(
+            !rt.shared.workers.lock().contains_key("s-h3"),
+            "Clear reclassification via observe_frame_snapshot must evict cached worker (R20-H3)"
+        );
+        assert!(
+            !is_draining_crashed_epoch(&rt.shared, "s-h3", "ep-h3"),
+            "Clear reclassification must revoke draining cleanup authority (R20-H3)"
+        );
+        assert!(!project_snapshot(&rt.shared, &identified));
+    }
+
+    #[tokio::test]
+    async fn delayed_retirement_never_overwrites_unprojected_successor_or_starting_replacement() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "s-m1".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        rt.connect_for_test();
+
+        // (a) Unprojected successor in crashed_worker_sightings blocks delayed old receipt.
+        let mut succ = crashed_snapshot("s-m1", "ep-succ");
+        succ.state = WorkerState::Busy;
+        succ.current_turn_id = Some("turn-succ".into());
+        observe_crashed_sighting(&rt.shared, &succ);
+        hub.set_status("s-m1", Status::Busy, None);
+        retire_crashed_worker_drained(&rt.shared, "s-m1", "ep-old-1");
+        assert_eq!(
+            hub.session_info("s-m1").unwrap().meta.status,
+            Status::Busy,
+            "unprojected successor sighting must prevent old receipt from setting Crashed (R20-M1)"
+        );
+
+        // (b) Delayed receipt for an untracked epoch during Starting replacement is ignored.
+        rt.shared.crashed_worker_sightings.lock().clear();
+        hub.set_status("s-m1", Status::Starting, None);
+        retire_crashed_worker_drained(&rt.shared, "s-m1", "ep-old-2");
+        assert_eq!(
+            hub.session_info("s-m1").unwrap().meta.status,
+            Status::Starting,
+            "untracked delayed receipt must never overwrite a Starting replacement (R20-M1)"
+        );
+
+        // (c) Pending EnsureSession blocks even a tracked epoch's receipt from overwriting Hub.
+        observe_crashed_sighting(&rt.shared, &crashed_snapshot("s-m1", "ep-old-3"));
+        rt.shared.pending.lock().insert(
+            "ensure:s-m1".into(),
+            super::super::CoreCommand::EnsureSession {
+                session: crashed_snapshot("s-m1", "ep-old-3").launch.unwrap(),
+            },
+        );
+        hub.set_status("s-m1", Status::Busy, None);
+        retire_crashed_worker_drained(&rt.shared, "s-m1", "ep-old-3");
+        assert_eq!(
+            hub.session_info("s-m1").unwrap().meta.status,
+            Status::Busy,
+            "pending replacement launch must prevent delayed receipt from overwriting Hub (R20-M1)"
+        );
     }
 }

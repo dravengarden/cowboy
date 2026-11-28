@@ -2917,16 +2917,15 @@ pub fn run_agent_with_sink(
     service_auth_projected: bool,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     sink: &Arc<dyn AgentSink>,
-) {
-    let rt = match tokio::runtime::Builder::new_current_thread()
+) -> bool {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
+        .map_err(|e| {
             sink.set_status(session_id, Status::Crashed, Some(format!("runtime: {e}")));
-            return;
-        }
+        })
+    else {
+        return false;
     };
     // The whole connection (transport, handlers, `cx.spawn`ed tasks, command
     // loop) runs cooperatively inside the single `connect_with` future, so a
@@ -2982,7 +2981,7 @@ pub fn run_agent_with_sink(
         }
         result
     });
-    match result {
+    match &result {
         Ok(()) => sink.set_status(session_id, Status::Exited, None),
         Err(e) => {
             let raw_error = e.to_string();
@@ -3026,6 +3025,7 @@ pub fn run_agent_with_sink(
             sink.set_status(session_id, Status::Crashed, Some(detail));
         }
     }
+    result.is_ok()
 }
 
 #[allow(clippy::too_many_lines)] // one cohesive spawn + connection + watchdog

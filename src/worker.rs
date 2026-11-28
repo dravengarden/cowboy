@@ -679,7 +679,7 @@ async fn run_with_shutdown(
             let sink: Arc<dyn AgentSink> = Arc::new(RemoteSink {
                 shared: Arc::clone(&thread_shared),
             });
-            acp::run_agent_with_sink(
+            let settled_cleanly = acp::run_agent_with_sink(
                 &spec,
                 &session_id,
                 cwd,
@@ -693,7 +693,7 @@ async fn run_with_shutdown(
             if let Some(execution) = thread_shared.execution.clone() {
                 runtime.block_on(execution_launch::settle(execution));
             }
-            let _ = done_tx.blocking_send(());
+            let _ = done_tx.blocking_send(settled_cleanly);
         })
         .context("spawning ACP worker thread")?;
 
@@ -719,7 +719,7 @@ async fn connection_loop(
     shared: Arc<Shared>,
     cmd_tx: mpsc::UnboundedSender<AgentCommand>,
     mut notify_rx: mpsc::UnboundedReceiver<()>,
-    done_rx: &mut mpsc::Receiver<()>,
+    done_rx: &mut mpsc::Receiver<bool>,
     mut sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<()> {
     let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
@@ -907,7 +907,7 @@ async fn connected(
     shared: Arc<Shared>,
     cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
     notify_rx: &mut mpsc::UnboundedReceiver<()>,
-    done_rx: &mut mpsc::Receiver<()>,
+    done_rx: &mut mpsc::Receiver<bool>,
     sigterm_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
     shutdown_deadline: &mut Option<tokio::time::Instant>,
 ) -> Result<ConnectedExit> {
@@ -1003,7 +1003,7 @@ async fn connected(
                 }
             }
             settled = done_rx.recv(), if shared.crashed_drain.agent_settled().is_none() => {
-                shared.crashed_drain.record_agent_settled(settled.is_some());
+                shared.crashed_drain.record_agent_settled(settled.unwrap_or(false));
                 if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
@@ -1812,7 +1812,7 @@ mod tests {
             state: WorkerState::Exited,
             detail: None,
         });
-        done_tx.send(()).await.unwrap();
+        done_tx.send(true).await.unwrap();
 
         let frame = read_non_heartbeat(&mut reader).await;
         let Some(Frame::CrashedDrainCompleted {
@@ -2029,7 +2029,7 @@ mod tests {
                 panic!("ack 1");
             };
             assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
-            done_tx.send(()).await.unwrap();
+            done_tx.send(true).await.unwrap();
             drop(done_tx);
             // Wait until connected() observes clean settlement before dropping socket.
             for _ in 0..50 {
@@ -2769,7 +2769,7 @@ mod tests {
                 state: WorkerState::Exited,
                 detail: None,
             });
-            done_tx.send(()).await.expect("signal ACP completion");
+            done_tx.send(true).await.expect("signal ACP completion");
         });
         tokio::time::timeout(
             Duration::from_secs(2),
@@ -3247,7 +3247,7 @@ mod tests {
         assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
 
         // ACP settles cleanly while publisher_guard is still held and outbox is empty.
-        done_tx.send(()).await.unwrap();
+        done_tx.send(true).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         // Dropping publisher_guard sends Some(()) on notify_rx with no further Ack.
         drop(publisher_guard);
@@ -3279,5 +3279,114 @@ mod tests {
             run_task.await.unwrap().unwrap(),
             ConnectedExit::WorkerDrained
         ));
+    }
+
+    #[tokio::test]
+    async fn acp_error_during_crashed_drain_exits_without_clean_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (shared, mut notify_rx) = shared();
+        let epoch = shared.worker_epoch.clone();
+        {
+            let mut snap = shared.snapshot.lock();
+            snap.state = WorkerState::Crashed;
+            snap.exit_detail = Some("initial crash".into());
+        }
+
+        let (cmd_tx_raw, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(cmd_tx_raw);
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
+        let shared_for_run = Arc::clone(&shared);
+        let run_task = tokio::spawn(async move {
+            let worker_stream = UnixStream::connect(&socket).await.unwrap();
+            let mut sigterm_rx = None;
+            let mut shutdown_deadline = None;
+            connected(
+                worker_stream,
+                shared_for_run,
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm_rx,
+                &mut shutdown_deadline,
+            )
+            .await
+        });
+
+        let (broker_stream, _) = listener.accept().await.unwrap();
+        let (mut reader, mut writer) = broker_stream.into_split();
+        assert!(matches!(
+            read_frame(&mut reader).await.unwrap(),
+            Some(Frame::Hello { .. })
+        ));
+        write_frame(
+            &mut writer,
+            &Frame::Welcome {
+                protocol: PROTOCOL_VERSION,
+                controller_epoch: 1,
+                workers: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_frame(&mut reader).await.unwrap(),
+            Some(Frame::Snapshot { .. })
+        ));
+
+        write_frame(
+            &mut writer,
+            &Frame::WorkerCommand {
+                session_id: shared.session_id.clone(),
+                command: WorkerCommand::DrainCrashed {
+                    command_id: "dc-acp-err".into(),
+                    worker_epoch: epoch.clone(),
+                    acknowledged_uncertain_sequence: 0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let ack = loop {
+            match read_frame(&mut reader).await.unwrap() {
+                Some(Frame::Heartbeat) => continue,
+                other => break other,
+            }
+        };
+        assert!(
+            matches!(
+                ack,
+                Some(Frame::CommandAck {
+                    accepted: true,
+                    ref command_id,
+                    ..
+                }) if command_id == "dc-acp-err"
+            ),
+            "expected accepted CommandAck, got {ack:?}"
+        );
+        assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+
+        // Simulate ACP returning an error (`settled_cleanly = false`).
+        done_tx.send(false).await.unwrap();
+
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(2), run_task)
+            .await
+            .expect("worker must exit after ACP error settlement")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(exit, ConnectedExit::WorkerDrained));
+
+        // Broker must NOT have received a clean `CrashedDrainCompleted` receipt.
+        loop {
+            match read_frame(&mut reader).await.unwrap() {
+                None => break,
+                Some(Frame::CrashedDrainCompleted { .. }) => {
+                    panic!("ACP error must never emit clean CrashedDrainCompleted receipt (R20-M3)")
+                }
+                Some(_) => continue,
+            }
+        }
     }
 }

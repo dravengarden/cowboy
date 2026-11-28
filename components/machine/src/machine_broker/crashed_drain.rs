@@ -7,6 +7,7 @@
 //! Lifecycle mutations serialize on the broker's `session_lifecycle_gate`.
 
 mod teardown;
+pub(super) use teardown::SpawnedLaunchGuard;
 
 use super::*;
 use crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION;
@@ -969,7 +970,7 @@ impl Broker {
             .lock()
             .contains(session_id)
             && !self.cancelled_sessions.lock().contains(session_id)
-            && !self.launching.lock().contains(session_id)
+            && !self.spawned_launches.lock().contains(session_id)
             && !self.resetting_sessions.lock().contains_key(session_id)
             && !self.workers.lock().contains_key(session_id)
             && self
@@ -2794,6 +2795,167 @@ mod tests {
                 .recently_drained
                 .contains_key("s-gone"),
             "successor registration must invalidate prior epoch's recently_drained receipt (R19-M2)"
+        );
+    }
+
+    #[tokio::test]
+    async fn returning_draining_worker_attaches_during_launch_reservation_and_gates_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
+        *broker.controller.lock() = Some(Controller {
+            lease: 1,
+            tx: ctrl_tx,
+            protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        });
+        broker.sessions.lock().insert(
+            "s-h2".into(),
+            serde_json::from_value(serde_json::json!({"session_id":"s-h2","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap(),
+        );
+        // Simulate Ensure reserving `launching` after a broker restart before
+        // `spawn_worker` has actually spawned the replacement process.
+        broker.launching.lock().insert("s-h2".into());
+
+        let (w_tx, _w_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker_inner(
+                WorkerRegistration {
+                    session_id: "s-h2".into(),
+                    epoch: "old-epoch-1".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 77,
+                    tx: w_tx,
+                },
+                true,
+                Some(("drain-cmd-1".into(), RetiredLaunch::VerifiedNone)),
+            )
+            .expect(
+                "returning draining worker must attach before replacement process spawns (R20-H2)",
+            );
+        assert!(
+            broker
+                .workers
+                .lock()
+                .get("s-h2")
+                .is_some_and(|w| w.epoch == "old-epoch-1" && w.crashed_drain_fenced),
+            "returning draining worker must restore its crashed drain fence"
+        );
+
+        // Replacement spawn must wait while the returning draining worker finishes replay.
+        let broker_for_spawn = Arc::clone(&broker);
+        let acquire_task = tokio::spawn(async move {
+            let guard = broker_for_spawn
+                .acquire_spawned_launch_slot("s-h2")
+                .await
+                .unwrap();
+            assert!(broker_for_spawn.spawned_launches.lock().contains("s-h2"));
+            drop(guard);
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !acquire_task.is_finished(),
+            "replacement spawn must wait for returning draining worker fence to settle"
+        );
+
+        // Finish draining worker and notify waiters -> replacement spawn proceeds.
+        broker.workers.lock().remove("s-h2");
+        broker.crashed_drains.inner.lock().active.remove("s-h2");
+        broker.crashed_drains.settled.notify_waiters();
+        tokio::time::timeout(Duration::from_secs(2), acquire_task)
+            .await
+            .expect("replacement spawn must unblock once returning drain settles")
+            .unwrap();
+
+        // Once `spawned_launches` IS set, a late resumed_drain reconnect is rejected.
+        broker.spawned_launches.lock().insert("s-h2".into());
+        let (late_tx, _late_rx) = mpsc::unbounded_channel();
+        let err = broker
+            .register_worker_inner(
+                WorkerRegistration {
+                    session_id: "s-h2".into(),
+                    epoch: "old-epoch-2".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 78,
+                    tx: late_tx,
+                },
+                true,
+                Some(("drain-cmd-2".into(), RetiredLaunch::VerifiedNone)),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("launch is already in progress"));
+    }
+
+    #[tokio::test]
+    async fn dormant_exited_state_is_not_suppressed_by_cached_drain_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        broker.record_recently_drained("s-m4", "ep-old", true);
+
+        let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel();
+        let ctrl = Controller {
+            lease: 1,
+            tx: ctrl_tx,
+            protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        };
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            "s-m4".into(),
+            serde_json::from_value(serde_json::json!({"session_id":"s-m4","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap(),
+        );
+        let mut session_states = HashMap::new();
+        session_states.insert("s-m4".into(), WorkerState::Exited);
+        let startup_failures = HashMap::new();
+        let generation_commands = HashMap::new();
+        let empty_workers = HashMap::new();
+
+        broker.enqueue_handover_reconciliation_locked(
+            &ctrl,
+            &sessions,
+            &session_states,
+            &startup_failures,
+            &generation_commands,
+            &empty_workers,
+            &[],
+        );
+
+        let mut saw_drained = false;
+        let mut saw_exited_snapshot = false;
+        while let Ok(frame) = ctrl_rx.try_recv() {
+            match frame {
+                Frame::CrashedWorkerDrained { ref session_id, .. } if session_id == "s-m4" => {
+                    saw_drained = true;
+                }
+                Frame::Snapshot { worker }
+                    if worker.session_id == "s-m4" && worker.state == WorkerState::Exited =>
+                {
+                    saw_exited_snapshot = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !saw_drained,
+            "cached drain receipt must not replay when dormant state moved to Exited (R20-M4)"
+        );
+        assert!(
+            saw_exited_snapshot,
+            "dormant Exited snapshot must not be suppressed by an older drain receipt (R20-M4)"
+        );
+
+        broker.invalidate_recently_drained("s-m4");
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .recently_drained
+                .contains_key("s-m4")
         );
     }
 }
