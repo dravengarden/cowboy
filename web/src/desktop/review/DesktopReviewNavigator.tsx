@@ -173,7 +173,7 @@ export function DesktopReviewNavigator({
       data-desktop-region={REVIEW_NAVIGATOR_REGION}
       data-review-navigator
       tabIndex={-1}
-      sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", outline: "none" }}
+      sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", overflow: "hidden", outline: "none" }}
     >
       <ReviewContextMenu context={context} openRequest={contextRequest} onChoose={onReviewContext} />
       <NavigatorTabs tab={tab} onTab={onTab} />

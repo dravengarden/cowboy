@@ -94,7 +94,9 @@ function InspectorRegion({ review, panel, language, findings }: {
       data-review-inspector-placement={panel.beside ? "beside" : "inset"}
       tabIndex={-1}
       sx={{
-        display: panel.shown ? "block" : "none",
+        display: panel.shown ? "flex" : "none",
+        flexDirection: "column",
+        overflow: "hidden",
         width: panel.beside ? INSPECTOR_WIDTH : `min(${String(INSPECTOR_WIDTH + 40)}px, 85%)`,
         flexShrink: 0,
         borderLeft: 1,
@@ -102,7 +104,7 @@ function InspectorRegion({ review, panel, language, findings }: {
         minHeight: 0,
         outline: "none",
         bgcolor: "background.paper",
-        ...(panel.beside ? {} : { position: "absolute", zIndex: 4, top: 0, bottom: 0, right: 0, boxShadow: 8 }),
+        ...(panel.beside ? {} : { position: "absolute", zIndex: 6, top: 0, bottom: 0, right: 0, boxShadow: 8 }),
       }}
     >
       <ReviewInspector review={review} onShow={panel.show} diagnostics={language.diagnostics} findings={findings} />
@@ -358,7 +360,7 @@ function ReviewDocumentRegion({
         if (streamMode) streamScrollerRef.current?.focus({ preventScroll: true });
         else review.editor.current?.focus();
       }}
-      sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", outline: "none" }}
+      sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", outline: "none" }}
     >
       {streamMode && review.target ? (
         <>
@@ -470,7 +472,7 @@ function ReviewNavigatorShell({
         </Box>
       )}
       {compact && overlay && (
-        <Paper elevation={8} data-review-navigator-overlay sx={{ position: "absolute", zIndex: 4, top: 0, bottom: 0, left: 0, width: `min(${String(NAVIGATOR_OVERLAY_WIDTH)}px, 85%)`, borderRadius: 0 }}>
+        <Paper elevation={8} data-review-navigator-overlay sx={{ position: "absolute", zIndex: 6, top: 0, bottom: 0, left: 0, width: `min(${String(NAVIGATOR_OVERLAY_WIDTH)}px, 85%)`, borderRadius: 0 }}>
           {navigator}
         </Paper>
       )}

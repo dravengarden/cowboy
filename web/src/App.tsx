@@ -127,7 +127,8 @@ import type { DesktopTabItem } from "./desktop/DesktopTabStrip";
 import { DesktopShortcut, desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
 
 import { ResourceLightbox } from "./ResourceLightbox";
-import { desktopFocusFill, type Mode as ThemeMode } from "./theme";
+import type { Mode as ThemeMode } from "./theme";
+import { desktopFocusRootSx } from "./desktop/desktopFocusPrimitives";
 
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -1042,13 +1043,27 @@ export function App({
                     gap: desktopSize(6),
                 }}
             >
+                <Box
+                    component="span"
+                    data-desktop-pane-dot
+                    aria-hidden
+                    sx={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        bgcolor: "primary.main",
+                        opacity: 0,
+                        transition: "opacity 140ms ease",
+                        flexShrink: 0,
+                    }}
+                />
                 <Typography
                     variant="overline"
+                    color="inherit"
                     noWrap
                     sx={{
                         flex: "1 1 auto",
                         minWidth: 0,
-                        color: "text.secondary",
                         fontSize: desktopSize(11),
                         fontWeight: 700,
                         letterSpacing: "0.09em",
@@ -1089,100 +1104,7 @@ export function App({
                     // surface color; a hairline keeps them two layers.
                     borderTop: 1,
                     borderColor: "divider",
-                    "& [data-desktop-region]": {
-                        position: "relative",
-                        outline: "none",
-                        transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
-                    },
-                    // Calm focus language aligned with SessionList's selected row:
-                    // subtle luminance elevation with no harsh 1px box outlines or 2px
-                    // colored stripes across pane headers.
-                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.calls']):not([data-desktop-region='prompt.plan']):not([data-desktop-region='prompt.queued']):not([data-desktop-region='prompt.draft']):not([data-desktop-region='prompt.composer']):not([data-desktop-region='topbar.controls']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
-                        bgcolor: (t) =>
-                            alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.032 : 0.018),
-                        boxShadow: "none",
-                    },
-                    // Bounded Prompt cards lift softly when focused without heavy borders.
-                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
-                        borderColor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.24 : 0.18),
-                        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.07 : 0.04),
-                        boxShadow: "none",
-                    },
-                    "& [data-desktop-region='prompt.calls'][data-desktop-focused='true'] > [data-desktop-calls-surface], & [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
-                        borderColor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.24 : 0.18),
-                        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.07 : 0.04),
-                    },
-                    "& [data-desktop-pane] > [data-desktop-pane-header]": {
-                        color: "text.secondary",
-                        bgcolor: (t) =>
-                            alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.14 : 0.022),
-                        boxShadow: "none",
-                        transition: "background-color 140ms ease, color 140ms ease",
-                    },
-                    "& [data-desktop-pane][data-desktop-pane-focused='true'] > [data-desktop-pane-header]": {
-                        color: "text.primary",
-                        bgcolor: "background.default",
-                        boxShadow: "none",
-                    },
-                    "& [data-desktop-pane][data-desktop-pane-focused='true'] > [data-desktop-pane-header] [data-desktop-pane-dot]": {
-                        opacity: 1,
-                    },
-                    // The full-height Composer expresses focus through its live
-                    // caret, the Prompt header and the Desktop status line.
-                    "& [data-desktop-region='prompt.composer']:focus-visible": {
-                        outline: "none",
-                        boxShadow: "none",
-                    },
-                    // Top Bar uses the same calm surface tint without coloring every
-                    // inherit control or drawing a heavy bottom accent bar.
-                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true']": {
-                        bgcolor: desktopFocusFill,
-                        boxShadow: "none",
-                    },
-                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true'] [data-desktop-item]:focus": {
-                        outline: "none",
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.34),
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
-                        boxShadow: "none",
-                    },
-                    "& [data-desktop-item]:focus-visible": {
-                        outline: "none",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
-                        boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.34)}`,
-                    },
-                    // Session selection and keyboard focus are distinct: the
-                    // filled row is the open session, while j/k moves a keyboard
-                    // cursor that l/Enter can open. MUI's :focus-visible flag is
-                    // not retained reliably across programmatic focus() on
-                    // macOS, so draw the cursor from real DOM :focus whenever
-                    // the Sessions region owns focus.
-                    "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
-                        outline: "none",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.04),
-                        // Inset: Sessions rows are flush with the rail, whose
-                        // scroller would clip an outer ring.
-                        boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.5)}`,
-                        "& .cowboy-session-grip": {
-                            color: "primary.main",
-                        },
-                        "& .cowboy-session-shortcut": {
-                            opacity: "1 !important",
-                        },
-                    },
-                    "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
-                        // The open session is focused after every click, so
-                        // a ring here would box it permanently. The cursor
-                        // resting on it deepens the fill instead.
-                        bgcolor: (t) => alpha(t.palette.primary.main, CURRENT_ROW_FILL + 0.06),
-                        boxShadow: "none",
-                    },
-                    "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
-                        boxShadow: (t) =>
-                            `inset 0 0 0 2px ${alpha(t.palette.primary.main, 0.48)}, 0 3px 14px ${alpha(t.palette.primary.main, 0.09)}`,
-                    },
+                    ...desktopFocusRootSx(CURRENT_ROW_FILL),
                 }),
             }}
         >

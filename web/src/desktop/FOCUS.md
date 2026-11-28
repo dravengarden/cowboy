@@ -26,11 +26,12 @@ conversation the Prompt writes into, so they sit in the Prompt's delivery row
 `Mod+Shift+L` run them only while the Prompt owns focus (its editor
 included; their keycaps light only then), `Mod+.` stops from anywhere, and Stop stays mounted, only
 disabled while no turn runs, so the row never moves. Focusing
-the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
-Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
-plus a primary underline, and only the focused control receives the keyboard
-cursor. Do not set `color: primary` on the Toolbar; `color="inherit"` children
-would then all look selected. Ctrl-J returns to the pane that still owns
+the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions,
+Prompt, and Conversation: pane-header chrome clears, the bar itself takes the
+shared focus fill plus the universal zero-layout-shift perimeter focus frame,
+and only the focused control receives the keyboard cursor. Do not set
+`color: primary` on the Toolbar; `color="inherit"` children would then all look
+selected. Ctrl-J returns to the last visible region of the pane that still owns
 `focusedPane`.
 
 ## Core interaction laws
@@ -1099,12 +1100,21 @@ preserved Insert/Visual mode, selection, and caret rather than forcing Normal.
 Prefix then `L` enters Plan. When no Plan exists the continuation remains
 reserved and disabled rather than acquiring a transient second meaning.
 
-The Composer is the exception: its caret and outlined editing canvas already
-communicate focus, so `prompt.composer` must not receive the generic region
-background, accent rail, or focus ring. When Conversation, Sessions, or the
-top bar is the highlighted workspace region, the hidden Prompt Vim sink must
-not consume typed keys or IME input; those keys belong to the highlighted
-chrome and must not pop Prompt into Insert.
+Every Desktop workspace region (`sessions.list`, `sessions.rail`,
+`topbar.controls`, `prompt.composer`, `prompt.plan`, `prompt.queued`,
+`prompt.draft`, `prompt.calls`, `conversation.transcript`,
+`conversation.questions`, `review.navigator`, `review.document`,
+`review.inspector`, `tasks.roster`, and `tasks.reader`) uses the single
+paint-only perimeter focus primitive from `desktopFocusPrimitives.ts` (`::after`
+`inset: 0; pointer-events: none` with a 1.5px primary-mixed edge and soft inner
+halo). Focus never alters layout geometry, never tints the main reading or
+writing canvases, and stays pinned to non-scrolling region hosts while inner
+content scrolls. Pane switching and header clicks always resolve to a visible
+region (preserving each pane's last visible sub-region across hops) so focus is
+never stranded on a hidden tab. When Conversation, Sessions, or the top bar is
+the highlighted workspace region, the hidden Prompt Vim sink must not consume
+typed keys or IME input; those keys belong to the highlighted chrome and must
+not pop Prompt into Insert.
 
 Workspace prefix then `W` cycles visible workspace regions. Prompt Plan, Queue, and Draft are
 auxiliary panels rather than Vim windows; enter them through their dedicated

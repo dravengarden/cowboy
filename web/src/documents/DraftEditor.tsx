@@ -981,7 +981,7 @@ function DraftEditingSession(
         minHeight: 0,
         minWidth: 0,
         ...(desktop
-          ? { containerType: "inline-size", containerName: "draft-editor" }
+          ? { containerType: "inline-size", containerName: "draft-editor", overflow: "hidden" }
           : {}),
         ...(focusLayout && { position: "relative" }),
       }}
@@ -1310,7 +1310,6 @@ function DraftEditingSession(
             }}
             data-draft-body
             data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
-            data-desktop-region={desktop ? "prompt.composer" : undefined}
             onKeyDownCapture={(e) => {
               // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
               // into the title. A pending Vim command (`dk`, `ck`) keeps its key.

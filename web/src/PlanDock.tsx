@@ -307,11 +307,10 @@ function DesktopPlanRail({
         borderColor: "divider",
         borderRadius: 0,
         bgcolor: "transparent",
-        mb: 0.5,
+        mb: 0,
         color: "text.primary",
         overflow: "hidden",
         transition: "background-color 120ms ease, border-color 120ms ease",
-        "&:focus-within": { borderColor: "primary.main" },
       }}
     >
       <Stack direction="row" alignItems="center" sx={{ pr: 0.5 }}>

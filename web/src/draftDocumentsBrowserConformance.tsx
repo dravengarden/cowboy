@@ -1589,6 +1589,66 @@ export async function runDraftDocumentsBrowserConformance(
       );
       press(document.activeElement!, "Escape", "Escape");
       await until(() => !usageDialog(), "Usage closes");
+      // Unified zero-layout-shift Desktop focus primitives across ALL regions:
+      // Sessions, Prompt, Conversation, and Top Bar share ONE paint-only ::after
+      // perimeter frame with strict single-focus ownership and 0px layout drift.
+      {
+        const regions = ["sessions.list", "prompt.composer", "conversation.transcript", "topbar.controls"] as const;
+        const measureAll = () => regions.map((r) => {
+          const el = container.querySelector<HTMLElement>(`[data-desktop-region="${r}"]`)!;
+          const rect = el.getBoundingClientRect();
+          return { r, x: Math.round(rect.left * 10), y: Math.round(rect.top * 10), w: Math.round(rect.width * 10), h: Math.round(rect.height * 10) };
+        });
+        const baseline = measureAll();
+        // All 3 panes must expose symmetrical pane-header dots.
+        for (const pane of ["sessions", "prompt", "conversation"] as const) {
+          check(
+            !!container.querySelector(`[data-desktop-pane="${pane}"] > [data-desktop-pane-header] [data-desktop-pane-dot]`),
+            `${pane} pane header renders the symmetrical focus dot`,
+          );
+        }
+        const assertFocusInvariant = async (targetRegion: (typeof regions)[number]) => {
+          const targetEl = container.querySelector<HTMLElement>(`[data-desktop-region="${targetRegion}"]`)!;
+          targetEl.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0 }));
+          await until(
+            () => targetEl.dataset.desktopFocused === "true",
+            `focus moves to ${targetRegion}`,
+          );
+          await tick(40);
+          const focusedAll = [...container.querySelectorAll<HTMLElement>('[data-desktop-region][data-desktop-focused="true"]')];
+          check(
+            focusedAll.length === 1 && focusedAll[0] === targetEl,
+            `strict single-focus invariant on ${targetRegion} (count=${String(focusedAll.length)})`,
+          );
+          const after = getComputedStyle(targetEl, "::after");
+          check(
+            after.boxShadow !== "none" && after.boxShadow.includes("inset") && after.pointerEvents === "none",
+            `${targetRegion} paints the paint-only ::after perimeter frame (${after.boxShadow})`,
+          );
+          for (const other of regions) {
+            if (other === targetRegion) continue;
+            const otherEl = container.querySelector<HTMLElement>(`[data-desktop-region="${other}"]`)!;
+            await until(
+              () => getComputedStyle(otherEl, "::after").boxShadow === "none",
+              `unfocused ${other} clears its perimeter frame when ${targetRegion} owns focus`,
+            );
+          }
+          const now = measureAll();
+          for (let idx = 0; idx < baseline.length; idx++) {
+            const b = baseline[idx]!;
+            const n = now[idx]!;
+            check(
+              b.x === n.x && b.y === n.y && b.w === n.w && b.h === n.h,
+              `0px layout shift on ${b.r} when focusing ${targetRegion} (${JSON.stringify(b)} vs ${JSON.stringify(n)})`,
+            );
+          }
+        };
+        await assertFocusInvariant("sessions.list");
+        await assertFocusInvariant("prompt.composer");
+        await assertFocusInvariant("conversation.transcript");
+        await assertFocusInvariant("topbar.controls");
+        await assertFocusInvariant("prompt.composer");
+      }
       // `␣SZ` presses the Sessions fold button from any focus.
       {
         const foldAction = () =>

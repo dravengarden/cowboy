@@ -69,6 +69,7 @@ export function useDesktopWorkView(sessionId: string): {
   view: DesktopWorkView;
   reviewMounted: boolean;
   showView: (view: DesktopWorkView) => void;
+  selectView: (view: DesktopWorkView) => void;
 } {
   const workspace = useDesktopWorkspace();
   const { focusRegion } = workspace;
@@ -126,6 +127,13 @@ export function useDesktopWorkView(sessionId: string): {
     saveDesktopWorkView(id, effective);
     setStored({ sessionId: id, view: effective });
   }, []);
+  const selectView = useCallback((next: DesktopWorkView): void => {
+    const effective: DesktopWorkView = callsDockLegacyRef.current && next === "tasks" ? "conversation" : next;
+    showView(effective);
+    if (effective === "review") scheduleFocus([REVIEW_FOCUS_REGION, "review.navigator"]);
+    else if (effective === "tasks") scheduleFocus(TASKS_FOCUS_REGIONS);
+    else scheduleFocus(["conversation.transcript"]);
+  }, [scheduleFocus, showView]);
   useLayoutEffect(() => publishDesktopWorkView(view), [view]);
   useLayoutEffect(() => () => publishDesktopWorkView("conversation"), []);
   const showReview = useCallback((): void => {
@@ -199,5 +207,5 @@ export function useDesktopWorkView(sessionId: string): {
     run: () => focusRegion(REVIEW_FOCUS_REGION),
   }), [focusRegion, reviewShown]);
   useDesktopCommand(focusCommand);
-  return { view, reviewMounted, showView };
+  return { view, reviewMounted, showView, selectView };
 }

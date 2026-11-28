@@ -19,6 +19,12 @@ import {
   desktopRegionFromPointerTarget,
 } from "./desktopComposerOwnership";
 import {
+  isDesktopRegionVisible,
+  resolvePaneEntryRegion,
+  resolveVisiblePointerRegion,
+  resolveVisibleRegionElement,
+} from "./desktopFocusResolution";
+import {
   DESKTOP_COMPACT_WIDTH_QUERY,
   DESKTOP_PANES_EXPANDED,
   DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
@@ -55,8 +61,7 @@ interface DesktopWorkspaceContextValue {
   expandAllPanes: () => void;
 }
 
-/** Where keyboard focus lands when a pane is restored by its own command. */
-const PANE_ENTRY_REGION: Record<DesktopPane, string> = {
+const PANE_FALLBACK_REGION: Record<DesktopPane, string> = {
   sessions: "sessions.list",
   prompt: "prompt.composer",
   conversation: "conversation.transcript",
@@ -77,23 +82,30 @@ function paneFromTarget(target: EventTarget | null): DesktopPane | null {
     : null;
 }
 
-function regionFromTarget(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
-  return target.closest<HTMLElement>("[data-desktop-region]")?.dataset.desktopRegion ?? null;
-}
-
-function syncFocusedRegionMarker(region: string, target: EventTarget | null): void {
-  const currentEl = target instanceof Element
+/** Strictly maintain the single-focus invariant across visible Desktop regions. */
+function markFocusedRegion(
+  region: string | null,
+  target?: EventTarget | null,
+): HTMLElement | null {
+  const preferred = target instanceof Element
     ? target.closest<HTMLElement>("[data-desktop-region]")
     : null;
-  if (currentEl && currentEl.dataset.desktopFocused === "true") return;
+  const targetEl =
+    preferred &&
+    preferred.dataset.desktopRegion === region &&
+    isDesktopRegionVisible(preferred)
+      ? preferred
+      : region
+      ? resolveVisibleRegionElement(region)
+      : null;
   for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
-    if (element.dataset.desktopRegion === region) {
+    if (element === targetEl) {
       if (element.dataset.desktopFocused !== "true") element.dataset.desktopFocused = "true";
     } else if (element.dataset.desktopFocused !== undefined) {
       delete element.dataset.desktopFocused;
     }
   }
+  return targetEl;
 }
 
 let cachedWorkspaceEl: Element | null = null;
@@ -112,9 +124,7 @@ function syncDesktopPaneChrome(
   const scope = desktopWorkspaceElement() ?? document;
   for (const element of scope.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
     const pane = element.dataset.desktopPane;
-    if (
-      pane === "sessions" || pane === "prompt" || pane === "conversation"
-    ) {
+    if (pane === "sessions" || pane === "prompt" || pane === "conversation") {
       if (paneChromeOwnsFocus(focusedPane, focusedRegion, pane)) {
         if (element.dataset.desktopPaneFocused !== "true") {
           element.dataset.desktopPaneFocused = "true";
@@ -158,14 +168,6 @@ function focusElement(element: HTMLElement | null): void {
       "button[aria-label='Expand plan'], button[aria-label='Collapse plan']",
     )
     : null;
-  // Entering Sessions must anchor navigation on the session already open in
-  // the workspace. Falling back to row one made the first J/K jump unrelated
-  // to what the user was looking at. Queue focuses the just-queued item via
-  // `data-desktop-preferred` when no edit is active (`␣Q i` edits it in 2 keys).
-  // Focusing Prompt must not change the editor's modal state or caret. Focus
-  // CodeMirror's content surface first; the Vim runtime transfers focus to its
-  // command sink itself when the preserved state is Normal/Visual, while Insert
-  // retains the native editable and its selection.
   (composer ?? composerCommandSink ?? currentItem ?? preferredItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
     preventScroll: true,
   });
@@ -174,6 +176,7 @@ function focusElement(element: HTMLElement | null): void {
 
 function useDesktopPaneCollapseActions(
   focusedPaneRef: { readonly current: DesktopPane },
+  resolveEntry: (pane: DesktopPane) => string,
   focusRegion: (region: string) => void,
 ) {
   const zoomRestoreRef = useRef<DesktopCollapsedPanes | null>(null);
@@ -187,23 +190,21 @@ function useDesktopPaneCollapseActions(
     const next = togglePaneCollapsed(current, pane);
     desktopCollapsedPanesStore.set(next);
     if (!next[pane]) {
-      // Restoring is an explicit request for that pane: move into it.
-      afterLayout(() => focusRegion(PANE_ENTRY_REGION[pane]));
+      afterLayout(() => focusRegion(resolveEntry(pane)));
       return;
     }
     const active = document.activeElement;
     const paneElement = document.querySelector(`[data-desktop-pane="${pane}"]`);
     const focusInside = focusedPaneRef.current === pane ||
       (active instanceof Node && paneElement?.contains(active) === true);
-    // A swap (hiding the last work pane) always lands in the pane it revealed.
     const swapped = (["prompt", "conversation"] as const).find((other) =>
       other !== pane && current[other] && !next[other]
     );
     if (!focusInside && !swapped) return;
     const target: DesktopPane = swapped ??
       (pane === "prompt" ? "conversation" : next.prompt ? "conversation" : "prompt");
-    afterLayout(() => focusRegion(PANE_ENTRY_REGION[target]));
-  }, [focusRegion, focusedPaneRef]);
+    afterLayout(() => focusRegion(resolveEntry(target)));
+  }, [focusRegion, focusedPaneRef, resolveEntry]);
   const toggleZoom = useCallback((sessionPage: boolean): void => {
     const compact = globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches ?? false;
     const result = toggleZoomPanes(
@@ -216,9 +217,9 @@ function useDesktopPaneCollapseActions(
     zoomRestoreRef.current = result.saved;
     desktopCollapsedPanesStore.set(result.next);
     if (focusedPaneRef.current !== result.target) {
-      afterLayout(() => focusRegion(PANE_ENTRY_REGION[result.target]));
+      afterLayout(() => focusRegion(resolveEntry(result.target)));
     }
-  }, [focusRegion, focusedPaneRef]);
+  }, [focusRegion, focusedPaneRef, resolveEntry]);
   const expandAllPanes = useCallback((): void => {
     zoomRestoreRef.current = null;
     desktopCollapsedPanesStore.set(DESKTOP_PANES_EXPANDED);
@@ -238,19 +239,22 @@ export function DesktopWorkspaceProvider({
   const collapsedPanes = useDesktopCollapsedPanes();
   const focusedPaneRef = useRef(focusedPane);
   focusedPaneRef.current = focusedPane;
-  // A collapsed pane stays mounted (editor state, scroll and live output
-  // survive) but is not rendered. Jumping into it restores it first, so every
-  // existing focus command keeps working without knowing about collapse.
+  const focusedRegionRef = useRef(focusedRegion);
+  focusedRegionRef.current = focusedRegion;
+  const lastRegionByPaneRef = useRef<Partial<Record<DesktopPane, string>>>({});
+
+  const resolveEntry = useCallback(
+    (pane: DesktopPane): string =>
+      resolvePaneEntryRegion(pane, lastRegionByPaneRef.current[pane]) ?? PANE_FALLBACK_REGION[pane],
+    [],
+  );
+
   const restoreCollapsedPane = useCallback((pane: DesktopPane | null): boolean => {
     if (!pane) return false;
-    // Compact Desktop presents Sessions as a drawer whatever the wide-layout
-    // preference says; reaching into it must not rewrite that preference.
     if (
       pane === "sessions" &&
       globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches
     ) return false;
-    // Collapsed Sessions still has a visible, navigable rail: jumping there
-    // focuses the rail and keeps the layout. Only `[` unfolds the list.
     if (
       pane === "sessions" &&
       document.querySelector("[data-desktop-region='sessions.rail']")
@@ -260,39 +264,48 @@ export function DesktopWorkspaceProvider({
     desktopCollapsedPanesStore.set(withPaneCollapsed(current, pane, false));
     return true;
   }, []);
+
   const focusRegion = useCallback((region: string): void => {
-    const element = document.querySelector<HTMLElement>(
-      `[data-desktop-region="${CSS.escape(region)}"]`,
-    );
+    const element = resolveVisibleRegionElement(region);
     if (!element) return;
     const pane = paneFromTarget(element);
     if (restoreCollapsedPane(pane)) {
       afterLayout(() => focusRegion(region));
       return;
     }
-    if (pane) setFocusedPane(pane);
+    if (pane) {
+      setFocusedPane(pane);
+      if (region !== "topbar.controls") lastRegionByPaneRef.current[pane] = region;
+    }
     setFocusedRegion(region);
+    markFocusedRegion(region, element);
+    syncDesktopPaneChrome(pane ?? focusedPaneRef.current, region);
     focusElement(element);
   }, [restoreCollapsedPane]);
+
   const focusPane = useCallback((pane: DesktopPane): void => {
     if (restoreCollapsedPane(pane)) {
       afterLayout(() => focusPane(pane));
       return;
     }
     setFocusedPane(pane);
-    const paneElement = document.querySelector<HTMLElement>(`[data-desktop-pane="${pane}"]`);
-    const region = paneElement?.querySelector<HTMLElement>("[data-desktop-region]");
-    if (region?.dataset.desktopRegion) {
-      setFocusedRegion(region.dataset.desktopRegion);
-      focusElement(region);
+    const targetRegion = resolvePaneEntryRegion(pane, lastRegionByPaneRef.current[pane]);
+    const regionEl = targetRegion ? resolveVisibleRegionElement(targetRegion) : null;
+    if (targetRegion && regionEl) {
+      lastRegionByPaneRef.current[pane] = targetRegion;
+      setFocusedRegion(targetRegion);
+      markFocusedRegion(targetRegion, regionEl);
+      syncDesktopPaneChrome(pane, targetRegion);
+      focusElement(regionEl);
     } else {
+      const paneElement = document.querySelector<HTMLElement>(`[data-desktop-pane="${pane}"]`);
+      syncDesktopPaneChrome(pane, null);
       focusElement(paneElement ?? null);
     }
   }, [restoreCollapsedPane]);
+
   const focusAdjacentPane = useCallback((delta: -1 | 1): void => {
     const order: DesktopPane[] = ["sessions", "prompt", "conversation"];
-    // H/L is spatial movement across what is on screen; it never restores a
-    // collapsed pane. Explicit jumps (workspace prefix S/P/C) do.
     const available = order.filter((pane) =>
       !collapsedPanes[pane] &&
       document.querySelector(`[data-desktop-pane="${pane}"]`)
@@ -301,19 +314,26 @@ export function DesktopWorkspaceProvider({
     const current = Math.max(0, available.indexOf(focusedPane));
     focusPane(available[(current + delta + available.length) % available.length] as DesktopPane);
   }, [collapsedPanes, focusPane, focusedPane]);
+
   const { togglePane, toggleZoom, expandAllPanes } = useDesktopPaneCollapseActions(
     focusedPaneRef,
+    resolveEntry,
     focusRegion,
   );
+
   const focusAdjacentRegion = useCallback((delta: -1 | 1): void => {
-    const next = verticalWorkspaceRegion(focusedPane, focusedRegion, delta);
-    if (next && document.querySelector(`[data-desktop-region="${CSS.escape(next)}"]`)) {
+    const next =
+      focusedRegion === "topbar.controls" && delta === 1
+        ? resolveEntry(focusedPane)
+        : verticalWorkspaceRegion(focusedPane, focusedRegion, delta);
+    if (next && resolveVisibleRegionElement(next)) {
       focusRegion(next);
     }
-  }, [focusRegion, focusedPane, focusedRegion]);
+  }, [focusRegion, focusedPane, focusedRegion, resolveEntry]);
+
   const cycleRegion = useCallback((): void => {
     const regions = [...document.querySelectorAll<HTMLElement>("[data-desktop-region]")]
-      .filter((element) => element.offsetParent !== null);
+      .filter((element) => isDesktopRegionVisible(element));
     if (regions.length === 0) return;
     const current = Math.max(
       0,
@@ -332,8 +352,7 @@ export function DesktopWorkspaceProvider({
       }
       const pane = paneFromTarget(event.target);
       if (pane) setFocusedPane(pane);
-      const region = desktopRegionFromPointerTarget(event.target) ??
-        regionFromTarget(event.target);
+      const region = resolveVisiblePointerRegion(event.target, lastRegionByPaneRef.current) ?? desktopRegionFromPointerTarget(event.target);
       if (
         event.type === "pointerdown" &&
         (desktopPointerLeftComposer(event.target, document.activeElement) ||
@@ -345,22 +364,25 @@ export function DesktopWorkspaceProvider({
           )
           : null;
         if (!clickedFocusable && region) {
-          const regionElement = document.querySelector<HTMLElement>(
-            `[data-desktop-region="${CSS.escape(region)}"]`,
-          );
+          const regionElement = resolveVisibleRegionElement(region);
           if (regionElement) focusElement(regionElement);
         } else if (document.activeElement instanceof HTMLElement) {
           document.activeElement.blur();
         }
       }
       if (region) {
+        if (pane && region !== "topbar.controls") lastRegionByPaneRef.current[pane] = region;
         setFocusedRegion(region);
-        syncFocusedRegionMarker(region, event.target);
+        markFocusedRegion(region, event.target);
       }
       if (pane || region === "topbar.controls") {
-        const nextPane = pane ?? "prompt";
+        const nextPane = pane ?? focusedPaneRef.current;
         const nextRegion = region === "topbar.controls" ? "topbar.controls" : region;
-        if (nextPane !== focusedPaneRef.current || nextRegion === "topbar.controls") {
+        if (
+          nextPane !== focusedPaneRef.current ||
+          nextRegion === "topbar.controls" ||
+          focusedRegionRef.current === "topbar.controls"
+        ) {
           syncDesktopPaneChrome(nextPane, nextRegion);
         }
       }
@@ -387,15 +409,7 @@ export function DesktopWorkspaceProvider({
   useEffect(() => {
     const syncMountedWorkspace = (): boolean => {
       syncDesktopPaneChrome(focusedPane, focusedRegion);
-      let focusedElement: HTMLElement | null = null;
-      for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
-        if (element.dataset.desktopRegion === focusedRegion) {
-          element.dataset.desktopFocused = "true";
-          focusedElement = element;
-        } else {
-          delete element.dataset.desktopFocused;
-        }
-      }
+      const focusedElement = markFocusedRegion(focusedRegion);
       if (!focusedElement) return false;
       if (
         focusedElement.dataset.desktopRegion === "prompt.composer" &&
@@ -403,14 +417,8 @@ export function DesktopWorkspaceProvider({
           "[data-vim-command-sink], .cm-content[contenteditable='true']",
         )
       ) {
-        // The region shell arrived before its real editor. Keep observing past
-        // the disabled preload mount; focusing the Paper here would strand the
-        // eventual Vim command sink without a block cursor.
         return false;
       }
-      // The provider's default state can predate the lazy Desktop subtree. Once
-      // that region appears, make DOM focus agree with the status line only if
-      // nobody else has claimed focus in the meantime.
       if (document.activeElement === document.body) focusElement(focusedElement);
       return true;
     };

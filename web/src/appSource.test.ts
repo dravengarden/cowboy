@@ -19,6 +19,7 @@ export const SPLIT_SOURCES = {
     "./sessionFocusLifecycle.ts",
     "./desktopSplitters.tsx",
     "./mobileDrawerSurface.ts",
+    "./desktop/desktopFocusPrimitives.ts",
   ],
   "Transcript.tsx": [
     "./Transcript.tsx",

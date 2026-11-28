@@ -32,7 +32,7 @@ export type Mode = ThemeChoice;
 // Opaque by design: translucent focus colors look different over Composer
 // paper and Draft `action.selected` even when their alpha is identical.
 export function desktopFocusBoundary(theme: Theme): string {
-  const weight = theme.palette.mode === "dark" ? 58 : 48;
+  const weight = theme.palette.mode === "dark" ? 68 : 56;
   return `color-mix(in srgb, ${theme.palette.primary.main} ${
     String(weight)
   }%, ${theme.palette.background.default})`;

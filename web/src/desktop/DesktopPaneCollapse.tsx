@@ -703,23 +703,8 @@ export function DesktopSessionsRail({
       >
         {expand}
       </Box>
-      <Stack
-        data-desktop-region="sessions.rail"
-        tabIndex={-1}
-        alignItems="center"
-        spacing={0.5}
-        sx={{
-          outline: "none",
-          px: "3px",
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          overflowX: "hidden",
-          py: 1,
-          scrollbarWidth: "none",
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
-      >
+      <Box data-desktop-region="sessions.rail" tabIndex={-1} sx={{ outline: "none", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <Stack alignItems="center" spacing={0.5} sx={{ px: "3px", flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", py: 1, scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
         <Box
           sx={{
             display: "none",
@@ -771,7 +756,7 @@ export function DesktopSessionsRail({
             onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />
         ))}
-      <ScrollEdges /></Stack>
+      <ScrollEdges /></Stack></Box>
       {footer && (
         <Box
           data-desktop-sessions-rail-foot

@@ -44,6 +44,7 @@ import {
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
 import { DesktopWorkspaceProvider } from "../desktop/DesktopWorkspaceController";
+import { desktopFocusRootSx } from "../desktop/desktopFocusPrimitives";
 import { EditorExtensionsCommand } from "../editorExtensions/EditorExtensionsDialog";
 import {
   FolderNameShell,
@@ -495,14 +496,8 @@ function DraftWorkspaceBody(
   return (
     <Stack
       ref={canvas}
-      sx={{
-        height: "100%",
-        minHeight: 0,
-        bgcolor: "background.default",
-        pt: desktop ? 0 : "var(--cowboy-system-top-clearance)",
-        pb: desktop ? 0 : "var(--kb-inset, 0px)",
-      }}
       data-draft-workspace
+      sx={{ height: "100%", minHeight: 0, bgcolor: "background.default", pt: desktop ? 0 : "var(--cowboy-system-top-clearance)", pb: desktop ? 0 : "var(--kb-inset, 0px)", ...(desktop ? desktopFocusRootSx() : {}) }}
     >
       {desktop && <DraftCommands create={create} close={leave} />}
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>

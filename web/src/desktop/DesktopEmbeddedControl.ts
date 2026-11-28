@@ -1,5 +1,6 @@
 import { alpha, type Theme } from "@mui/material";
 import { desktopSize } from "../surface/desktopSize";
+import { desktopControlFocusRing, desktopFocusEdgeColor, desktopFocusHaloColor } from "./desktopFocusPrimitives";
 
 /** One geometry vocabulary for Desktop's keyboard-first surfaces. Outer
  * controls, panels, and first-level interactive rows share the same silhouette;
@@ -27,9 +28,8 @@ export function desktopSurfaceSx({
   focusWithin?: boolean;
 } = {}) {
   const focus = {
-    borderColor: "primary.main",
-    boxShadow: (theme: Theme) =>
-      `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
+    borderColor: (theme: Theme) => desktopFocusEdgeColor(theme),
+    boxShadow: (theme: Theme) => desktopControlFocusRing(theme),
   };
   return {
     border: 1,
@@ -122,9 +122,8 @@ export function desktopListItemSx() {
       bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.09),
     },
     "&.Mui-focusVisible": {
-      borderColor: "primary.main",
-      boxShadow: (theme: Theme) =>
-        `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
+      borderColor: (theme: Theme) => desktopFocusEdgeColor(theme),
+      boxShadow: (theme: Theme) => desktopControlFocusRing(theme),
     },
   };
 }
@@ -191,9 +190,9 @@ export function desktopRowFocusSx() {
 export function desktopCardFocusSx() {
   return {
     outline: "none",
-    borderColor: "primary.main",
+    borderColor: (theme: Theme) => desktopFocusEdgeColor(theme),
     boxShadow: (theme: Theme) =>
-      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.18)}`,
+      `0 0 0 2px ${desktopFocusHaloColor(theme)}`,
   };
 }
 

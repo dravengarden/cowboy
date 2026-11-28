@@ -7,11 +7,13 @@ const source = await readFile(
 );
 
 test("Plan progress stays inside the rounded surface without a duplicate desktop focus ring", () => {
-  // Mobile keeps the clipped card; Desktop is a borderless disclosure rail
-  // whose focus recolors its own edge instead of adding a ring.
+  // Mobile keeps the clipped card; Desktop delegates focus framing to the
+  // unified paint-only `[data-desktop-region='prompt.plan']` perimeter primitive.
   assertStringIncludes(source, 'overflow: "hidden"');
-  assertStringIncludes(source, '"&:focus-within": { borderColor: "primary.main" }');
   assertStringIncludes(source, 'data-desktop-plan-surface="true"');
+  if (source.includes('"&:focus-within": { borderColor: "primary.main" }')) {
+    throw new Error("PlanDock must not duplicate Desktop region focus border");
+  }
 });
 
 test("Desktop Plan rail geometry follows the global font size", () => {

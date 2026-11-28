@@ -596,6 +596,7 @@ export function DesktopWorkbenchCanvas({
         flexDirection: "column",
         flex: 1,
         minHeight: 0,
+        overflow: "hidden",
         border: 0,
         borderRadius: 0,
         boxShadow: "none",

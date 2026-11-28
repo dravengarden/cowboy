@@ -1120,7 +1120,7 @@ export function PendingPanel({
         }
         : {})}
       sx={{
-        mb: desktop ? 0.5 : 0,
+        mb: 0,
         // Only Desktop adopts the borderless disclosure rail. Mobile keeps its
         // established staging cards and touch geometry.
         ...(desktop ? {
@@ -1130,7 +1130,6 @@ export function PendingPanel({
           borderRadius: 0,
           overflow: "hidden",
           bgcolor: "transparent",
-          "&:focus-within": { borderColor: "primary.main" },
         } : {
           ...mobileComposerPanelFrameSx,
           bgcolor: kind === "draft" ? "action.selected" : "action.hover",

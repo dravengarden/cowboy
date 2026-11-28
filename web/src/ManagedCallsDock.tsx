@@ -1363,10 +1363,9 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             borderRadius: 0,
             bgcolor: "transparent",
             transition: "background-color 120ms ease, border-color 120ms ease",
-            "&:focus-within": { borderColor: "primary.main" },
           }
           : { ...mobileComposerPanelFrameSx, border: 0, bgcolor: "transparent" }),
-        mb: desktop ? 0.5 : 0,
+        mb: 0,
         // Own the text color and typography: rows and details are rendered in
         // ButtonBase/Sheet surfaces that would otherwise inherit the page's.
         color: "text.primary",

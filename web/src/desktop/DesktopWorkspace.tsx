@@ -100,22 +100,22 @@ function PaneHeader({
         flexShrink: 0,
       }}
     >
-      {typeof children === "string" ? (
-        <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75, flexShrink: 0 }}>
-          <Box
-            component="span"
-            data-desktop-pane-dot
-            aria-hidden
-            sx={{
-              width: 6,
-              height: 6,
-              borderRadius: "50%",
-              bgcolor: "primary.main",
-              opacity: 0,
-              transition: "opacity 140ms ease",
-              flexShrink: 0,
-            }}
-          />
+      <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75, flexShrink: 0, minWidth: 0 }}>
+        <Box
+          component="span"
+          data-desktop-pane-dot
+          aria-hidden
+          sx={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            bgcolor: "primary.main",
+            opacity: 0,
+            transition: "opacity 140ms ease",
+            flexShrink: 0,
+          }}
+        />
+        {typeof children === "string" ? (
           <Typography
             variant="overline"
             color="inherit"
@@ -128,8 +128,8 @@ function PaneHeader({
           >
             {children}
           </Typography>
-        </Box>
-      ) : children}
+        ) : children}
+      </Box>
       {actions
         ? (
           <Box
@@ -241,7 +241,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
   useHistoryRevealOnTaskNavigation(sessionId, projection, onProjectionChange);
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
-  const { view, reviewMounted, showView } = useDesktopWorkView(sessionId);
+  const { view, reviewMounted, selectView } = useDesktopWorkView(sessionId);
   const callsDockLegacy = useCallsDockLegacy();
   const tasksAvailability = useSessionTasksAvailability(callsDockLegacy ? null : sessionId);
   const reviewShown = view === "review";
@@ -431,14 +431,14 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
             </>
           )}
         >
-          <DesktopWorkViewTabs view={view} onChange={showView} tasks={callsDockLegacy ? undefined : tasksAvailability} />
+          <DesktopWorkViewTabs view={view} onChange={selectView} tasks={callsDockLegacy ? undefined : tasksAvailability} />
         </PaneHeader>
         <Box
           data-desktop-region="conversation.transcript"
           data-desktop-navigation="scroll"
           data-desktop-focus-default
           tabIndex={-1}
-          sx={{ flex: 1, minHeight: 0, display: conversationShown ? "flex" : "none", flexDirection: "column" }}
+          sx={{ flex: 1, minHeight: 0, display: conversationShown ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
         >
           {conversation}
         </Box>

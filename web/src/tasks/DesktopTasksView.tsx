@@ -119,11 +119,13 @@ function DesktopTasksPanes({
   return (
     <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
       {showRosterPane && (
-        <Box data-desktop-region="tasks.roster" data-desktop-focus-default={!showReaderPane ? "true" : undefined} tabIndex={-1} sx={{ ...(wide ? { width: 236, flexShrink: 0, borderRight: 1, borderColor: "divider" } : { flex: 1 }), minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", outline: "none", ...desktopScrollbarSx }}>
-          <TaskRoster sessionId={sessionId} tasks={background.tasks} calls={background.calls} selectedKey={selected?.key ?? null} desktop hideEnded={hideEnded} onToggleHideEnded={onToggleHideEnded} collapsedKeys={collapsedKeys} onToggleFold={onToggleFold} onSelect={onSelect} onRefreshCalls={background.refreshCalls} now={now} />
-          <Box sx={{ flex: 1 }} />
-          {legacySwitch}
-          <ScrollEdges />
+        <Box data-desktop-region="tasks.roster" data-desktop-focus-default={!showReaderPane ? "true" : undefined} tabIndex={-1} sx={{ ...(wide ? { width: 236, flexShrink: 0, borderRight: 1, borderColor: "divider" } : { flex: 1 }), minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", outline: "none" }}>
+          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", ...desktopScrollbarSx }}>
+            <TaskRoster sessionId={sessionId} tasks={background.tasks} calls={background.calls} selectedKey={selected?.key ?? null} desktop hideEnded={hideEnded} onToggleHideEnded={onToggleHideEnded} collapsedKeys={collapsedKeys} onToggleFold={onToggleFold} onSelect={onSelect} onRefreshCalls={background.refreshCalls} now={now} />
+            <Box sx={{ flex: 1 }} />
+            {legacySwitch}
+            <ScrollEdges />
+          </Box>
         </Box>
       )}
       {showReaderPane && (
