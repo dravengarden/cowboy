@@ -75,7 +75,7 @@ impl Drop for FolderTxGuard {
 fn trash_refusal(meta: &super::SessionMeta, in_flight: bool) -> Option<&'static str> {
     if meta.closing {
         Some("is being deleted")
-    } else if meta.system {
+    } else if meta.system && meta.status != Status::Crashed {
         Some("is a system session")
     } else if in_flight || meta.status == Status::Busy {
         Some("is working; stop it first")
@@ -105,7 +105,7 @@ impl Hub {
     ///
     /// # Errors
     /// An unknown, foreign or already trashed item, or a session that is
-    /// working, closing or a system session.
+    /// working, closing or a non-crashed system session.
     pub fn trash_items(
         &self,
         actor: &FolderActor,
@@ -1089,5 +1089,40 @@ mod tests {
             .unwrap();
         hub.commit_folder_tx(undone);
         assert_eq!(placement(&hub, "s1"), "f-parent");
+    }
+
+    #[test]
+    fn crashed_system_session_can_move_to_trash_while_non_crashed_is_refused() {
+        let hub = Hub::new();
+        for (id, status) in [
+            ("sys-live", Status::Running),
+            ("sys-exited", Status::Exited),
+            ("sys-crashed", Status::Crashed),
+        ] {
+            hub.create_local_session(
+                id.to_owned(),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                id.to_owned(),
+                SessionOrigin::Api,
+                true,
+            );
+            hub.set_status(id, status, None);
+        }
+        let actor = FolderActor::local();
+        let err_live = hub
+            .trash_items(&actor, &[], &ids(&["sys-live"]), 100)
+            .unwrap_err();
+        assert!(err_live.contains("is a system session"), "{err_live}");
+        let err_exited = hub
+            .trash_items(&actor, &[], &ids(&["sys-exited"]), 100)
+            .unwrap_err();
+        assert!(err_exited.contains("is a system session"), "{err_exited}");
+
+        let trashed = hub
+            .trash_items(&actor, &[], &ids(&["sys-crashed"]), 100)
+            .unwrap();
+        assert_eq!(trashed.sessions, ids(&["sys-crashed"]));
+        assert!(hub.session_is_trashed("sys-crashed"));
     }
 }
