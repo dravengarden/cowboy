@@ -826,6 +826,20 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       const tallWrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-tall"]'), "tall assistant copy wrapper");
       const userWrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-user"]'), "user copy wrapper");
       const bottomBar = tallWrap.querySelector<HTMLElement>('[data-message-action-bar="bottom"]')!;
+      const parseAlpha = (rgba: string): number => {
+        const m = rgba.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/);
+        return m ? Number(m[1]) : 1;
+      };
+      check(
+        parseAlpha(getComputedStyle(bottomBar).borderTopColor) <= 0.25,
+        `Desktop hover pill border stays hairline translucent (${getComputedStyle(bottomBar).borderTopColor})`,
+      );
+      const desktopDivider = bottomBar.querySelector<HTMLElement>('[data-message-action-divider]')!;
+      check(
+        parseAlpha(getComputedStyle(desktopDivider).backgroundColor) <= 0.25 &&
+          Math.round(desktopDivider.getBoundingClientRect().height) <= 14,
+        `Desktop hover pill divider stays subtle centered hairline (${getComputedStyle(desktopDivider).backgroundColor}, h=${desktopDivider.getBoundingClientRect().height})`,
+      );
       check(Boolean(bottomBar), "assistant bubble mounts bottom hover action bar");
       check(
         getComputedStyle(bottomBar).opacity === "0" && getComputedStyle(bottomBar).pointerEvents === "none",
@@ -950,6 +964,26 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       const mobileBar = await until(() => document.querySelector<HTMLElement>('[data-message-action-bar="mobile"]'), "Mobile floating copy pill");
       const barRect = mobileBar.getBoundingClientRect();
       check(barRect.left >= 12 && barRect.right <= window.innerWidth - 12 && barRect.top >= 56, `Mobile floating pill stays clamped inside viewport (${JSON.stringify(barRect)})`);
+      const parseMobileAlpha = (rgba: string): number => {
+        const m = rgba.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/);
+        return m ? Number(m[1]) : 1;
+      };
+      const mobileDivider = mobileBar.querySelector<HTMLElement>('[data-message-action-divider]')!;
+      check(
+        parseMobileAlpha(getComputedStyle(mobileDivider).backgroundColor) <= 0.25 &&
+          Math.round(mobileDivider.getBoundingClientRect().height) <= 18,
+        `Mobile floating pill divider stays subtle centered hairline (${getComputedStyle(mobileDivider).backgroundColor}, h=${mobileDivider.getBoundingClientRect().height})`,
+      );
+      await delay(160);
+      const settledRect = mobileBar.getBoundingClientRect();
+      check(
+        settledRect.left >= 12 && settledRect.right <= window.innerWidth - 12 && settledRect.top >= 56 && settledRect.height <= 44,
+        `Mobile floating pill stays compact and viewport-clamped after animation (${JSON.stringify(settledRect)})`,
+      );
+      for (const btn of mobileBar.querySelectorAll<HTMLButtonElement>("button")) {
+        const h = Math.round(btn.getBoundingClientRect().height);
+        check(h >= 40, `Mobile copy pill button preserves 40px touch floor (${btn.textContent}: ${h}px)`);
+      }
 
       // Tap Markdown -> writes exact raw Markdown and auto-dismisses
       const mdBtn = mobileBar.querySelector<HTMLButtonElement>('[data-message-copy="markdown"]')!;

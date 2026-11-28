@@ -89,39 +89,89 @@ export function clampMobilePillPosition(
 }
 
 function pillButtonSx(activeSuccess: boolean, mobile: boolean): (theme: Theme) => Record<string, unknown> {
-  return (theme) => ({
-    minWidth: 0,
-    minHeight: mobile ? 40 : "1.375rem",
-    px: mobile ? 1.5 : 0.75,
-    py: 0,
-    borderRadius: 0,
-    fontSize: mobile ? "0.8125rem" : "0.7rem",
-    fontWeight: mobile ? 500 : 450,
-    lineHeight: 1.2,
-    color: activeSuccess ? "success.main" : "text.secondary",
-    bgcolor: "transparent",
-    textTransform: "none",
-    whiteSpace: "nowrap",
-    "& .MuiButton-startIcon": { mr: mobile ? 0.6 : 0.4 },
-    "&:hover": {
-      color: activeSuccess ? "success.main" : "primary.main",
-      bgcolor: alpha(
-        activeSuccess ? theme.palette.success.main : theme.palette.primary.main,
-        theme.palette.mode === "dark" ? 0.14 : 0.08,
-      ),
-    },
-  });
+  return (theme) => {
+    const dark = theme.palette.mode === "dark";
+    const accent = activeSuccess ? theme.palette.success.main : theme.palette.primary.main;
+    return {
+      position: "relative",
+      minWidth: 0,
+      minHeight: mobile ? 40 : "1.375rem",
+      px: mobile ? 1.5 : 0.75,
+      py: 0,
+      borderRadius: "999px",
+      fontSize: mobile ? "0.8125rem" : "0.7rem",
+      fontWeight: mobile ? 500 : 450,
+      letterSpacing: mobile ? "-0.01em" : undefined,
+      lineHeight: 1.2,
+      color: activeSuccess
+        ? "success.main"
+        : mobile
+        ? "text.primary"
+        : "text.secondary",
+      bgcolor: "transparent",
+      textTransform: "none",
+      whiteSpace: "nowrap",
+      transition: "background-color 90ms ease, color 90ms ease, transform 90ms ease",
+      "& .MuiButton-startIcon": {
+        mr: mobile ? 0.65 : 0.4,
+        ml: 0,
+        color: activeSuccess
+          ? "success.main"
+          : mobile
+          ? alpha(theme.palette.text.primary, dark ? 0.72 : 0.66)
+          : "inherit",
+      },
+      ...(mobile
+        ? {
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              inset: "3px",
+              borderRadius: "999px",
+              bgcolor: "transparent",
+              transition: "background-color 90ms ease",
+              pointerEvents: "none",
+            },
+            "&:hover": {
+              color: activeSuccess ? "success.main" : "primary.main",
+              bgcolor: "transparent",
+              "&::before": { bgcolor: alpha(accent, dark ? 0.14 : 0.08) },
+              "& .MuiButton-startIcon": {
+                color: activeSuccess ? "success.main" : "primary.main",
+              },
+            },
+            "&:active": {
+              bgcolor: "transparent",
+              transform: "scale(0.97)",
+              "&::before": { bgcolor: alpha(accent, dark ? 0.2 : 0.11) },
+            },
+          }
+        : {
+            "&:hover": {
+              color: activeSuccess ? "success.main" : "primary.main",
+              bgcolor: alpha(accent, dark ? 0.14 : 0.08),
+              "& .MuiButton-startIcon": {
+                color: activeSuccess ? "success.main" : "primary.main",
+              },
+            },
+          }),
+    };
+  };
 }
 
-function HairlineDivider(): React.JSX.Element {
+function HairlineDivider({ mobile = false }: { mobile?: boolean }): React.JSX.Element {
   return (
     <Box
       aria-hidden
+      data-message-action-divider=""
       sx={(theme) => ({
         width: "1px",
-        alignSelf: "stretch",
-        my: 0.45,
-        bgcolor: alpha(theme.palette.divider, 0.85),
+        height: mobile ? 16 : 12,
+        alignSelf: "center",
+        borderRadius: "1px",
+        bgcolor: theme.palette.mode === "dark"
+          ? alpha(theme.palette.common.white, 0.14)
+          : alpha(theme.palette.common.black, 0.11),
         flexShrink: 0,
       })}
     />
@@ -166,11 +216,15 @@ function DesktopHoverPill({
         zIndex: 2,
         display: "inline-flex",
         alignItems: "center",
+        gap: "1px",
+        p: "2px",
         borderRadius: "999px",
         overflow: "hidden",
         bgcolor: theme.palette.background.paper,
-        border: `1px solid ${alpha(theme.palette.divider, 0.9)}`,
-        boxShadow: theme.shadows[1],
+        border: `1px solid ${theme.palette.divider}`,
+        boxShadow: theme.palette.mode === "dark"
+          ? `0 2px 8px ${alpha(theme.palette.common.black, 0.36)}`
+          : `0 1px 4px ${alpha(theme.palette.common.black, 0.08)}`,
         // Primary bottom pill uses opacity (never visibility: hidden) so
         // Desktop Tab traversal can focus its action stops and reveal the bar
         // via :focus-within. Decorative top mirror stays visibility: hidden.
@@ -257,14 +311,14 @@ function MobileFloatingCopyPill({
   onCopy: (mode: MessageCopyMode) => void;
 }): React.JSX.Element | null {
   const pillRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState<{ w: number; h: number }>({ w: 228, h: 44 });
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 204, h: 40 });
 
   useLayoutEffect(() => {
     const el = pillRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const w = Math.ceil(rect.width);
-    const h = Math.ceil(rect.height);
+    // Measure untransformed layout box so entrance scaling never shrinks clamping.
+    const w = Math.ceil(el.offsetWidth);
+    const h = Math.ceil(el.offsetHeight);
     if (w > 0 && h > 0 && (w !== size.w || h !== size.h)) {
       setSize({ w, h });
     }
@@ -289,20 +343,50 @@ function MobileFloatingCopyPill({
       role="toolbar"
       aria-label="Message copy actions"
       data-message-action-bar="mobile"
-      sx={(theme) => ({
-        position: "fixed",
-        left: pos.left,
-        top: pos.top,
-        zIndex: 1400,
-        display: "inline-flex",
-        flexWrap: "wrap",
-        justifyContent: "center",
-        alignItems: "center",
-        maxWidth: `${Math.max(88, Math.floor(vw - 8))}px`,
-        borderRadius: size.h > 52 ? "16px" : "999px",
-        overflow: "hidden",
-        ...floatingIslandSurfaceSx(theme, { compact: true }),
-      })}
+      sx={(theme) => {
+        const dark = theme.palette.mode === "dark";
+        return {
+          position: "fixed",
+          left: pos.left,
+          top: pos.top,
+          zIndex: 1400,
+          display: "inline-flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 0,
+          p: 0,
+          maxWidth: `${Math.max(88, Math.floor(vw - 8))}px`,
+          borderRadius: size.h > 52 ? "14px" : "999px",
+          overflow: "hidden",
+          ...floatingIslandSurfaceSx(theme, { compact: true }),
+          bgcolor: alpha(theme.palette.background.paper, dark ? 0.92 : 0.94),
+          borderColor: dark
+            ? alpha(theme.palette.common.white, 0.13)
+            : alpha(theme.palette.common.black, 0.09),
+          boxShadow: dark
+            ? [
+                `0 4px 12px ${alpha(theme.palette.common.black, 0.36)}`,
+                `0 12px 28px ${alpha(theme.palette.common.black, 0.44)}`,
+                `inset 0 0.5px 0 ${alpha(theme.palette.common.white, 0.1)}`,
+              ].join(", ")
+            : [
+                `0 2px 6px ${alpha(theme.palette.common.black, 0.06)}`,
+                `0 10px 26px ${alpha(theme.palette.common.black, 0.12)}`,
+                `inset 0 0.5px 0 ${alpha(theme.palette.common.white, 0.95)}`,
+              ].join(", "),
+          backdropFilter: "blur(16px) saturate(160%)",
+          WebkitBackdropFilter: "blur(16px) saturate(160%)",
+          "@keyframes cowboyCopyPillIn": {
+            from: { opacity: 0, transform: "scale(0.96) translateY(3px)" },
+            to: { opacity: 1, transform: "scale(1) translateY(0)" },
+          },
+          animation: "cowboyCopyPillIn 120ms cubic-bezier(0.2, 0.9, 0.3, 1)",
+          "@media (prefers-reduced-motion: reduce)": {
+            animation: "none",
+          },
+        };
+      }}
     >
       <Button
         size="small"
@@ -312,15 +396,15 @@ function MobileFloatingCopyPill({
         aria-label={copyDone ? "Copied" : "Copy message"}
         startIcon={
           copyDone
-            ? <Check sx={{ fontSize: glyphSize(16) }} />
-            : <ContentCopy sx={{ fontSize: glyphSize(15) }} />
+            ? <Check sx={{ fontSize: glyphSize(15) }} />
+            : <ContentCopy sx={{ fontSize: glyphSize(14) }} />
         }
         {...copyTap}
         sx={pillButtonSx(copyDone, true)}
       >
         {copyDone ? "Copied" : "Copy"}
       </Button>
-      <HairlineDivider />
+      <HairlineDivider mobile />
       <Button
         size="small"
         variant="text"
@@ -329,8 +413,8 @@ function MobileFloatingCopyPill({
         aria-label={mdDone ? "Copied as Markdown" : "Copy message as Markdown"}
         startIcon={
           mdDone
-            ? <Check sx={{ fontSize: glyphSize(16) }} />
-            : <Code sx={{ fontSize: glyphSize(16) }} />
+            ? <Check sx={{ fontSize: glyphSize(15) }} />
+            : <Code sx={{ fontSize: glyphSize(15) }} />
         }
         {...mdTap}
         sx={pillButtonSx(mdDone, true)}
@@ -569,9 +653,15 @@ export function MessageWithActions({
         maxWidth: "100%",
         minWidth: 0,
         borderRadius: messageBubbleBorderRadius(copyable.role),
-        ...(mobileOpen && {
-          boxShadow: `0 0 0 1.5px ${alpha(theme.palette.primary.main, 0.38)}`,
-        }),
+        transition: "background-color 140ms ease, box-shadow 140ms ease",
+        ...(mobileOpen && (isUser
+          ? { boxShadow: `0 0 0 1px ${alpha(theme.palette.primary.main, 0.28)}` }
+          : {
+              bgcolor: alpha(
+                theme.palette.primary.main,
+                theme.palette.mode === "dark" ? 0.06 : 0.035,
+              ),
+            })),
       })}
     >
       {children}
