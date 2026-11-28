@@ -442,6 +442,12 @@ impl Host for SystemHost {
             device_bytes >= filesystem_bytes,
             "{path} ({device_bytes} bytes) is smaller than its filesystem ({filesystem_bytes})"
         );
+        // A device left longer than its image (an extension rolled back)
+        // must never carry the filesystem past the image.
+        ensure!(
+            device_bytes <= image_bytes,
+            "{path} ({device_bytes} bytes) is longer than its image ({image_bytes})"
+        );
         let device_blocks = device_bytes / block_size;
         if device_blocks == blocks {
             return Ok(false);

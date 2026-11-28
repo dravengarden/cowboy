@@ -112,6 +112,8 @@ pub struct Daemon {
     staging: Mutex<StagingTotals>,
     /// Serializes home growth with the unmount of a home (`crate::capacity`).
     pub(crate) capacity: Mutex<()>,
+    /// A start found its home low: the capacity thread checks now.
+    capacity_wake: (Mutex<bool>, Condvar),
     recent_exits: Mutex<std::collections::VecDeque<(String, Option<i32>)>>,
     exit_signal: Condvar,
     next_connection: AtomicU64,
@@ -145,6 +147,7 @@ impl Daemon {
             exits: Mutex::new(HashMap::new()),
             staging: Mutex::new(StagingTotals::default()),
             capacity: Mutex::new(()),
+            capacity_wake: (Mutex::new(false), Condvar::new()),
             recent_exits: Mutex::new(std::collections::VecDeque::new()),
             exit_signal: Condvar::new(),
             next_connection: AtomicU64::new(1),
@@ -213,6 +216,31 @@ impl Daemon {
         let mut meta = meta::load(dir.as_fd())?
             .ok_or_else(|| fail(Code::NotFound, "account has no metadata"))?;
         f(&dir, &mut meta)
+    }
+
+    /// [`Self::with_account`] when the account lock is free now; `None`
+    /// when another operation holds it.
+    pub(crate) fn try_with_account<T>(
+        &self,
+        key: &str,
+        f: impl FnOnce(&OwnedFd, &mut AccountMeta) -> Outcome<T>,
+    ) -> Option<Outcome<T>> {
+        let lock = self.lock(key);
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Some((|| {
+            let accounts = self.accounts()?;
+            if !safefs::exists(accounts.as_fd(), key)? {
+                return Err(fail(Code::NotFound, "unknown account"));
+            }
+            let dir = safefs::open_dir(accounts.as_fd(), key, STRICT)?;
+            let mut meta = meta::load(dir.as_fd())?
+                .ok_or_else(|| fail(Code::NotFound, "account has no metadata"))?;
+            f(&dir, &mut meta)
+        })())
     }
 
     pub(crate) fn save(dir: &OwnedFd, meta: &AccountMeta) -> Outcome<()> {
@@ -308,24 +336,50 @@ impl Daemon {
     /// registrations staging. An image that cannot be accounted for fails
     /// the check rather than counting as nothing.
     pub(crate) fn available_space(&self, staging: &StagingTotals) -> Outcome<u64> {
-        let free = self.host.free_bytes(&self.config.state_root)?;
+        // Commitments first, free space last: a home allocating blocks in
+        // between lowers both readings' sum, never raises it.
         let accounts = self.accounts()?;
         let committed = crate::capacity::unallocated_image_bytes(&accounts)?;
+        let free = self.host.free_bytes(&self.config.state_root)?;
         Ok(free
             .saturating_sub(self.config.free_space_reserve_bytes)
             .saturating_sub(committed)
             .saturating_sub(staging.bytes))
     }
 
+    /// The host keeps its physical free-space reserve. Starts check only
+    /// this; commitments (new images, growth, staging) are admitted against
+    /// [`Self::available_space`].
     pub(crate) fn check_space(&self) -> Outcome<()> {
-        let staging = self.budget();
-        if self.available_space(&staging)? == 0 {
+        let free = self.host.free_bytes(&self.config.state_root)?;
+        if free < self.config.free_space_reserve_bytes {
             return Err(fail(
                 Code::InsufficientSpace,
-                "the state root has no space beyond its reserve and what images and staging may still claim",
+                format!("{free} bytes free is below the reserve"),
             ));
         }
         Ok(())
+    }
+
+    /// Ask the capacity thread for a check now rather than at its next
+    /// interval.
+    pub(crate) fn wake_capacity(&self) {
+        *guard(&self.capacity_wake.0) = true;
+        self.capacity_wake.1.notify_all();
+    }
+
+    /// Wait up to `timeout` for [`Self::wake_capacity`].
+    pub fn wait_capacity(&self, timeout: Duration) {
+        let mut woken = guard(&self.capacity_wake.0);
+        if !*woken {
+            woken = self
+                .capacity_wake
+                .1
+                .wait_timeout(woken, timeout)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        *woken = false;
     }
 
     pub(crate) fn ensure_account(&self, service_id: &str, account_id: &str) -> Outcome<Reply> {

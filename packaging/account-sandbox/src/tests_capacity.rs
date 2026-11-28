@@ -74,19 +74,30 @@ fn the_sweep_grows_a_home_running_low() {
     // A start above the minimum does not wait for growth.
     f.start(Mode::Probe, 0).unwrap();
     assert!(f.grows().is_empty());
-    f.daemon.sweep_capacity(false);
+    f.daemon.sweep_capacity();
     assert_eq!((f.grows(), f.image_len()), (vec![8 * GIB], 8 * GIB));
     // Now roomy: the next sweep does not grow again.
-    f.daemon.sweep_capacity(false);
+    f.daemon.sweep_capacity();
     assert_eq!(f.grows().len(), 1);
 }
 
 #[test]
-fn a_start_into_a_nearly_full_home_grows_it_first() {
+fn a_start_into_a_nearly_full_home_is_refused_and_wakes_growth() {
     let f = fixture();
     f.set_home_usage(usage(REPORTED_4G, 1024));
+    let refused = f.start(Mode::Probe, 0).unwrap_err();
+    assert_eq!(refused.code, Code::InsufficientSpace);
+    assert!(
+        refused.message.contains("retry shortly"),
+        "{}",
+        refused.message
+    );
+    // The start grew nothing itself; it woke the capacity thread.
+    assert!(f.grows().is_empty());
+    f.daemon.wait_capacity(std::time::Duration::from_secs(5));
+    f.daemon.sweep_capacity();
     f.start(Mode::Probe, 0).unwrap();
-    assert_eq!((f.grows(), f.image_len()), (vec![8 * GIB], 8 * GIB));
+    assert_eq!(f.image_len(), 8 * GIB);
 }
 
 #[test]
@@ -94,11 +105,11 @@ fn a_full_home_at_its_maximum_refuses_every_start_but_logout() {
     let f = fixture_with(|config| config.home_image_max_bytes = config.home_image_bytes);
     f.sign_in(1);
     f.set_home_usage(usage(REPORTED_4G, 1024));
+    f.daemon.sweep_capacity();
     let refused = f.start(Mode::Runtime, 1).unwrap_err();
     assert_eq!(refused.code, Code::InsufficientSpace);
     assert!(
-        refused.message.contains("home storage is exhausted")
-            && refused.message.contains("maximum size"),
+        refused.message.contains("home storage is exhausted"),
         "{}",
         refused.message
     );
@@ -116,18 +127,14 @@ fn growth_charges_the_space_every_image_may_still_claim() {
     // The sparse 4 GiB image may still claim about 4 GiB and growth adds 4.
     f.host.free.store(reserve + 6 * GIB, Ordering::Relaxed);
     f.set_home_usage(usage(REPORTED_4G, 1024));
-    let refused = f.start(Mode::Probe, 0).unwrap_err();
-    assert!(
-        refused
-            .message
-            .contains("beyond the reserve and what images"),
-        "{}",
-        refused.message
-    );
+    f.daemon.sweep_capacity();
     assert_eq!(f.image_len(), 4 * GIB);
+    // Starts only need the physical reserve; this home is still too full.
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::InsufficientSpace);
     f.host.free.store(reserve + 9 * GIB, Ordering::Relaxed);
-    f.start(Mode::Probe, 0).unwrap();
+    f.daemon.sweep_capacity();
     assert_eq!(f.image_len(), 8 * GIB);
+    f.start(Mode::Probe, 0).unwrap();
 }
 
 #[test]
@@ -146,9 +153,10 @@ fn new_images_and_staging_share_the_budget_growth_draws_on() {
     let staged = f.daemon.reserve_staging(GIB).unwrap();
     f.host.free.store(reserve + 9 * GIB, Ordering::Relaxed);
     f.set_home_usage(usage(REPORTED_4G, 1024));
-    assert_eq!(code(f.start(Mode::Probe, 0)), Code::InsufficientSpace);
+    f.daemon.sweep_capacity();
+    assert_eq!(f.image_len(), 4 * GIB);
     drop(staged);
-    f.start(Mode::Probe, 0).unwrap();
+    f.daemon.sweep_capacity();
     assert_eq!(f.image_len(), 8 * GIB);
 }
 
@@ -167,18 +175,10 @@ fn a_small_legacy_home_needs_only_an_eighth_of_itself_free() {
 }
 
 #[test]
-fn a_start_does_not_wait_for_another_homes_resize() {
-    let f = fixture();
-    f.set_home_usage(usage(REPORTED_4G, 1024));
-    let busy = f.daemon.capacity_lock();
-    let refused = f.start(Mode::Probe, 0).unwrap_err();
-    assert!(
-        refused.message.contains("retry shortly"),
-        "{}",
-        refused.message
-    );
-    drop(busy);
-    f.start(Mode::Probe, 0).unwrap();
+fn a_full_home_needs_at_least_one_free_block_even_with_a_zero_floor() {
+    let f = fixture_with(|config| config.home_min_free_bytes = 0);
+    f.set_home_usage(usage(REPORTED_4G, 0));
+    assert_eq!(code(f.start(Mode::Probe, 0)), Code::InsufficientSpace);
 }
 
 #[test]
@@ -186,12 +186,7 @@ fn a_failed_reconcile_is_retried_and_an_interrupted_grow_finished() {
     let f = fixture();
     f.set_home_usage(usage(REPORTED_4G, 1024));
     f.host.state().grow_fails = true;
-    let refused = f.start(Mode::Probe, 0).unwrap_err();
-    assert!(
-        refused.message.contains("EXT4_IOC_RESIZE_FS failed"),
-        "{}",
-        refused.message
-    );
+    f.daemon.sweep_capacity();
     assert_eq!(f.image_len(), 4 * GIB);
     // The file was lengthened by something else and never resized: the
     // next check finishes it even without pressure.
@@ -203,7 +198,7 @@ fn a_failed_reconcile_is_retried_and_an_interrupted_grow_finished() {
         .set_len(8 * GIB)
         .unwrap();
     f.set_home_usage(usage(REPORTED_4G, 3 * GIB));
-    f.daemon.sweep_capacity(false);
+    f.daemon.sweep_capacity();
     assert_eq!((f.grows(), f.image_len()), (vec![8 * GIB], 8 * GIB));
 }
 
@@ -213,7 +208,7 @@ fn an_unmounted_home_is_left_alone() {
     f.set_home_usage(usage(REPORTED_4G, 1024));
     let home = f.daemon.paths(&f.key).home;
     f.host.state().mounted.remove(&home);
-    f.daemon.sweep_capacity(false);
+    f.daemon.sweep_capacity();
     assert!(f.grows().is_empty());
 }
 
@@ -233,11 +228,11 @@ fn logs_are_pruned_only_while_the_account_runs_no_unit() {
         .as_str()
         .unwrap()
         .to_owned();
-    f.daemon.sweep_capacity(true);
+    f.daemon.prune_logs();
     assert!(old.exists());
     f.host.finish(&unit, Some(0));
     f.wait_for("the probe to settle", |meta| meta.units.is_empty());
-    f.daemon.sweep_capacity(true);
+    f.daemon.prune_logs();
     assert!(!old.exists());
 }
 

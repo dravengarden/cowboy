@@ -124,15 +124,24 @@ fn serve(arguments: &[String]) -> Result<()> {
         });
     }
     {
-        // Grow homes running low and prune old logs on a thread of their
-        // own, so a slow resize never delays the unit sweep.
+        // Grow homes running low on a thread of their own, so a slow resize
+        // never delays the unit sweep; a start that finds its home low wakes
+        // it early.
         let daemon = Arc::clone(&daemon);
         std::thread::spawn(move || {
-            let mut sweeps = 0_u64;
             loop {
-                std::thread::sleep(capacity::CAPACITY_INTERVAL);
-                sweeps = sweeps.wrapping_add(1);
-                daemon.sweep_capacity(sweeps.is_multiple_of(capacity::LOG_PRUNE_EVERY));
+                daemon.wait_capacity(capacity::CAPACITY_INTERVAL);
+                daemon.sweep_capacity();
+            }
+        });
+    }
+    {
+        // Prune old agy logs hourly, apart from capacity checks.
+        let daemon = Arc::clone(&daemon);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(capacity::LOG_PRUNE_INTERVAL);
+                daemon.prune_logs();
             }
         });
     }

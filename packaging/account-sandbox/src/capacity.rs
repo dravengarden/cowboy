@@ -23,12 +23,12 @@
 //!
 //! The 30 s sweep runs on its own thread without account locks, so a slow
 //! resize never holds up fencing, stops or the unit sweep, and nothing that
-//! holds an account lock ever waits for the capacity lock: a start or a
-//! removal that finds it busy does not wait. A start (other than logout)
-//! grows synchronously only when its home is below its minimum free space
-//! (`home_min_free_bytes`, at most an eighth of a small home) and is refused
-//! with `insufficient_space` while it stays there, so `agy` never starts
-//! into a full disk.
+//! holds an account lock ever waits for the capacity lock or does resize
+//! I/O: a removal that finds the lock busy is refused and retried, and a
+//! start never grows a home. A start (other than logout) into a home below
+//! its minimum free space (`home_min_free_bytes`, at most an eighth of a
+//! small home, at least one block) is refused with `insufficient_space` and
+//! wakes the capacity thread, so `agy` never starts into a full disk.
 //!
 //! [`Host::reconcile_home`]: crate::host::Host::reconcile_home
 
@@ -55,8 +55,8 @@ const AGY_LOG_DIR: &str = "log";
 const MIB: u64 = 1024 * 1024;
 /// Interval of [`Daemon::sweep_capacity`].
 pub const CAPACITY_INTERVAL: Duration = Duration::from_secs(30);
-/// Sweeps between two log prunes (hourly).
-pub const LOG_PRUNE_EVERY: u64 = 120;
+/// Interval of [`Daemon::prune_logs`].
+pub const LOG_PRUNE_INTERVAL: Duration = Duration::from_hours(1);
 
 /// Entries of an account-controlled directory examined in one pass.
 const MAX_ENTRIES_PER_PASS: usize = 4096;
@@ -93,13 +93,6 @@ impl std::fmt::Display for Held {
             Self::Failed(error) => write!(f, "growing it failed: {error}"),
         }
     }
-}
-
-/// A home's usage after a capacity check, and why it did not grow when it
-/// needed to.
-pub(crate) struct Capacity {
-    pub usage: FsUsage,
-    pub held: Option<Held>,
 }
 
 /// Bytes the image files under `accounts` may still allocate: their length
@@ -169,16 +162,15 @@ impl Daemon {
 
     /// Holding the growth lock (`_capacity`): finish any interrupted grow of
     /// the mounted `home` of the account directory `dir`, then grow it when
-    /// it runs low. Only reading its usage can fail; a failed or held grow
-    /// is reported in [`Capacity::held`].
+    /// it runs low; why it did not grow when it needed to.
     pub(crate) fn check_home(
         &self,
         _capacity: &MutexGuard<'_, ()>,
         dir: &OwnedFd,
         home: &OwnedFd,
         key: &str,
-    ) -> Outcome<Capacity> {
-        let held = match self.grow_home(dir, home) {
+    ) -> Option<Held> {
+        match self.grow_home(dir, home) {
             Ok(Ok(Some((before, after)))) => {
                 eprintln!(
                     "cowboy-account-sandbox: grew account {key} home image from {before} to {after} bytes"
@@ -188,9 +180,7 @@ impl Daemon {
             Ok(Ok(None)) => None,
             Ok(Err(held)) => Some(held),
             Err(error) => Some(Held::Failed(format!("{error:#}"))),
-        };
-        let usage = self.host.filesystem_usage(home.as_fd())?;
-        Ok(Capacity { usage, held })
+        }
     }
 
     /// Reconcile, then lengthen and reconcile again when the home runs low:
@@ -227,71 +217,52 @@ impl Daemon {
             4096,
         )
         .context("lengthen home image")?;
-        image.sync_all().context("sync home image")?;
         drop(staging);
+        image.sync_all().context("sync home image")?;
         self.host.reconcile_home(&image, home.as_fd())?;
         Ok(Ok(Some((file_len, target))))
     }
 
     /// The free space a home of `size_bytes` must keep for a start: the
-    /// configured minimum, at most an eighth of a small home.
+    /// configured minimum, at most an eighth of a small home, and never less
+    /// than one block.
     fn min_free_bytes(&self, size_bytes: u64) -> u64 {
-        self.config.home_min_free_bytes.min(size_bytes / 8)
+        self.config
+            .home_min_free_bytes
+            .min(size_bytes / 8)
+            .max(4096)
     }
 
     /// Refuse a unit start into a home that keeps less than its minimum free
-    /// space, growing it first when it is that low and no other growth runs.
-    /// Logout is never refused or delayed: it must always be able to sign
-    /// the account out.
-    pub(crate) fn admit_home_capacity(
-        &self,
-        dir: &OwnedFd,
-        home: &OwnedFd,
-        key: &str,
-        mode: Mode,
-    ) -> Outcome<()> {
+    /// space, and wake the capacity thread to grow it. A start never grows a
+    /// home itself: it holds the account lock, which resize I/O must never
+    /// delay. Logout is never refused: it must always be able to sign the
+    /// account out.
+    pub(crate) fn admit_home_capacity(&self, home: &OwnedFd, mode: Mode) -> Outcome<()> {
         if mode == Mode::Logout {
             return Ok(());
         }
-        let roomy = |usage: FsUsage| {
-            usage.free_bytes >= self.min_free_bytes(usage.size_bytes) && usage.free_inodes > 0
-        };
         let usage = self.host.filesystem_usage(home.as_fd())?;
-        if roomy(usage) {
+        if needs_growth(usage, self.config.home_grow_free_bytes) {
+            self.wake_capacity();
+        }
+        if usage.free_bytes >= self.min_free_bytes(usage.size_bytes) && usage.free_inodes > 0 {
             return Ok(());
         }
-        let exhausted = |usage: FsUsage, reason: String| {
-            fail(
-                Code::InsufficientSpace,
-                format!(
-                    "account home storage is exhausted: {} of {} bytes and {} inodes free; {reason}",
-                    usage.free_bytes, usage.size_bytes, usage.free_inodes
-                ),
-            )
-        };
-        // Holding the account lock, never wait for another home's resize.
-        let Some(capacity) = self.try_capacity_lock() else {
-            return Err(exhausted(
-                usage,
-                "another home is being resized, retry shortly".into(),
-            ));
-        };
-        let Capacity { usage, held } = self.check_home(&capacity, dir, home, key)?;
-        if roomy(usage) {
-            return Ok(());
-        }
-        Err(exhausted(
-            usage,
-            held.map_or_else(|| "it did not grow".to_owned(), |held| held.to_string()),
+        Err(fail(
+            Code::InsufficientSpace,
+            format!(
+                "account home storage is exhausted: {} of {} bytes and {} inodes free; it grows within seconds unless it is at its maximum size or the host lacks space, so retry shortly",
+                usage.free_bytes, usage.size_bytes, usage.free_inodes
+            ),
         ))
     }
 
     /// Check every mounted account home (on the capacity thread, without
-    /// account locks) and, when `prune_logs`, remove old `agy` logs of each
-    /// account that runs no unit. Each home is checked holding the growth
-    /// lock from before it is opened until it is closed, so a removal never
-    /// finds it pinned.
-    pub fn sweep_capacity(&self, prune_logs: bool) {
+    /// account locks). Each home is checked holding the growth lock from
+    /// before it is opened until it is closed, so a removal never finds it
+    /// pinned.
+    pub fn sweep_capacity(&self) {
         static REPORTED: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
         let Ok(accounts) = self.accounts() else {
             return;
@@ -316,7 +287,7 @@ impl Daemon {
                 (|| -> Outcome<Option<Held>> {
                     let dir = safefs::open_dir(accounts.as_fd(), &key, STRICT)?;
                     let home = safefs::open_dir(dir.as_fd(), "home", safefs::MOUNT_ROOT)?;
-                    Ok(self.check_home(&capacity, &dir, &home, &key)?.held)
+                    Ok(self.check_home(&capacity, &dir, &home, &key))
                 })()
             };
             seen.insert(key.clone());
@@ -340,13 +311,32 @@ impl Daemon {
                     }
                 }
             }
-            if prune_logs && self.config.agy_log_retention_days > 0 {
-                self.prune_account_logs(&key);
-            }
         }
         // Forget accounts that were removed or unmounted.
         if let Some(reported) = guard(&REPORTED).as_mut() {
             reported.retain(|key, _| seen.contains(key));
+        }
+    }
+
+    /// Remove old `agy` logs of every account that runs no unit (on the log
+    /// thread, apart from capacity checks). An account whose lock is busy is
+    /// skipped until the next pass.
+    pub fn prune_logs(&self) {
+        if self.config.agy_log_retention_days == 0 {
+            return;
+        }
+        let Ok(accounts) = self.accounts() else {
+            return;
+        };
+        for key in safefs::list(accounts.as_fd()).unwrap_or_default() {
+            if ids::validate_key(&key).is_ok()
+                && self
+                    .host
+                    .is_mounted(&self.paths(&key).home)
+                    .unwrap_or(false)
+            {
+                self.prune_account_logs(&key);
+            }
         }
     }
 
@@ -355,13 +345,15 @@ impl Daemon {
     /// log by name.
     fn prune_account_logs(&self, key: &str) {
         let retention = Duration::from_hours(self.config.agy_log_retention_days * 24);
-        let result = self.with_account(key, |dir, meta| {
+        let Some(result) = self.try_with_account(key, |dir, meta| {
             if !meta.units.is_empty() || self.any_live_unit(key)? {
                 return Ok((0, 0));
             }
             let home = self.open_home(dir, key)?;
             Ok(prune_agy_logs(&home, retention, SystemTime::now())?)
-        });
+        }) else {
+            return;
+        };
         match result {
             Ok((0, _)) => {}
             Ok((files, bytes)) => eprintln!(

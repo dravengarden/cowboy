@@ -295,13 +295,15 @@ pub fn list(dir: BorrowedFd<'_>) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// At most `max` entry names of the directory `dir` (without `.` and `..`
-/// and skipping names that are not UTF-8), in directory order: a bounded
-/// read of a directory an account controls.
+/// The entry names among the first `max` entries of the directory `dir`
+/// (besides `.` and `..`; names that are not UTF-8 are skipped but
+/// counted), in directory order: a bounded read of a directory an account
+/// controls.
 pub fn list_bounded(dir: BorrowedFd<'_>, max: usize) -> Result<Vec<String>> {
     let mut names = Vec::new();
-    for entry in rustix::fs::Dir::read_from(dir)? {
-        if names.len() >= max {
+    for (index, entry) in rustix::fs::Dir::read_from(dir)?.enumerate() {
+        // Every raw entry counts, also names that are skipped.
+        if index >= max.saturating_add(2) {
             break;
         }
         let entry = entry?;

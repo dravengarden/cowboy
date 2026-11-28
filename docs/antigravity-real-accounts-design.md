@@ -1106,28 +1106,31 @@ rather than a fixed size (`packaging/account-sandbox/src/capacity.rs`):
   external tool resolves a path in between. Every check reconciles device
   and filesystem first, so a grow interrupted after lengthening the file is
   finished by the next check whatever the pressure.
-- One space budget covers the state root: free space beyond
+- One space budget covers commitments of the state root: free space beyond
   `free_space_reserve_bytes`, minus every image's unallocated sparse length
-  and registrations staging. A new image, a growth and a staging
-  registration are each admitted and committed under the budget's lock, so
-  none spends headroom another committed; an image that cannot be accounted
-  for fails the check instead of counting as nothing.
+  (measured before the free space, so concurrent writes only make it more
+  conservative) and registrations staging. A new image, a growth and a
+  staging registration are each admitted and committed under the budget's
+  lock, so none spends headroom another committed; an image that cannot be
+  accounted for fails the check instead of counting as nothing. Starts are
+  not commitments: they keep the physical reserve check.
 - A capacity thread of its own checks every mounted home every 30 s without
   account locks, holding the growth lock from before it opens a home until
-  it closes it; `remove_account` needs that lock to unmount. Nothing that
-  holds an account lock waits for it: a removal that finds it busy is
-  refused (`conflict`) and retried, so fencing and stops never wait for a
-  resize. A start other than `logout` grows synchronously only when its
-  home keeps less than `home_min_free_bytes` (256 MiB, at most an eighth of
-  a small legacy home) and the growth lock is free, and is refused with
-  `insufficient_space` ("account home storage is exhausted", with the
-  reason) while it stays there, so `agy` never starts into a full disk.
-  Logout is never checked: signing out stays possible on a full home.
+  it closes it; `remove_account` needs that lock to unmount and is refused
+  (`conflict`, retried) when it is busy. Nothing that holds an account lock
+  waits for that lock or does resize I/O: a start never grows a home. A
+  start other than `logout` into a home keeping less than
+  `home_min_free_bytes` (256 MiB, at most an eighth of a small legacy home,
+  at least one block) is refused with `insufficient_space` ("account home
+  storage is exhausted ... retry shortly") and wakes the capacity thread at
+  once, so `agy` never starts into a full disk and the retry finds the home
+  grown. Logout is never checked: signing out stays possible on a full home.
 - `agy` log files (`~/.gemini/antigravity-cli/log`) older than
   `agy_log_retention_days` (14) are removed hourly, only while the account
   runs no unit (neither recorded nor live in systemd; a live `agy` reopens
-  its log by name), under the account lock, at most 4,096 entries per pass,
-  opened beneath the home without following symlinks.
+  its log by name), on a thread of their own that skips an account whose
+  lock is busy, at most 4,096 directory entries per pass, opened beneath the
+  home without following symlinks.
 
 **Not in this revision.** Conversations no recoverable Cowboy session
 references (sessions purged from Trash, conversations of failed starts:
