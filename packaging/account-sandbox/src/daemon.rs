@@ -432,13 +432,19 @@ impl Daemon {
         // means stalled storage and the provisioning is refused instead.
         let deadline = Instant::now() + BUDGET_WAIT;
         let staging = loop {
-            match self.staging.try_lock() {
-                Ok(staging) => break staging,
-                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
-                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
+            let acquired = match self.staging.try_lock() {
+                Ok(staging) => Some(staging),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+            };
+            let now = Instant::now();
+            match acquired {
+                Some(staging) if now <= deadline => break staging,
+                None if now < deadline => {
+                    let left = deadline.saturating_duration_since(now);
+                    std::thread::sleep(left.min(Duration::from_millis(10)));
                 }
-                Err(std::sync::TryLockError::WouldBlock) => {
+                _ => {
                     return Err(fail(
                         Code::Conflict,
                         "the space budget stayed busy; retry the provisioning",
@@ -459,8 +465,14 @@ impl Daemon {
         drop(file);
         drop(staging);
         let paths = self.paths(key);
-        self.host
-            .format_image(&paths.image, self.config.home_image_inodes, meta.owner())?;
+        if let Err(error) =
+            self.host
+                .format_image(&paths.image, self.config.home_image_inodes, meta.owner())
+        {
+            // An unfinished image must not keep its space commitment.
+            let _ = safefs::remove_file(dir.as_fd(), "home.img");
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -1124,6 +1136,10 @@ impl Daemon {
             let result = self.with_account(&key, |dir, meta| {
                 if meta.image_ready {
                     self.mount_home(dir, &key, meta)?;
+                } else {
+                    // An image a crash left unfinished is recreated on the
+                    // next provisioning; it must not keep its commitment.
+                    safefs::remove_file(dir.as_fd(), "home.img")?;
                 }
                 for record in meta.units.clone() {
                     self.stop_and_confirm(dir, meta, &record.unit)?;

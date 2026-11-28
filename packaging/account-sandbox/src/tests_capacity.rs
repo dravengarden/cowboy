@@ -304,3 +304,23 @@ fn a_non_regular_home_image_fails_the_budget() {
     let accounts = f.daemon.accounts().unwrap();
     assert!(crate::capacity::unallocated_image_bytes(&accounts).is_err());
 }
+
+#[test]
+fn reconciliation_drops_an_unfinished_image_and_its_commitment() {
+    let f = fixture();
+    let dir = f.root.join("state/accounts").join(&f.key);
+    let meta_path = dir.join("meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    meta["image_ready"] = serde_json::Value::Bool(false);
+    std::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    let home = f.daemon.paths(&f.key).home;
+    f.host.state().mounted.remove(&home);
+    f.daemon.reconcile().unwrap();
+    assert!(!dir.join("home.img").exists());
+    let accounts = f.daemon.accounts().unwrap();
+    assert_eq!(
+        crate::capacity::unallocated_image_bytes(&accounts).unwrap(),
+        0
+    );
+}
