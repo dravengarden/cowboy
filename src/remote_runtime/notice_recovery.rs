@@ -82,6 +82,53 @@ pub(super) fn take_acked_command(
     accepted: bool,
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
+    // Correlate per-attempt `EnsureSession` ACKs against the currently queued
+    // attempt under `ensure:<session_id>` so a stale rejection cannot swallow a
+    // newer queued retry (R24-M2). Legacy brokers without per-attempt IDs still
+    // send `ensure:<session_id>`, which matches only if the queued entry has
+    // already been sent.
+    let ensure_key = format!("ensure:{session_id}");
+    let ensure_attempt_prefix = format!("{ensure_key}:");
+    if command_id == ensure_key || command_id.starts_with(&ensure_attempt_prefix) {
+        let mut pending = shared.pending.lock();
+        let mut sent = shared.sent.lock();
+        match pending.get(&ensure_key) {
+            Some(CoreCommand::EnsureSession {
+                command_id: expected,
+                ..
+            }) => {
+                let matches = if command_id.starts_with(&ensure_attempt_prefix) {
+                    expected.as_deref() == Some(command_id)
+                } else {
+                    expected.is_none()
+                        || sent.contains(&ensure_key)
+                        || !shared.attempted_sends.lock().contains(&ensure_key)
+                };
+                if !matches {
+                    tracing::debug!(
+                        session = session_id,
+                        %command_id,
+                        expected = ?expected,
+                        "ignoring stale EnsureSession acknowledgement for superseded attempt"
+                    );
+                    return None;
+                }
+                let command = pending.remove(&ensure_key);
+                sent.remove(&ensure_key);
+                drop(sent);
+                drop(pending);
+                clear_acked_command(shared, &ensure_key);
+                return Some((command, false));
+            }
+            Some(_) => {}
+            None => {
+                drop(sent);
+                drop(pending);
+                clear_acked_command(shared, &ensure_key);
+                return Some((None, false));
+            }
+        }
+    }
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
     let ambiguous_entry = {
         let pending = shared.pending.lock();
@@ -1250,6 +1297,17 @@ fn next_id_shared(shared: &Shared, prefix: &str) -> String {
     format!("{prefix}-{n}")
 }
 
+pub(super) fn ensure_command_shared(shared: &Shared, session: StartSession) -> CoreCommand {
+    let seq = shared
+        .command_counter
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let command_id = Some(format!("ensure:{}:{seq}", session.session_id));
+    CoreCommand::EnsureSession {
+        session,
+        command_id,
+    }
+}
+
 fn reset_shared(shared: &Shared, mut session: StartSession, fence_id: Option<u64>) {
     session.adopt_only = true;
     if session.generation.is_empty() {
@@ -1277,7 +1335,7 @@ fn reset_shared(shared: &Shared, mut session: StartSession, fence_id: Option<u64
         .lock()
         .insert(session_id.clone(), session.clone());
     let ensure_key = format!("ensure:{session_id}");
-    queue_shared(shared, ensure_key, CoreCommand::EnsureSession { session });
+    queue_shared(shared, ensure_key, ensure_command_shared(shared, session));
     if same_provider_release {
         super::queue_persisted_config_for_session(shared, &session_id, true);
     }
@@ -1564,6 +1622,95 @@ mod tests {
         assert!(
             v4 > v3,
             "versions must remain strictly monotonic even after draining"
+        );
+    }
+
+    #[tokio::test]
+    async fn r24_stale_ensure_attempt_ack_does_not_swallow_newer_queued_ensure() {
+        let hub = crate::core::Hub::new();
+        let runtime = crate::remote_runtime::RemoteRuntime::for_test(hub, Vec::new());
+        let session = crate::runtime_wire::StartSession {
+            session_id: "s-r24-m2".into(),
+            provider: "codex".into(),
+            provider_version: "1.0.0".into(),
+            provider_generation_digest: "sha256:test".into(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".into(),
+            agent_session_id: None,
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "gen-1".into(),
+            fallback_for: None,
+            adopt_only: false,
+            execution_binding: None,
+            extensions: None,
+            mcp_plan: None,
+            native_fork: None,
+        };
+        let first = ensure_command_shared(&runtime.shared, session.clone());
+        let first_id = match &first {
+            CoreCommand::EnsureSession {
+                command_id: Some(id),
+                ..
+            } => id.clone(),
+            _ => panic!("expected attempt id"),
+        };
+        let second = ensure_command_shared(&runtime.shared, session);
+        let second_id = match &second {
+            CoreCommand::EnsureSession {
+                command_id: Some(id),
+                ..
+            } => id.clone(),
+            _ => panic!("expected second attempt id"),
+        };
+        assert_ne!(first_id, second_id);
+
+        // Queue second attempt (superseding first) and simulate stale rejection of first.
+        runtime
+            .shared
+            .pending
+            .lock()
+            .insert("ensure:s-r24-m2".into(), second);
+        runtime.shared.sent.lock().insert("ensure:s-r24-m2".into());
+        assert!(
+            take_acked_command(
+                &runtime.shared,
+                "s-r24-m2",
+                &first_id,
+                false,
+                Some("drain contention"),
+            )
+            .is_none(),
+            "stale EnsureSession rejection must be ignored when a newer attempt is queued (R24-M2)"
+        );
+        assert!(
+            runtime
+                .shared
+                .pending
+                .lock()
+                .contains_key("ensure:s-r24-m2"),
+            "newer EnsureSession must remain pending after stale rejection"
+        );
+
+        // Matching rejection of the current attempt DOES retire it.
+        let retired = take_acked_command(
+            &runtime.shared,
+            "s-r24-m2",
+            &second_id,
+            false,
+            Some("drain contention"),
+        );
+        assert!(retired.is_some());
+        assert!(
+            !runtime
+                .shared
+                .pending
+                .lock()
+                .contains_key("ensure:s-r24-m2")
         );
     }
 }

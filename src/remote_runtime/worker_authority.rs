@@ -213,7 +213,7 @@ mod tests {
         let stale = commands(worker("/old.json", None), "/new.json");
         assert!(resets(&stale));
         assert!(stale.iter().any(|command| matches!(command,
-            CoreCommand::EnsureSession { session }
+            CoreCommand::EnsureSession { session, .. }
                 if session.adopt_only && session.mcp_plan == declaration("/new.json").mcp_plan)));
         assert!(!resets(&commands(worker("/new.json", None), "/new.json")));
         // A running turn is never interrupted to refresh its plan, nor sent a

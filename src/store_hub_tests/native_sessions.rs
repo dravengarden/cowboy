@@ -527,6 +527,7 @@ async fn transport_contract(
             .send_native_test(
                 &mut bytes,
                 CoreCommand::EnsureSession {
+                    command_id: None,
                     session: session.clone()
                 }
             )
@@ -545,6 +546,7 @@ async fn transport_contract(
             .send_native_test(
                 &mut bytes,
                 CoreCommand::EnsureSession {
+                    command_id: None,
                     session: session.clone()
                 }
             )
@@ -563,6 +565,7 @@ async fn transport_contract(
                 .send_native_test(
                     &mut bytes,
                     CoreCommand::EnsureSession {
+                        command_id: None,
                         session: session.clone()
                     }
                 )
@@ -581,7 +584,13 @@ async fn transport_contract(
     bytes.clear();
     assert!(
         !runtime
-            .send_native_test(&mut bytes, CoreCommand::EnsureSession { session })
+            .send_native_test(
+                &mut bytes,
+                CoreCommand::EnsureSession {
+                    session,
+                    command_id: None
+                }
+            )
             .await
             .unwrap()
     );
@@ -631,6 +640,7 @@ async fn stale_placement_contract(
                 .send_native_test(
                     &mut bytes,
                     crate::runtime_wire::CoreCommand::EnsureSession {
+                        command_id: None,
                         session: stale.clone()
                     }
                 )
@@ -698,7 +708,10 @@ async fn transport_failure(
         runtime
             .send_native_test(
                 &mut writer,
-                crate::runtime_wire::CoreCommand::EnsureSession { session }
+                crate::runtime_wire::CoreCommand::EnsureSession {
+                    session,
+                    command_id: None
+                }
             )
             .await
             .is_err(),

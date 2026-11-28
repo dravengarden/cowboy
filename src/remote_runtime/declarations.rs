@@ -1,6 +1,6 @@
 //! The adopt-only declarations the Controller caches from worker reports and
 //! re-sends on every Machine (re)connect.
-use super::{CoreCommand, Shared, StartSession, WorkerSnapshot, snapshot};
+use super::{Shared, StartSession, WorkerSnapshot, snapshot};
 
 /// Cache the worker's launch as its adopt-only declaration. Returns that
 /// declaration when the Machine needs it sent again (see below).
@@ -61,7 +61,10 @@ pub(super) fn resend_declaration(shared: &Shared, session: StartSession, epoch: 
         .lock()
         .insert(session.session_id.clone(), epoch.to_owned());
     shared.sent.lock().remove(&key);
-    pending.insert(key, CoreCommand::EnsureSession { session });
+    pending.insert(
+        key,
+        super::notice_recovery::ensure_command_shared(shared, session),
+    );
     drop(pending);
     drop(resetting);
     let _ = shared.notify.send(());

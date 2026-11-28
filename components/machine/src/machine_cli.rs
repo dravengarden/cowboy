@@ -3711,7 +3711,11 @@ fn reject_untrusted_workspace(
     execution: Option<&execution::Manager>,
 ) -> Option<crate::runtime_wire::Frame> {
     let crate::runtime_wire::Frame::CoreCommand {
-        command: crate::runtime_wire::CoreCommand::EnsureSession { session },
+        command:
+            crate::runtime_wire::CoreCommand::EnsureSession {
+                session,
+                command_id: None,
+            },
     } = frame
     else {
         return None;
@@ -4676,6 +4680,7 @@ mod tests {
             crate::session_workspace::WorktreeRoots::moved(root.join("scratch"), managed.clone());
         let ensure = |cwd: String| Frame::CoreCommand {
             command: CoreCommand::EnsureSession {
+                command_id: None,
                 session: StartSession {
                     session_id: "session".to_owned(),
                     provider: "codex".to_owned(),

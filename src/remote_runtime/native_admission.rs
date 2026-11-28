@@ -321,7 +321,7 @@ fn warn_declined_launch(meta: &crate::model::SessionMeta, worker: &WorkerSnapsho
 
 fn launch(command: &CoreCommand) -> Option<&StartSession> {
     match command {
-        CoreCommand::EnsureSession { session } => Some(session),
+        CoreCommand::EnsureSession { session, .. } => Some(session),
         CoreCommand::RecoverExecutionSession { session, .. }
         | CoreCommand::ReadmitAccountSession { session, .. } => Some(session),
         _ => None,
@@ -378,6 +378,7 @@ pub(super) fn declaration_denied(shared: &Shared, session: &StartSession) {
         &shared.hub,
         &CoreCommand::EnsureSession {
             session: session.clone(),
+            command_id: None,
         },
     );
     if mcp_deferred {

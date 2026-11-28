@@ -568,7 +568,10 @@ impl RemoteRuntime {
                 session.adopt_only = true;
                 let mut pending = self.shared.pending.lock();
                 if !pending.contains_key(&key) {
-                    pending.insert(key, CoreCommand::EnsureSession { session });
+                    pending.insert(
+                        key,
+                        notice_recovery::ensure_command_shared(&self.shared, session),
+                    );
                     let _ = self.shared.notify.send(());
                 }
             }
@@ -853,7 +856,10 @@ impl RemoteRuntime {
         // racing that command would try to adopt the old worker with the new
         // execution binding before the replacement has acknowledged readiness.
         if !self.shared.resetting.lock().contains(&session_id) {
-            self.queue(key, CoreCommand::EnsureSession { session });
+            self.queue(
+                key,
+                notice_recovery::ensure_command_shared(&self.shared, session),
+            );
         }
         // Queue session-owned preferences before any prompt. Validate them
         // against a live or persisted options snapshot when one exists; a
@@ -1412,7 +1418,10 @@ impl RemoteRuntime {
         // Declared adopt-only before the reset stop, which waits with it for its MCP
         // plan (reset_admission), so Machine relaunches from this specification.
         let ensure_key = format!("ensure:{session_id}");
-        self.queue(ensure_key, CoreCommand::EnsureSession { session });
+        self.queue(
+            ensure_key,
+            notice_recovery::ensure_command_shared(&self.shared, session),
+        );
         // Cross-version reloads must wait for the replacement's own option
         // snapshot. Values accepted by the old release may have been removed.
         if same_provider_release {
@@ -1886,11 +1895,18 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
                 "Machine runtime upgrade required for account-scoped Provider maintenance"
             );
             if let Some(session_id) = command.session_id() {
+                let ack_id = match &command {
+                    CoreCommand::EnsureSession {
+                        command_id: Some(id),
+                        ..
+                    } => id.clone(),
+                    _ => key,
+                };
                 handle_frame(
                     shared,
                     Frame::CommandAck {
                         session_id: session_id.to_owned(),
-                        command_id: key,
+                        command_id: ack_id,
                         accepted: false,
                         reason: Some(
                             "Machine runtime upgrade required for the selected subscription"
@@ -1987,7 +2003,7 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
         return false;
     }
     let planned = match command {
-        CoreCommand::EnsureSession { session } => session.mcp_plan.is_some(),
+        CoreCommand::EnsureSession { session, .. } => session.mcp_plan.is_some(),
         CoreCommand::RecoverExecutionSession { session, .. }
         | CoreCommand::ReadmitAccountSession { session, .. } => session.mcp_plan.is_some(),
         _ => false,
@@ -1999,7 +2015,7 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
         return false;
     }
     let forking = match command {
-        CoreCommand::EnsureSession { session } => session.native_fork.is_some(),
+        CoreCommand::EnsureSession { session, .. } => session.native_fork.is_some(),
         CoreCommand::RecoverExecutionSession { session, .. } => session.native_fork.is_some(),
         _ => false,
     };
@@ -2021,7 +2037,7 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
             account_id: Some(_),
             ..
         } => false,
-        CoreCommand::EnsureSession { session } => session.provider_account_id.is_default(),
+        CoreCommand::EnsureSession { session, .. } => session.provider_account_id.is_default(),
         CoreCommand::RecoverExecutionSession { session, .. } => {
             session.provider_account_id.is_default()
         }
@@ -2056,6 +2072,7 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin + Send>(
             shared,
             &CoreCommand::EnsureSession {
                 session: session.clone(),
+                command_id: None,
             },
         ) {
             shared.hub.broadcast_error(
@@ -2065,8 +2082,13 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin + Send>(
             continue;
         }
         let declared = session.clone();
-        if native_admission::send(shared, writer, None, CoreCommand::EnsureSession { session })
-            .await?
+        if native_admission::send(
+            shared,
+            writer,
+            None,
+            notice_recovery::ensure_command_shared(shared, session),
+        )
+        .await?
             != native_admission::SendOutcome::Sent
         {
             native_admission::declaration_denied(shared, &declared);
@@ -2113,7 +2135,7 @@ fn acknowledge_pending_ensure_from_snapshot(shared: &Shared, worker: &WorkerSnap
     let key = format!("ensure:{}", worker.session_id);
     let removed = {
         let mut pending = shared.pending.lock();
-        let Some(CoreCommand::EnsureSession { session }) = pending.get(&key) else {
+        let Some(CoreCommand::EnsureSession { session, .. }) = pending.get(&key) else {
             return;
         };
         if !snapshot_satisfies_ensure(worker, session) {
@@ -3031,7 +3053,11 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
         .lock()
         .insert(session_id.to_owned(), session.clone());
     let ensure_key = format!("ensure:{session_id}");
-    insert_pending(shared, ensure_key, CoreCommand::EnsureSession { session });
+    insert_pending(
+        shared,
+        ensure_key,
+        notice_recovery::ensure_command_shared(shared, session),
+    );
     queue_persisted_config_for_session(shared, session_id, true);
     let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
     let command_id = format!("reset-{}-{value}", std::process::id());
@@ -3204,7 +3230,10 @@ mod tests {
                 .insert("s".into(), launch.clone());
             runtime.queue(
                 "ensure:s".into(),
-                CoreCommand::EnsureSession { session: launch },
+                CoreCommand::EnsureSession {
+                    session: launch,
+                    command_id: None,
+                },
             );
             runtime.set_config_option("s", "model", serde_json::json!("different"));
             runtime.prompt("s", vec![], None);
@@ -4125,6 +4154,7 @@ mod tests {
                 &mut output,
                 None,
                 CoreCommand::EnsureSession {
+                    command_id: None,
                     session: launch.clone()
                 }
             )
@@ -4145,7 +4175,10 @@ mod tests {
                 &runtime.shared,
                 &mut output,
                 None,
-                CoreCommand::EnsureSession { session: launch }
+                CoreCommand::EnsureSession {
+                    session: launch,
+                    command_id: None
+                }
             )
             .await
             .unwrap(),
@@ -4183,6 +4216,7 @@ mod tests {
         assert!(command_supported(
             &runtime.shared,
             &CoreCommand::EnsureSession {
+                command_id: None,
                 session: launch.clone()
             }
         ));
@@ -4197,6 +4231,7 @@ mod tests {
         assert!(!command_supported(
             &runtime.shared,
             &CoreCommand::EnsureSession {
+                command_id: None,
                 session: launch.clone()
             }
         ));
@@ -4204,6 +4239,7 @@ mod tests {
         assert!(command_supported(
             &runtime.shared,
             &CoreCommand::EnsureSession {
+                command_id: None,
                 session: launch.clone()
             }
         ));
@@ -4293,7 +4329,7 @@ mod tests {
             runtime.revive(launch);
             assert_eq!(hub.status("s"), Some(Status::Starting));
             assert!(runtime.pending_for_test().iter().any(|command| {
-                matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+                matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
             }));
 
             let frame = if accepted_launch {
@@ -4785,7 +4821,7 @@ mod tests {
         .expect("draining snapshot");
         assert!(matches!(
             runtime.shared.pending.lock().get("ensure:s"),
-            Some(CoreCommand::EnsureSession { session })
+            Some(CoreCommand::EnsureSession { session, .. })
                 if session.adopt_only && session.extensions == declared.extensions
         ));
         // The Machine acknowledges with the worker's own report, which still
@@ -4823,6 +4859,7 @@ mod tests {
         runtime.queue(
             "ensure:named".into(),
             CoreCommand::EnsureSession {
+                command_id: None,
                 session: session.clone(),
             },
         );
@@ -4858,12 +4895,16 @@ mod tests {
         runtime.queue(
             "ensure:named".into(),
             CoreCommand::EnsureSession {
+                command_id: None,
                 session: session.clone(),
             },
         );
         assert!(command_supported(
             &runtime.shared,
-            &CoreCommand::EnsureSession { session }
+            &CoreCommand::EnsureSession {
+                session,
+                command_id: None
+            }
         ));
         assert!(pending_wire_commands(&runtime).await.is_empty());
     }
@@ -5200,7 +5241,9 @@ mod tests {
         runtime.refresh_pending_delivery();
         let probe = pending_wire_commands(&runtime).await;
         assert_eq!(probe.len(), 1);
-        assert!(matches!(&probe[0], CoreCommand::EnsureSession { session } if session.adopt_only));
+        assert!(
+            matches!(&probe[0], CoreCommand::EnsureSession { session, .. } if session.adopt_only)
+        );
         runtime.refresh_pending_delivery();
         assert!(pending_wire_commands(&runtime).await.is_empty());
         let mut worker = snapshot("s");
@@ -5908,7 +5951,7 @@ mod tests {
         .expect("retired snapshot");
 
         assert!(runtime.pending_for_test().iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+            matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
         }));
 
         retired.worker_epoch = "epoch-replacement".to_owned();
@@ -5931,7 +5974,7 @@ mod tests {
         .expect("replacement snapshot");
 
         assert!(!runtime.pending_for_test().iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+            matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
         }));
     }
 
@@ -6035,7 +6078,7 @@ mod tests {
         .expect("busy snapshot");
 
         assert!(!runtime.pending_for_test().iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+            matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
         }));
     }
 
@@ -6453,7 +6496,7 @@ mod tests {
             let pending = runtime.shared.pending.lock();
             assert!(pending
                 .values()
-                .any(|command| matches!(command, CoreCommand::EnsureSession { session } if session.agent_session_id.is_none() && session.adopt_only)));
+                .any(|command| matches!(command, CoreCommand::EnsureSession { session, .. } if session.agent_session_id.is_none() && session.adopt_only)));
             assert!(pending.values().any(
                 |command| matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
             ));
@@ -7119,7 +7162,7 @@ mod tests {
         assert!(pending.values().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session }
+                CoreCommand::EnsureSession { session, .. }
                     if session.cwd == "/new/checkout"
                         && session.agent_session_id.as_deref() == Some("codex-thread-1")
             )
@@ -7160,7 +7203,7 @@ mod tests {
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| matches!(
             command,
-            CoreCommand::EnsureSession { session }
+            CoreCommand::EnsureSession { session, .. }
                 if session.agent_session_id.as_deref() == Some("agent-1")
         )));
         assert!(pending.iter().any(|command| matches!(

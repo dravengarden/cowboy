@@ -246,20 +246,24 @@ pub(super) fn acknowledge(
                     .is_none_or(|machine| info.meta.machine_id == machine)
             {
                 let mut workers = shared.workers.lock();
-                let has_verified_newer_owner = workers.get(session_id).is_some_and(|worker| {
+                // QuiesceAccountSession stops every worker for `account_id` on
+                // this Machine in TCP frame order. Preserve a cached worker only
+                // with verified launch evidence of a different account; an
+                // auth-generation mismatch on the same account can describe an
+                // older cached worker and must still retire (R24-M3).
+                let has_verified_successor = workers.get(session_id).is_some_and(|worker| {
                     worker.has_connected_owner()
-                        && worker.launch.as_ref().is_some_and(|launch| {
-                            launch.provider_account_id != *account_id
-                                || launch.provider_auth_generation
-                                    != info.meta.provider_auth_generation
-                        })
+                        && worker
+                            .launch
+                            .as_ref()
+                            .is_some_and(|launch| launch.provider_account_id != *account_id)
                 });
-                if !has_verified_newer_owner {
+                if !has_verified_successor {
                     workers.remove(session_id);
                     drop(workers);
                     shared.crashed_worker_sightings.lock().remove(session_id);
                     shared.draining_crashed_epochs.lock().remove(session_id);
-                    if info.meta.status == crate::core::Status::Crashed {
+                    if info.meta.status != crate::core::Status::Exited {
                         shared.hub.set_status(
                             session_id,
                             crate::core::Status::Exited,
@@ -503,6 +507,67 @@ mod tests {
             hub.session_info("s-quiesce-stale").unwrap().meta.status,
             crate::core::Status::Exited,
             "confirmed quiesce must project Exited even when disabled account filters snapshots (R23-M3)"
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_quiesce_ack_projects_exited_from_running_and_retires_older_auth_gen_worker() {
+        let id = account();
+        let mut meta: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+            "id": "s-quiesce-live",
+            "provider": "claude-code",
+            "machine_id": "hawk",
+            "workspace_id": "project",
+            "cwd": "/tmp",
+            "title": "named",
+            "status": "busy",
+            "owner_user_id": "0123456789abcdef0123456789abcdef",
+            "provider_account_id": id,
+            "provider_auth_generation": 2,
+            "provider_version": "1.0.0",
+            "provider_generation_digest": "sha256:fixture"
+        }))
+        .unwrap();
+        meta.provider_behavior = Some(crate::provider::legacy_behavior("claude-code"));
+        let hub = Hub::new();
+        hub.project_persisted_session(meta);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.connect_for_test();
+        let older_gen_worker: crate::runtime_wire::WorkerSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s-quiesce-live",
+                "worker_epoch": "201-old-gen",
+                "generation": "gen-1",
+                "state": "busy",
+                "launch": {
+                    "session_id": "s-quiesce-live",
+                    "provider": "claude-code",
+                    "cwd": "/tmp",
+                    "generation": "gen-1",
+                    "provider_account_id": id,
+                    "provider_auth_generation": 1
+                }
+            }))
+            .unwrap();
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s-quiesce-live".into(), older_gen_worker);
+        let pending = runtime
+            .quiesce_account_session("revoke-r24", "s-quiesce-live", &id)
+            .unwrap();
+        let cmd_id = pending.command_id.clone();
+        ack(&runtime, &cmd_id, "s-quiesce-live", true).await;
+        assert_eq!(pending.wait(Duration::from_secs(1)).await, Outcome::Stopped);
+        assert!(
+            !runtime.shared.workers.lock().contains_key("s-quiesce-live"),
+            "older auth-generation cached worker on quiesced account must retire (R24-M3)"
+        );
+        assert_eq!(
+            hub.session_info("s-quiesce-live").unwrap().meta.status,
+            crate::core::Status::Exited,
+            "confirmed quiesce must project Exited from live Busy/Running status (R24-M3)"
         );
     }
 }

@@ -9,8 +9,8 @@
 mod launch_gate;
 mod teardown;
 pub(super) use launch_gate::{
-    DrainContentionError, RetryableRegistrationError, SpawnedLaunchGuard,
-    prepare_transient_unit_with_owner_check,
+    DrainContentionError, RehabilitatedGenerationError, RetryableRegistrationError,
+    SpawnedLaunchGuard, prepare_transient_unit_with_owner_check,
 };
 
 use super::*;
@@ -1081,6 +1081,12 @@ impl Broker {
                 if teardown_ok {
                     state.unconfirmed_teardown.remove(session_id);
                     state.trusted_epoch_pids.remove(session_id);
+                    teardown::record_recently_drained_locked(
+                        &mut state,
+                        session_id,
+                        &peer.epoch,
+                        true,
+                    );
                     (
                         true,
                         sessions.get(session_id).cloned(),
@@ -1130,7 +1136,7 @@ impl Broker {
             if let Some(session) = session_for_cache {
                 self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
             }
-            self.send_crashed_worker_drained(session_id, &peer.epoch);
+            self.emit_crashed_worker_drained_frame(session_id, &peer.epoch);
         }
     }
 
@@ -1302,10 +1308,11 @@ impl Broker {
                 })
                 .map(|entry| entry.epoch.clone())
                 .or(confirmed_active_epoch);
-            let (rejections, session_for_cache) = if emit.is_some() {
+            let (rejections, session_for_cache) = if let Some(ref epoch) = emit {
                 state.unconfirmed_teardown.remove(session_id);
                 state.trusted_epoch_pids.remove(session_id);
                 session_states.insert(session_id.to_owned(), WorkerState::Crashed);
+                teardown::record_recently_drained_locked(&mut state, session_id, epoch, true);
                 (
                     classify_and_drain_queued_commands(
                         &mut pending_cmds,
@@ -1329,7 +1336,7 @@ impl Broker {
             self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
         }
         if let Some(epoch) = emit_epoch {
-            self.send_crashed_worker_drained(session_id, &epoch);
+            self.emit_crashed_worker_drained_frame(session_id, &epoch);
         }
         self.crashed_drains.settled.notify_waiters();
         Ok(())
@@ -2876,7 +2883,7 @@ mod tests {
         let acquire_task = tokio::spawn(async move {
             let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-h2","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
             let guard = broker_for_spawn
-                .acquire_spawned_launch_slot(&session)
+                .acquire_spawned_launch_slot(&session, false)
                 .await
                 .unwrap();
             assert!(broker_for_spawn.spawned_launches.lock().contains("s-h2"));
@@ -3035,7 +3042,10 @@ mod tests {
             .lock()
             .insert("s-r21-m1".into(), "old crash".into());
         let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-r21-m1","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
-        let guard = broker.acquire_spawned_launch_slot(&session).await.unwrap();
+        let guard = broker
+            .acquire_spawned_launch_slot(&session, false)
+            .await
+            .unwrap();
         assert_eq!(
             broker.session_states.lock().get("s-r21-m1"),
             Some(&WorkerState::Starting),
@@ -3115,7 +3125,7 @@ mod tests {
             }))
             .unwrap();
             let slot = broker_spawn
-                .acquire_spawned_launch_slot(&session)
+                .acquire_spawned_launch_slot(&session, false)
                 .await
                 .unwrap();
             assert_eq!(
@@ -3143,5 +3153,149 @@ mod tests {
             .await
             .expect("spawn admission must unblock once orphan stop guard drops")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn r24_rollout_deferral_preserves_state_and_hands_off_queued_ensure_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r24-m1",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1"
+        }))
+        .unwrap();
+        broker
+            .sessions
+            .lock()
+            .insert("s-r24-m1".into(), start.clone());
+        broker
+            .session_states
+            .lock()
+            .insert("s-r24-m1".into(), WorkerState::Starting);
+        broker.launching.lock().insert("s-r24-m1".into());
+
+        // A retry Ensure arriving while rollout holds `launching` is queued in
+        // `pending_ensure_retries` instead of being silently dropped (R24-M2).
+        let slot = broker
+            .claim_ensure_slot(&start, "ensure:s-r24-m1:2", false, "gen-1")
+            .await;
+        assert!(matches!(slot, Err(None)));
+        assert!(
+            broker
+                .pending_ensure_retries
+                .lock()
+                .contains_key("s-r24-m1")
+        );
+
+        // Rollout finishes with DrainContentionError: must NOT write Crashed or
+        // startup_failures, must emit rollout rejection, and must keep launching
+        // owned while handing off to the queued retry (R24-M1, R24-M2).
+        broker.finish_rollout_launch(
+            "s-r24-m1",
+            "gen-0",
+            Err(anyhow::Error::new(DrainContentionError(
+                "drain contention".into(),
+            ))),
+        );
+        assert!(broker.startup_failures.lock().get("s-r24-m1").is_none());
+        let first_frame = rx.try_recv().expect("rollout deferral ACK");
+        assert!(matches!(
+            first_frame,
+            Frame::CommandAck {
+                ref session_id,
+                ref command_id,
+                accepted: false,
+                ..
+            } if session_id == "s-r24-m1" && command_id == "rollout:s-r24-m1"
+        ));
+        assert!(
+            !broker
+                .pending_ensure_retries
+                .lock()
+                .contains_key("s-r24-m1"),
+            "queued ensure retry must be popped and spawned on handoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn r24_rehabilitated_generation_rejects_stale_quarantine_fallback_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let session: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r24-m7",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1",
+            "fallback_for": "gen-2"
+        }))
+        .unwrap();
+        broker
+            .sessions
+            .lock()
+            .insert("s-r24-m7".into(), session.clone());
+
+        // Canary rehabilitates gen-2 while this session waited behind a drain.
+        let _ = broker.rehabilitate_generation("gen-2", &session.provider);
+
+        // Quarantine-based pre-selection must refuse the stale fallback without
+        // installing fallback_pins or spawned_launches (R24-M7).
+        let Err(err) = broker.acquire_spawned_launch_slot(&session, true).await else {
+            panic!("rehabilitated generation must abort stale quarantine fallback");
+        };
+        assert!(err.downcast_ref::<RehabilitatedGenerationError>().is_some());
+        assert!(!broker.fallback_pins.lock().contains_key("s-r24-m7"));
+        assert!(!broker.spawned_launches.lock().contains("s-r24-m7"));
+
+        // Genuine failure of THIS session (fallback_from_quarantine = false)
+        // still retains its fallback pin even though gen-2 is healthy.
+        let _guard = broker
+            .acquire_spawned_launch_slot(&session, false)
+            .await
+            .expect("genuine session failure must retain fallback");
+        assert_eq!(
+            broker
+                .fallback_pins
+                .lock()
+                .get("s-r24-m7")
+                .map(String::as_str),
+            Some("gen-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn r24_stale_reconnect_token_cannot_consume_newer_arm_or_publish_crashed() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r24-m4",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1"
+        }))
+        .unwrap();
+        broker.sessions.lock().insert("s-r24-m4".into(), start);
+        broker
+            .session_states
+            .lock()
+            .insert("s-r24-m4".into(), WorkerState::Exited);
+        broker
+            .awaiting_reconnect
+            .lock()
+            .insert("s-r24-m4".into(), 2);
+
+        // Stale token 1 must not consume token 2 or overwrite Exited (R24-M4).
+        broker.reap_unreconnected_worker_unit("s-r24-m4", 1).await;
+        assert_eq!(
+            broker.awaiting_reconnect.lock().get("s-r24-m4").copied(),
+            Some(2)
+        );
+        assert_eq!(
+            broker.session_states.lock().get("s-r24-m4").copied(),
+            Some(WorkerState::Exited)
+        );
     }
 }

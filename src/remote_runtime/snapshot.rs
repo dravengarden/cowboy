@@ -1656,6 +1656,7 @@ mod crashed_drain_tests {
             "ensure:s-m1".into(),
             super::super::CoreCommand::EnsureSession {
                 session: crashed_snapshot("s-m1", "ep-old-3").launch.unwrap(),
+                command_id: None,
             },
         );
         hub.set_status("s-m1", Status::Busy, None);

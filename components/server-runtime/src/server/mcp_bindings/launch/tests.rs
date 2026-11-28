@@ -384,7 +384,7 @@ async fn fresh_supervisor_launch_carries_the_owned_plan_and_extensions() {
     let launch = queued
         .iter()
         .find_map(|command| match command {
-            crate::runtime_wire::CoreCommand::EnsureSession { session } => Some(session),
+            crate::runtime_wire::CoreCommand::EnsureSession { session, .. } => Some(session),
             _ => None,
         })
         .expect("fresh launch queued");

@@ -205,51 +205,79 @@ impl Broker {
     /// reconnecting draining worker can never race with explicit Ensure (R8-H4).
     pub(in crate::machine_broker) async fn claim_ensure_slot(
         &self,
-        session_id: &str,
+        session: &StartSession,
+        attempt_id: &str,
         adopt_only: bool,
         desired_generation: &str,
     ) -> Result<(Option<Result<WorkerPeer, WorkerSnapshot>>, bool), Option<String>> {
+        let session_id = session.session_id.as_str();
         if !adopt_only {
             self.gate_ensure_against_crashed_drain(session_id)
                 .await
                 .map_err(Some)?;
         }
-        let mut workers = self.workers.lock();
-        if !adopt_only && self.has_any_crashed_drain_fence_locked(&workers, session_id) {
-            return Err(Some("crashed worker drain is in progress; retry".into()));
-        }
-        match workers.get(session_id) {
-            Some(worker)
-                if !adopt_only
-                    && worker_launch::should_recycle_for_explicit_revive(
-                        &worker.snapshot,
-                        desired_generation,
-                    ) =>
-            {
-                let removed = workers.remove(session_id);
-                if let Some(effect) = removed
-                    .as_ref()
-                    .and_then(|peer| peer.snapshot.uncertain_effect.clone())
+        let mut displaced_retry: Option<String> = None;
+        let outcome = {
+            let mut workers = self.workers.lock();
+            if !adopt_only && self.has_any_crashed_drain_fence_locked(&workers, session_id) {
+                return Err(Some("crashed worker drain is in progress; retry".into()));
+            }
+            match workers.get(session_id) {
+                Some(worker)
+                    if !adopt_only
+                        && worker_launch::should_recycle_for_explicit_revive(
+                            &worker.snapshot,
+                            desired_generation,
+                        ) =>
                 {
-                    self.record_session_uncertain_effect(session_id, effect);
-                }
-                Ok((removed.map(Ok), false))
-            }
-            Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
-            None => {
-                if !adopt_only {
-                    if !self.launching.lock().insert(session_id.to_owned()) {
-                        return Err(None);
+                    let removed = workers.remove(session_id);
+                    if let Some(effect) = removed
+                        .as_ref()
+                        .and_then(|peer| peer.snapshot.uncertain_effect.clone())
+                    {
+                        self.record_session_uncertain_effect(session_id, effect);
                     }
-                    self.crashed_drains
-                        .inner
-                        .lock()
-                        .recently_drained
-                        .remove(session_id);
+                    Ok((removed.map(Ok), false))
                 }
-                Ok((None, !adopt_only))
+                Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
+                None => {
+                    if !adopt_only {
+                        let mut launching = self.launching.lock();
+                        if !launching.insert(session_id.to_owned()) {
+                            // Queue this retry under `launching` so a retry arriving
+                            // while the previous attempt is running or finalizing is
+                            // never silently dropped (R24-M2).
+                            displaced_retry = self
+                                .pending_ensure_retries
+                                .lock()
+                                .insert(
+                                    session_id.to_owned(),
+                                    (session.clone(), attempt_id.to_owned()),
+                                )
+                                .map(|(_, old_attempt_id)| old_attempt_id);
+                            Err(None)
+                        } else {
+                            self.crashed_drains
+                                .inner
+                                .lock()
+                                .recently_drained
+                                .remove(session_id);
+                            Ok((None, true))
+                        }
+                    } else {
+                        Ok((None, false))
+                    }
+                }
             }
+        };
+        if let Some(old_attempt_id) = displaced_retry {
+            self.command_rejected(
+                session_id,
+                old_attempt_id,
+                "superseded by newer ensure retry".into(),
+            );
         }
+        outcome
     }
 
     pub(in crate::machine_broker) fn has_any_crashed_drain_fence_locked(
@@ -817,10 +845,12 @@ impl Broker {
         let (cleared, session_for_cache, rejections) = {
             let sessions = self.sessions.lock();
             let workers = self.workers.lock();
+            let spawned = self.spawned_launches.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
             if !workers.contains_key(session_id)
+                && !spawned.contains(session_id)
                 && state
                     .unconfirmed_teardown
                     .get(session_id)
@@ -828,6 +858,10 @@ impl Broker {
             {
                 state.unconfirmed_teardown.remove(session_id);
                 state.trusted_epoch_pids.remove(session_id);
+                // Record retirement receipt under the exact same locks that
+                // clear the fence so a waiting replacement launch cannot
+                // acquire its slot and have its invalidation undone (R24-M6).
+                record_recently_drained_locked(&mut state, session_id, worker_epoch, true);
                 let rejections = classify_and_drain_queued_commands(
                     &mut pending_cmds,
                     &mut dispatched,
@@ -853,7 +887,7 @@ impl Broker {
                     reason: None,
                 });
             }
-            self.send_crashed_worker_drained(session_id, worker_epoch);
+            self.emit_crashed_worker_drained_frame(session_id, worker_epoch);
             self.crashed_drains.settled.notify_waiters();
         }
         cleared
@@ -993,8 +1027,9 @@ impl Broker {
                 }
                 let orphaned = {
                     let workers = broker.workers.lock();
+                    let spawned = broker.spawned_launches.lock();
                     let mut state = broker.crashed_drains.inner.lock();
-                    if workers.contains_key(&session_id) {
+                    if workers.contains_key(&session_id) || spawned.contains(&session_id) {
                         return;
                     }
                     if state
@@ -1005,6 +1040,7 @@ impl Broker {
                         state.active.remove(&session_id);
                     }
                     state.trusted_epoch_pids.remove(&session_id);
+                    record_recently_drained_locked(&mut state, &session_id, &worker_epoch, false);
                     drain_pending_for_epoch(&mut state.pending, &session_id, &worker_epoch)
                 };
                 for (sid, cid) in orphaned {
@@ -1014,7 +1050,6 @@ impl Broker {
                         "worker exited during crashed drain without completion receipt".into(),
                     );
                 }
-                broker.record_recently_drained(&session_id, &worker_epoch, false);
                 broker.publish_ownerless_crashed_snapshot(&session_id);
                 broker.crashed_drains.settled.notify_waiters();
                 return;
@@ -1146,6 +1181,7 @@ impl Broker {
             }
         }
     }
+    #[cfg(test)]
     pub(super) fn record_recently_drained(
         &self,
         session_id: &str,
@@ -1153,23 +1189,7 @@ impl Broker {
         confirmed_receipt: bool,
     ) {
         let mut state = self.crashed_drains.inner.lock();
-        let now = Instant::now();
-        state
-            .recently_drained
-            .retain(|_, (_, _, at)| now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL);
-        if state.recently_drained.len() >= MAX_RECENTLY_DRAINED
-            && let Some(oldest) = state
-                .recently_drained
-                .iter()
-                .min_by_key(|(_, (_, _, at))| *at)
-                .map(|(k, _)| k.clone())
-        {
-            state.recently_drained.remove(&oldest);
-        }
-        state.recently_drained.insert(
-            session_id.to_owned(),
-            (worker_epoch.to_owned(), confirmed_receipt, now),
-        );
+        record_recently_drained_locked(&mut state, session_id, worker_epoch, confirmed_receipt);
     }
 
     pub(in crate::machine_broker) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
@@ -1245,8 +1265,10 @@ impl Broker {
         });
     }
 
-    pub(super) fn send_crashed_worker_drained(&self, session_id: &str, worker_epoch: &str) {
-        self.record_recently_drained(session_id, worker_epoch, true);
+    /// Emit the retirement notification frame without mutating
+    /// `recently_drained`; callers MUST have already recorded the receipt
+    /// atomically under the same lock block that cleared the drain fence (R24-M6).
+    pub(super) fn emit_crashed_worker_drained_frame(&self, session_id: &str, worker_epoch: &str) {
         let controller_outcome = {
             let guard = self.controller.lock();
             guard.as_ref().map(|controller| {
@@ -1335,4 +1357,29 @@ fn direct_process_tree_gone(pid: u32) -> bool {
         Err(rustix::io::Errno::SRCH)
     );
     process_gone && !direct_worker_group_exists(pid)
+}
+
+pub(super) fn record_recently_drained_locked(
+    state: &mut Inner,
+    session_id: &str,
+    worker_epoch: &str,
+    confirmed_receipt: bool,
+) {
+    let now = Instant::now();
+    state
+        .recently_drained
+        .retain(|_, (_, _, at)| now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL);
+    if state.recently_drained.len() >= MAX_RECENTLY_DRAINED
+        && let Some(oldest) = state
+            .recently_drained
+            .iter()
+            .min_by_key(|(_, (_, _, at))| *at)
+            .map(|(k, _)| k.clone())
+    {
+        state.recently_drained.remove(&oldest);
+    }
+    state.recently_drained.insert(
+        session_id.to_owned(),
+        (worker_epoch.to_owned(), confirmed_receipt, now),
+    );
 }

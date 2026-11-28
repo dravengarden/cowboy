@@ -417,13 +417,18 @@ struct Broker {
     /// a bad Cowboy worker rollout.
     startup_failures: Mutex<HashMap<String, String>>,
     launching: Mutex<HashSet<String>>,
+    /// Queued Ensure retries that arrived while `launching` was held (including
+    /// between deferral ACK enqueue and slot release) so retries are never
+    /// silently dropped (R24-M2). Lock order: `workers -> launching -> pending_ensure_retries`.
+    pending_ensure_retries: Mutex<HashMap<String, (StartSession, String)>>,
     /// Sessions whose replacement worker process has actually been spawned
     /// (past `prepare_transient_unit` and past waiting for any returning
     /// draining worker). Before this bit is set, a returning crashed-drain
     /// worker may still attach to finish replaying its final outbox (R20-H2).
     spawned_launches: Mutex<HashSet<String>>,
     orphan_stopping_sessions: Mutex<HashSet<String>>,
-    awaiting_reconnect: Mutex<HashSet<String>>,
+    awaiting_reconnect: Mutex<HashMap<String, u64>>,
+    next_reconnect_token: AtomicU64,
     cancelled_sessions: Mutex<HashSet<String>>,
     permanently_deleted_sessions: Mutex<HashSet<String>>,
     dispatched_prompts: Mutex<wrap_up::DispatchedPrompts>,
@@ -508,9 +513,11 @@ impl Broker {
             session_states: Mutex::new(HashMap::new()),
             startup_failures: Mutex::new(HashMap::new()),
             launching: Mutex::new(HashSet::new()),
+            pending_ensure_retries: Mutex::new(HashMap::new()),
             spawned_launches: Mutex::new(HashSet::new()),
             orphan_stopping_sessions: Mutex::new(HashSet::new()),
-            awaiting_reconnect: Mutex::new(HashSet::new()),
+            awaiting_reconnect: Mutex::new(HashMap::new()),
+            next_reconnect_token: AtomicU64::new(1),
             cancelled_sessions: Mutex::new(HashSet::new()),
             permanently_deleted_sessions: Mutex::new(HashSet::new()),
             dispatched_prompts: Mutex::new(wrap_up::DispatchedPrompts::default()),
@@ -724,18 +731,47 @@ impl Broker {
         drop(healthy_generations);
     }
 
+    /// Coordinate fallback pinning at spawn-slot acquisition with
+    /// `rehabilitate_generation` under `healthy_generations -> fallback_pins ->
+    /// fallback_targets`. Returns `false` when a quarantine-selected fallback
+    /// was superseded by rehabilitation while waiting behind a drain (R24-M7).
+    pub(super) fn try_pin_fallback_for_slot(
+        &self,
+        session_id: &str,
+        worker_generation: &str,
+        failed_generation: &str,
+        provider: &str,
+        fallback_from_quarantine: bool,
+    ) -> bool {
+        let generation_key = (failed_generation.to_owned(), provider.to_owned());
+        let healthy_generations = self.healthy_generations.lock();
+        if fallback_from_quarantine && healthy_generations.contains(&generation_key) {
+            return false;
+        }
+        self.fallback_pins
+            .lock()
+            .insert(session_id.to_owned(), worker_generation.to_owned());
+        self.fallback_targets
+            .lock()
+            .insert(session_id.to_owned(), failed_generation.to_owned());
+        drop(healthy_generations);
+        true
+    }
+
     fn rehabilitate_generation(&self, generation: &str, provider: &str) -> Vec<String> {
         let generation_key = (generation.to_owned(), provider.to_owned());
+        // Hold `healthy_generations` across unpinning in canonical lock order
+        // `sessions -> healthy_generations -> unhealthy_generations ->
+        // fallback_pins -> fallback_targets` so a delayed spawn slot cannot
+        // install a stale quarantine fallback pin after rehabilitation (R24-M7).
+        let sessions = self.sessions.lock();
         let mut healthy_generations = self.healthy_generations.lock();
         let mut unhealthy_generations = self.unhealthy_generations.lock();
         healthy_generations.insert(generation_key.clone());
         unhealthy_generations.remove(&generation_key);
-        drop(unhealthy_generations);
-        drop(healthy_generations);
-        let sessions = self.sessions.lock();
-        let rehabilitated: Vec<String> = self
-            .fallback_targets
-            .lock()
+        let mut fallback_pins = self.fallback_pins.lock();
+        let mut fallback_targets = self.fallback_targets.lock();
+        let rehabilitated: Vec<String> = fallback_targets
             .iter()
             .filter(|(session_id, failed_generation)| {
                 *failed_generation == generation
@@ -745,10 +781,15 @@ impl Broker {
             })
             .map(|(session_id, _)| session_id.clone())
             .collect();
-        drop(sessions);
         for session_id in &rehabilitated {
-            self.unpin_fallback(session_id);
+            fallback_pins.remove(session_id);
+            fallback_targets.remove(session_id);
         }
+        drop(fallback_targets);
+        drop(fallback_pins);
+        drop(unhealthy_generations);
+        drop(healthy_generations);
+        drop(sessions);
         let draining: Vec<String> = {
             let mut workers = self.workers.lock();
             rehabilitated
@@ -1930,22 +1971,32 @@ impl Broker {
         account_worker::account_binding_matches_async(self, session, replacing).await
     }
 
+    #[cfg(test)]
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
+        self.ensure_session_with_id(session, None).await;
+    }
+
+    async fn ensure_session_with_id(
+        self: &Arc<Self>,
+        session: StartSession,
+        command_id: Option<String>,
+    ) {
         let gate = self.session_lifecycle_gate(&session.session_id);
         let guard = gate.lock().await;
-        self.ensure_session_in_lifecycle(session, &guard, true)
+        self.ensure_session_in_lifecycle(session, command_id, &guard, true)
             .await;
     }
 
     async fn admit_ensure_account_binding(
         &self,
         session: &StartSession,
+        attempt_id: &str,
         require_active_lease: bool,
     ) -> bool {
         if self.account_session_stopped(&session.session_id) {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id.to_owned(),
                 "account session is quiesced".into(),
             );
             return false;
@@ -1956,7 +2007,7 @@ impl Broker {
         {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id.to_owned(),
                 "session subscription cannot change through worker adoption".into(),
             );
             return false;
@@ -1967,11 +2018,13 @@ impl Broker {
     async fn ensure_session_in_lifecycle(
         self: &Arc<Self>,
         session: StartSession,
+        command_id: Option<String>,
         _guard: &tokio::sync::MutexGuard<'_, ()>,
         require_active_lease: bool,
     ) {
+        let attempt_id = command_id.unwrap_or_else(|| format!("ensure:{}", session.session_id));
         if !self
-            .admit_ensure_account_binding(&session, require_active_lease)
+            .admit_ensure_account_binding(&session, &attempt_id, require_active_lease)
             .await
         {
             return;
@@ -1979,7 +2032,7 @@ impl Broker {
         if let Err(error) = self.check_deletion_journal() {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id,
                 format!("Session deletion reader unavailable: {error}"),
             );
             return;
@@ -1989,7 +2042,7 @@ impl Broker {
         if self.cancelled_sessions.lock().contains(&session.session_id) {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id,
                 "session was deleted; launch declaration was not adopted".into(),
             );
             return;
@@ -2012,7 +2065,7 @@ impl Broker {
         if let Err(error) = self.ensure_incarnation(&session.session_id, origin).await {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id,
                 format!("durable Session incarnation was not confirmed: {error}"),
             );
             return;
@@ -2025,16 +2078,12 @@ impl Broker {
         mcp_launch::declare(&mut self.sessions.lock(), &mut session, adopt_only);
         let desired_generation = self.desired_generation.lock().clone();
         let (existing, launch_reserved) = match self
-            .claim_ensure_slot(&session.session_id, adopt_only, &desired_generation)
+            .claim_ensure_slot(&session, &attempt_id, adopt_only, &desired_generation)
             .await
         {
             Ok(pair) => pair,
             Err(Some(reason)) => {
-                self.command_rejected(
-                    &session.session_id,
-                    format!("ensure:{}", session.session_id),
-                    reason,
-                );
+                self.command_rejected(&session.session_id, attempt_id, reason);
                 return;
             }
             Err(None) => return,
@@ -2098,13 +2147,38 @@ impl Broker {
             return;
         }
         self.awaiting_reconnect.lock().remove(&session.session_id);
-        if !launch_reserved && !self.launching.lock().insert(session.session_id.clone()) {
-            return;
+        if !launch_reserved {
+            let displaced_retry = {
+                let mut launching = self.launching.lock();
+                if !launching.insert(session.session_id.clone()) {
+                    Some(
+                        self.pending_ensure_retries
+                            .lock()
+                            .insert(
+                                session.session_id.clone(),
+                                (session.clone(), attempt_id.clone()),
+                            )
+                            .map(|(_, old_id)| old_id),
+                    )
+                } else {
+                    None
+                }
+            };
+            if let Some(old_id) = displaced_retry {
+                if let Some(old_attempt_id) = old_id {
+                    self.command_rejected(
+                        &session.session_id,
+                        old_attempt_id,
+                        "superseded by newer ensure retry".into(),
+                    );
+                }
+                return;
+            }
         }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             let result = broker.spawn_with_fallback(session.clone(), None).await;
-            broker.finish_ensure_launch(&session.session_id, result);
+            broker.finish_ensure_launch(&session.session_id, &attempt_id, result);
         });
     }
 
@@ -2241,7 +2315,7 @@ impl Broker {
             .lock()
             .insert(session_id.clone(), session.clone());
         self.resetting_sessions.lock().remove(&session_id);
-        self.ensure_session_in_lifecycle(session, &_cleanup_guard, false)
+        self.ensure_session_in_lifecycle(session, None, &_cleanup_guard, false)
             .await;
         self.send_controller(Frame::CommandAck {
             session_id,
@@ -2489,6 +2563,7 @@ impl Broker {
         self.sessions.lock().insert(id.clone(), session.clone());
         self.pending_commands.lock().remove(id);
         self.awaiting_reconnect.lock().remove(id);
+        self.pending_ensure_retries.lock().remove(id);
         let _ = self.mark_dormant_exited_and_invalidate_drain(id);
         self.account_quiesced_sessions.lock().remove(id);
         self.cancelled_sessions.lock().remove(id);
@@ -2496,15 +2571,23 @@ impl Broker {
     }
 
     fn arm_reconnect_timeout(self: &Arc<Self>, session_id: String) {
-        if self.args.spawn_mode != SpawnMode::SystemdUser
-            || !self.awaiting_reconnect.lock().insert(session_id.clone())
-        {
+        if self.args.spawn_mode != SpawnMode::SystemdUser {
             return;
+        }
+        let token = self.next_reconnect_token.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut waiting = self.awaiting_reconnect.lock();
+            if waiting.contains_key(&session_id) {
+                return;
+            }
+            waiting.insert(session_id.clone(), token);
         }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(WORKER_HEARTBEAT_TIMEOUT).await;
-            broker.reap_unreconnected_worker_unit(&session_id).await;
+            broker
+                .reap_unreconnected_worker_unit(&session_id, token)
+                .await;
         });
     }
 
@@ -2521,7 +2604,7 @@ impl Broker {
         let bound =
             session.execution_binding.is_some() || !session.provider_account_id.is_default();
         if bound && session_fallback.is_none() {
-            return self.spawn_and_wait_ready(&session).await;
+            return self.spawn_and_wait_ready(&session, false).await;
         }
         let machine_previous = if bound {
             None
@@ -2534,6 +2617,7 @@ impl Broker {
             .lock()
             .contains_key(&generation_key);
         let mut selected = session.clone();
+        let mut fallback_from_quarantine = false;
         if desired_is_unhealthy
             && let Some(previous) = session_fallback
                 .clone()
@@ -2541,8 +2625,27 @@ impl Broker {
         {
             selected.generation = previous;
             selected.fallback_for = Some(session.generation.clone());
+            fallback_from_quarantine = true;
         }
-        match self.spawn_and_wait_ready(&selected).await {
+        let first_attempt = match self
+            .spawn_and_wait_ready(&selected, fallback_from_quarantine)
+            .await
+        {
+            Err(error)
+                if fallback_from_quarantine
+                    && error
+                        .downcast_ref::<crashed_drain::RehabilitatedGenerationError>()
+                        .is_some() =>
+            {
+                // A canary rehabilitated the desired generation while this
+                // launch waited behind a drain; retry desired directly (R24-M7).
+                selected = session.clone();
+                fallback_from_quarantine = false;
+                self.spawn_and_wait_ready(&selected, false).await
+            }
+            other => other,
+        };
+        match first_attempt {
             Ok(()) => {
                 if selected.generation == session.generation {
                     self.unpin_fallback(&session.session_id);
@@ -2578,10 +2681,12 @@ impl Broker {
                     );
                 }
                 if let Some(failed_generation) = selected.fallback_for.as_deref() {
-                    self.pin_fallback(
+                    let _ = self.try_pin_fallback_for_slot(
                         &selected.session_id,
                         &selected.generation,
                         failed_generation,
+                        &selected.provider,
+                        fallback_from_quarantine,
                     );
                 }
                 let fallback = session_fallback.clone().or(machine_previous);
@@ -2596,7 +2701,7 @@ impl Broker {
                     );
                     selected.generation = previous;
                     selected.fallback_for = Some(session.generation.clone());
-                    match self.spawn_and_wait_ready(&selected).await {
+                    match self.spawn_and_wait_ready(&selected, false).await {
                         Ok(()) => Ok(()),
                         Err(fallback_error)
                             if fallback_error
@@ -2683,7 +2788,11 @@ impl Broker {
         }
     }
 
-    async fn spawn_and_wait_ready(&self, session: &StartSession) -> Result<()> {
+    async fn spawn_and_wait_ready(
+        &self,
+        session: &StartSession,
+        fallback_from_quarantine: bool,
+    ) -> Result<()> {
         ensure!(
             !self.account_session_stopped(&session.session_id),
             "account session is quiesced"
@@ -2694,7 +2803,8 @@ impl Broker {
         let _admission = self.admit_launch(&session.session_id).await?;
         self.wait_for_returning_crashed_drain(&session.session_id)
             .await?;
-        let (mut worker_exit, _spawned_launch_guard) = self.spawn_worker(session).await?;
+        let (mut worker_exit, _spawned_launch_guard) =
+            self.spawn_worker(session, fallback_from_quarantine).await?;
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         loop {
             if self.cancelled_sessions.lock().contains(&session.session_id) {
@@ -3237,46 +3347,22 @@ impl Broker {
         session.agent_session_id = peer.snapshot.resumable_agent_session_id();
         session.generation = self.desired_generation.lock().clone();
         session.fallback_for = None;
+        if !self.launching.lock().insert(session_id.clone()) {
+            return;
+        }
         self.session_states
             .lock()
             .insert(session_id.clone(), WorkerState::Starting);
         self.sessions
             .lock()
             .insert(session_id.clone(), session.clone());
-        if !self.launching.lock().insert(session_id.clone()) {
-            return;
-        }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             let _permit = broker.cutover_permit(&session_id).await;
             let result = broker
                 .spawn_with_fallback(session, Some(old_generation.clone()))
                 .await;
-            broker.launching.lock().remove(&session_id);
-            match result {
-                Ok(()) => {
-                    tracing::info!(session = %session_id, %old_generation, "worker generation cutover launched")
-                }
-                Err(error) => {
-                    let cancelled = broker.cancelled_sessions.lock();
-                    if cancelled.contains(&session_id) {
-                        tracing::debug!(session = %session_id, %error, "deleted session rollout stopped");
-                        return;
-                    }
-                    tracing::error!(session = %session_id, %old_generation, error = %format!("{error:#}"), "worker cutover and fallback failed");
-                    broker
-                        .startup_failures
-                        .lock()
-                        .insert(session_id.clone(), error.to_string());
-                    broker.publish_session_state(&session_id, WorkerState::Crashed);
-                    broker.command_rejected(
-                        &session_id,
-                        format!("rollout:{session_id}"),
-                        error.to_string(),
-                    );
-                    drop(cancelled);
-                }
-            }
+            broker.finish_rollout_launch(&session_id, &old_generation, result);
         });
     }
 
@@ -3317,6 +3403,7 @@ impl Broker {
     async fn spawn_worker(
         &self,
         session: &StartSession,
+        fallback_from_quarantine: bool,
     ) -> Result<(
         oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>,
         crashed_drain::SpawnedLaunchGuard<'_>,
@@ -3501,7 +3588,9 @@ impl Broker {
         // await point. Pre-verify any carried release off Tokio before taking locks.
         let carry_proof =
             account_worker::prepare_carry_async(&self.args.provider_store, session).await?;
-        let spawned_guard = self.acquire_spawned_launch_slot(session).await?;
+        let spawned_guard = self
+            .acquire_spawned_launch_slot(session, fallback_from_quarantine)
+            .await?;
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
@@ -4435,11 +4524,14 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 broker.reset_session(*session, command_id).await;
             }
         }
-        CoreCommand::EnsureSession { mut session } => {
+        CoreCommand::EnsureSession {
+            mut session,
+            command_id,
+        } => {
             if session.generation.is_empty() {
                 session.generation = broker.desired_generation.lock().clone();
             }
-            broker.ensure_session(session).await;
+            broker.ensure_session_with_id(session, command_id).await;
         }
         prompt @ CoreCommand::Prompt { .. } => {
             if let Some((session_id, prompt)) = prompt.into_worker_prompt() {
@@ -5494,7 +5586,7 @@ mod tests {
 
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            broker.spawn_and_wait_ready(&session),
+            broker.spawn_and_wait_ready(&session, false),
         )
         .await
         .expect("worker exit must beat the readiness timeout")
@@ -6266,7 +6358,7 @@ mod tests {
         ));
         assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
         assert!(broker.cancelled_sessions.lock().contains("sess-1"));
-        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        assert!(broker.spawn_and_wait_ready(&launch, false).await.is_err());
         // Even an unchanged Reset declaration cannot bypass the account fence.
         broker.reset_session(launch.clone(), "reset".into()).await;
         assert!(matches!(rx.recv().await,
@@ -6285,7 +6377,12 @@ mod tests {
         let restarted = Arc::new(Broker::new(broker.args.clone()));
         assert!(restarted.account_quiesced_sessions.lock().is_empty());
         assert!(restarted.account_session_stopped("sess-1"));
-        assert!(restarted.spawn_and_wait_ready(&launch).await.is_err());
+        assert!(
+            restarted
+                .spawn_and_wait_ready(&launch, false)
+                .await
+                .is_err()
+        );
         let (worker_tx, _) = mpsc::unbounded_channel();
         assert!(
             restarted
@@ -6471,7 +6568,7 @@ mod tests {
         assert!(broker.cancelled_sessions.lock().contains("sess-1"));
         // The fallback path must fail before launching another native process,
         // even when its caller discarded the cleanup result.
-        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        assert!(broker.spawn_and_wait_ready(&launch, false).await.is_err());
         assert_eq!(
             broker.direct_worker_pids.lock().get("sess-1"),
             Some(&u32::MAX)
@@ -6480,12 +6577,12 @@ mod tests {
         broker.direct_worker_trees.lock().insert("sess-1".into());
         assert!(!broker.force_recycle_failed_start("sess-1").await);
         assert!(broker.workers.lock().contains_key("sess-1"));
-        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        assert!(broker.spawn_and_wait_ready(&launch, false).await.is_err());
         broker.direct_worker_trees.lock().remove("sess-1");
         assert!(broker.force_recycle_failed_start("sess-1").await);
         assert!(!broker.workers.lock().contains_key("sess-1"));
         assert!(broker.cancelled_sessions.lock().contains("sess-1"));
-        assert!(broker.spawn_and_wait_ready(&launch).await.is_err());
+        assert!(broker.spawn_and_wait_ready(&launch, false).await.is_err());
     }
 
     #[tokio::test]
@@ -7891,7 +7988,7 @@ mod tests {
             assert!(!broker.sessions.lock().contains_key("sess-1"));
             assert!(!broker.session_states.lock().contains_key("sess-1"));
             assert!(!broker.launching.lock().contains("sess-1"));
-            assert!(!broker.awaiting_reconnect.lock().contains("sess-1"));
+            assert!(!broker.awaiting_reconnect.lock().contains_key("sess-1"));
         }
         let mut refused = 0;
         while let Ok(frame) = rx.try_recv() {
@@ -8037,7 +8134,10 @@ mod tests {
         write_frame(
             &mut client,
             &Frame::CoreCommand {
-                command: CoreCommand::EnsureSession { session: launch },
+                command: CoreCommand::EnsureSession {
+                    session: launch,
+                    command_id: None,
+                },
             },
         )
         .await
@@ -8207,7 +8307,10 @@ mod tests {
         write_frame(
             &mut writer,
             &Frame::CoreCommand {
-                command: CoreCommand::EnsureSession { session: launch },
+                command: CoreCommand::EnsureSession {
+                    session: launch,
+                    command_id: None,
+                },
             },
         )
         .await
@@ -9725,7 +9828,7 @@ mod tests {
         };
 
         let (replacement_exit, _spawned_launch_guard) = broker
-            .spawn_worker(&session)
+            .spawn_worker(&session, false)
             .await
             .expect("spawn replacement after previous owner exits");
         old_reaper.await.expect("previous worker reaper");
