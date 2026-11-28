@@ -59,17 +59,17 @@
 		<string>stormbird.xyz</string>
 	</array>
 	<!-- Reverse-DNS custom URL scheme for bare app activation from trusted
-	     launchers such as Cardea (`top.thundersparrow.cowboy://`). -->
+	     launchers such as Cardea (`xyz.stormbird.cowboy://`). -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>top.thundersparrow.cowboy</string>
+			<string>xyz.stormbird.cowboy</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>top.thundersparrow.cowboy</string>
+				<string>xyz.stormbird.cowboy</string>
 			</array>
 		</dict>
 	</array>

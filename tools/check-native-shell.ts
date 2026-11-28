@@ -28,14 +28,14 @@ async function verifyAppleProject(read: (path: string) => Promise<string>): Prom
 // Read-only: never repair, unlink or copy a borrowed native project.
 function verifyCustomUrlSchemes(iosInfo: string, macInfo: string): void {
   const schemeRe =
-    /<key>CFBundleURLTypes<\/key>[\s\S]*?<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>top\.thundersparrow\.cowboy<\/string>\s*<\/array>/;
+    /<key>CFBundleURLTypes<\/key>[\s\S]*?<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>xyz\.stormbird\.cowboy<\/string>\s*<\/array>/;
   for (const [label, plist] of [
     ["iOS", iosInfo],
     ["macOS", macInfo],
   ] as const) {
     requireValue(
       schemeRe.test(plist),
-      `${label} Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy`,
+      `${label} Info.plist must declare reverse-DNS URL scheme xyz.stormbird.cowboy`,
     );
   }
 }

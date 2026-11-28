@@ -11,10 +11,10 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>top.thundersparrow.cowboy</string>
+			<string>xyz.stormbird.cowboy</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>top.thundersparrow.cowboy</string>
+				<string>xyz.stormbird.cowboy</string>
 			</array>
 		</dict>
 	</array>
