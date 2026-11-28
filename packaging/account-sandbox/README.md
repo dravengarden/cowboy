@@ -54,8 +54,12 @@ Every field is optional; unknown fields are rejected.
 | `run_dir` | `/run/cowboy-account-sandbox` | Per-unit descriptor files and execution sockets |
 | `agy_allow_list` | `/etc/cowboy-account-sandbox/agy-sha512.allow` | One lowercase hex SHA-512 per line; `#` comments |
 | `exec_path` | `/usr/local/libexec/cowboy-account-sandbox` | Installed binary used as the units' `exec-confined` wrapper; must be world-executable |
-| `home_image_bytes` | `2147483648` (2 GiB) | Size of each sparse ext4 home image |
-| `home_image_inodes` | `131072` | Fixed inode count of each image |
+| `home_image_bytes` | `4294967296` (4 GiB) | Initial size of each sparse ext4 home image |
+| `home_image_inodes` | `262144` | Inode count of a new image; online growth scales it |
+| `home_image_max_bytes` | `34359738368` (32 GiB) | Largest size online growth gives an image (`src/capacity.rs`) |
+| `home_grow_free_bytes` | `1073741824` (1 GiB) | A mounted home doubles once its free space is below this or a quarter of its size (or an eighth of its inodes remain), keeping `free_space_reserve_bytes` on `state_root` with the added size counted as written |
+| `home_min_free_bytes` | `268435456` (256 MiB) | A start other than `logout` is refused (`insufficient_space`) while its home keeps less free after growing |
+| `agy_log_retention_days` | `14` | `agy` log files older than this are removed hourly; `0` keeps them |
 | `free_space_reserve_bytes` | `8589934592` (8 GiB) | Free space required on `state_root` before `ensure_account` and every start |
 | `ip_deny` | `[]` | Extra `IPAddressDeny=` entries appended to the always-denied set (loopback, link-local, multicast, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`); it can never remove one. OVH adds its public address, e.g. `40.160.141.233/32` |
 | `ip_allow` | `["127.0.0.53/32"]` | `IPAddressAllow=` (the resolver stub) |
@@ -72,6 +76,8 @@ Every field is optional; unknown fields are rejected.
 | `tools.useradd` | `/usr/sbin/useradd` | |
 | `tools.userdel` | `/usr/sbin/userdel` | |
 | `tools.mkfs_ext4` | `/usr/sbin/mkfs.ext4` | |
+| `tools.losetup` | `/usr/sbin/losetup` | `--set-capacity` after an image grows |
+| `tools.resize2fs` | `/usr/sbin/resize2fs` | online ext4 growth |
 | `tools.mount` | `/usr/bin/mount` | `-o loop` attaches the image |
 | `tools.umount` | `/usr/bin/umount` | |
 

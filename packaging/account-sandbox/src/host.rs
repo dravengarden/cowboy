@@ -54,6 +54,16 @@ fn cgroup_populated(control_group: &str) -> bool {
     }
 }
 
+/// Size and free space of a mounted filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FsUsage {
+    pub size_bytes: u64,
+    /// Space an unprivileged writer can still use.
+    pub free_bytes: u64,
+    pub inodes: u64,
+    pub free_inodes: u64,
+}
+
 /// The `systemd-run --wait` process of one unit.
 pub trait UnitChild: Send {
     /// Wait for the unit to finish; its exit status, `None` when killed.
@@ -87,6 +97,32 @@ pub trait Host: Send + Sync {
     fn list_units(&self, pattern: &str) -> Result<Vec<String>>;
     fn boot_id(&self) -> Result<String>;
     fn free_bytes(&self, path: &Path) -> Result<u64>;
+    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage>;
+    /// Grow the filesystem mounted at `target` from `image` to the image
+    /// file's current length: refresh its loop device's capacity, then
+    /// resize the mounted ext4 online.
+    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()>;
+}
+
+/// The loop device `/dev/loopN` mounted at `target` in `mountinfo`.
+fn loop_source(mountinfo: &str, target: &str) -> Result<String> {
+    let line = mountinfo
+        .lines()
+        .find(|line| line.split(' ').nth(4) == Some(target))
+        .with_context(|| format!("{target} is not mounted"))?;
+    let (_, after) = line.split_once(" - ").context("malformed mountinfo line")?;
+    let source = after
+        .split(' ')
+        .nth(1)
+        .context("mountinfo line has no source")?;
+    let number = source
+        .strip_prefix("/dev/loop")
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    ensure!(
+        number.is_some(),
+        "{target} is mounted from {source}, not a loop device"
+    );
+    Ok(source.to_owned())
 }
 
 /// The production host: system tools at configured absolute paths.
@@ -329,6 +365,35 @@ impl Host for SystemHost {
             rustix::fs::statvfs(path).with_context(|| format!("statvfs {}", path.display()))?;
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
+
+    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage> {
+        let stat =
+            rustix::fs::statvfs(path).with_context(|| format!("statvfs {}", path.display()))?;
+        Ok(FsUsage {
+            size_bytes: stat.f_blocks.saturating_mul(stat.f_frsize),
+            free_bytes: stat.f_bavail.saturating_mul(stat.f_frsize),
+            inodes: stat.f_files,
+            free_inodes: stat.f_favail,
+        })
+    }
+
+    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()> {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")?;
+        let device = loop_source(&mountinfo, path_arg(target)?)?;
+        // Only the loop device backed by this very image is resized.
+        let name = device.trim_start_matches("/dev/");
+        let backing = std::fs::read_to_string(format!("/sys/block/{name}/loop/backing_file"))
+            .with_context(|| format!("read the backing file of {device}"))?;
+        ensure!(
+            backing.trim_end() == path_arg(image)?,
+            "{device} is backed by {}, not {}",
+            backing.trim_end(),
+            image.display()
+        );
+        run_ok(&self.tools.losetup, &["--set-capacity", &device])?;
+        run_ok(&self.tools.resize2fs, &[&device])?;
+        Ok(())
+    }
 }
 
 /// Whether `/var/run` is a directory of its own rather than a symlink.
@@ -339,6 +404,22 @@ pub fn var_run_is_directory() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_loop_device_is_a_growable_source() {
+        let mountinfo = "\
+29 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+80 29 7:2 / /var/lib/x/accounts/k/home rw,nosuid shared:40 - ext4 /dev/loop2 rw
+81 29 0:5 / /var/lib/x/accounts/j/home rw shared:41 - tmpfs tmpfs rw
+";
+        assert_eq!(
+            super::loop_source(mountinfo, "/var/lib/x/accounts/k/home").unwrap(),
+            "/dev/loop2"
+        );
+        assert!(super::loop_source(mountinfo, "/var/lib/x/accounts/j/home").is_err());
+        assert!(super::loop_source(mountinfo, "/").is_err());
+        assert!(super::loop_source(mountinfo, "/absent").is_err());
+    }
+
     #[test]
     fn a_missing_or_unset_cgroup_is_empty() {
         assert!(!super::cgroup_populated(""));

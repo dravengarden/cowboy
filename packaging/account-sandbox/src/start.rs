@@ -128,6 +128,7 @@ impl Daemon {
                 &self.config.agy_allow_list,
             )?;
             let home = self.mount_home(dir, key, meta)?;
+            self.admit_home_capacity(dir, key, request.mode)?;
             Self::prepare_home(dir, &home, meta)?;
             if request.mode == Mode::Login && Self::token_present(&home)? {
                 return Err(fail(

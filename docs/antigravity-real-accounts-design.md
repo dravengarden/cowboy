@@ -1,6 +1,8 @@
 # Antigravity real accounts on OVH — design
 
-Status: design, revision 6, 2026-11-20 (implementation in progress; the
+Status: design, revision 7, 2026-11-28 (implementation in progress; the
+"Revision 7: elastic account homes" section takes precedence over R3-7's
+fixed image size; the
 "Revision 6: concurrent sessions per account" section takes precedence over
 "Revision 5 simplification", which takes precedence over earlier sections). Implemented so far: the sandbox
 daemon (`packaging/account-sandbox/`), Machine step 3a (manifest isolation,
@@ -463,8 +465,8 @@ why.
   re-opens the binding on reconnect and completes them. A reservation (even a
   forced release) settles only with target termination evidence or the
   target's proof the process is gone.
-- **[R3-7] Bounded storage.** Each account home is an ext4 image of fixed size
-  (default 4 GiB, fixed inode count) that the daemon loop-mounts per unit;
+- **[R3-7] Bounded storage.** Each account home is an ext4 image of bounded
+  size (Revision 7: 4 GiB, growing online up to 32 GiB) that the daemon loop-mounts per unit;
   `/tmp` is `TemporaryFileSystem=/tmp:size=256M`; `agy`'s log directory is
   inside the image. The daemon keeps a host-wide free-space reserve and refuses
   starts below it.
@@ -1070,6 +1072,51 @@ part of the "Daemon" decision; everything else in Revision 5 holds.
 - A rate limit holds for the quota group of the refused session's model
   (see "Rate limits per quota group"); the first dispatch after it ends, in
   any session of the account, resumes it.
+
+## Revision 7: elastic account homes (2026-11-28)
+
+**Incident.** On 2026-11-28 an OVH account's home (2 GiB, grown by hand to
+4 GiB three days earlier) filled up: `agy` keeps every conversation of every
+recoverable session (`conversations/<id>.db` plus `brain/<id>/`, 50 to 550
+MiB each for long sessions) and 33 live sessions held 2.9 GiB. `agy` logged
+`no space left on device` writing its transcript, its runtime exited 2
+mid-turn and the session ended as "could not prove Google's outcome". Argus
+had raised a critical `disk-used` alert 13 hours earlier. A fixed-size image
+turns legitimate history growth into a cliff an operator has to notice and
+widen by hand.
+
+**Decision.** R3-7's bound stays, but as a ceiling reached by online growth
+rather than a fixed size (`packaging/account-sandbox/src/capacity.rs`):
+
+- A new image is 4 GiB (`home_image_bytes`, 262,144 inodes). A mounted home
+  grows when its free space falls below `max(home_grow_free_bytes` (1 GiB)`,
+  size / 4)` or an eighth of its inodes remain: the daemon doubles the image
+  file, refreshes its loop device (`losetup --set-capacity`, only the device
+  whose `backing_file` is that image) and resizes the mounted ext4 online
+  (`resize2fs`), which scales its inodes too.
+- Growth stops at `home_image_max_bytes` (32 GiB) and needs the state root's
+  free space to stay above `free_space_reserve_bytes` with the whole added
+  size counted as written, so homes cannot crowd out the host.
+- Every start checks (and grows) its home first; the sweep checks every
+  mounted home every 30 s while units run. A start other than `logout` is
+  refused with `insufficient_space` ("account home storage is exhausted",
+  with the reason growth was held) while the home keeps less than
+  `home_min_free_bytes` (256 MiB) free, so `agy` never starts into a full
+  disk. Signing out stays possible on a full home.
+- Growth is idempotent and crash safe: an image file longer than its
+  filesystem (interrupted between lengthening and `resize2fs`) is only
+  resized by the next check.
+- `agy` log files (`~/.gemini/antigravity-cli/log`) older than
+  `agy_log_retention_days` (14) are removed hourly, opened beneath the home
+  without following symlinks.
+
+**Not in this revision.** Conversations no recoverable Cowboy session
+references (sessions purged from Trash, conversations of failed starts:
+about 0.7 GiB of the 3.7 GiB above) are not collected yet. Collecting them
+needs the Controller's reference set (the `generation_retention` pattern:
+Controller owns references, the Machine and daemon own files), and a
+referenced conversation must never be removed while its session can resume:
+`session/resume` refuses to replace a missing native thread.
 
 ## Rate limits per quota group (2026-11-24)
 

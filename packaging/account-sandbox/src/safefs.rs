@@ -166,6 +166,25 @@ pub fn open_regular(dir: BorrowedFd<'_>, path: &str) -> Result<Option<(std::fs::
     Ok(Some((std::fs::File::from(fd), stat.st_mode & 0o7777)))
 }
 
+/// Open the existing regular file `name` in `dir` for reading and writing.
+pub fn open_regular_rw(dir: BorrowedFd<'_>, name: &str) -> Result<std::fs::File> {
+    check_name(name)?;
+    let fd = rustix::fs::openat2(
+        dir,
+        name,
+        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+        STRICT,
+    )
+    .with_context(|| format!("open {name}"))?;
+    let stat = rustix::fs::fstat(&fd)?;
+    ensure!(
+        FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
+        "{name} is not a regular file"
+    );
+    Ok(std::fs::File::from(fd))
+}
+
 /// Read a regular file below `dir`, at most `max` bytes; `None` when absent.
 pub fn read_file(dir: BorrowedFd<'_>, path: &str, max: u64) -> Result<Option<Vec<u8>>> {
     let Some((file, _)) = open_regular(dir, path)? else {

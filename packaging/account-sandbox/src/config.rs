@@ -41,10 +41,19 @@ pub struct Config {
     pub agy_allow_list: PathBuf,
     /// The installed daemon binary, used as the units' `exec-confined` wrapper.
     pub exec_path: PathBuf,
-    /// Size of each account's sparse ext4 home image.
+    /// Initial size of each account's sparse ext4 home image.
     pub home_image_bytes: u64,
-    /// Fixed inode count of each home image.
+    /// Inode count of a new home image; online growth scales it with size.
     pub home_image_inodes: u64,
+    /// Largest size online growth may give a home image (`crate::capacity`).
+    pub home_image_max_bytes: u64,
+    /// A mounted home grows once its free space falls below this or a
+    /// quarter of its size, whichever is larger.
+    pub home_grow_free_bytes: u64,
+    /// Free space a home must keep for a unit to start in it.
+    pub home_min_free_bytes: u64,
+    /// Days `agy` log files are kept in an account home; 0 keeps them.
+    pub agy_log_retention_days: u64,
     /// Host free space that must remain on the state root's filesystem.
     pub free_space_reserve_bytes: u64,
     /// Extra `IPAddressDeny=` entries appended to [`BUILTIN_IP_DENY`]
@@ -86,6 +95,8 @@ pub struct Tools {
     pub useradd: PathBuf,
     pub userdel: PathBuf,
     pub mkfs_ext4: PathBuf,
+    pub losetup: PathBuf,
+    pub resize2fs: PathBuf,
     pub mount: PathBuf,
     pub umount: PathBuf,
 }
@@ -97,8 +108,12 @@ impl Default for Config {
             run_dir: "/run/cowboy-account-sandbox".into(),
             agy_allow_list: "/etc/cowboy-account-sandbox/agy-sha512.allow".into(),
             exec_path: "/usr/local/libexec/cowboy-account-sandbox".into(),
-            home_image_bytes: 2 * GIB,
-            home_image_inodes: 131_072,
+            home_image_bytes: 4 * GIB,
+            home_image_inodes: 262_144,
+            home_image_max_bytes: 32 * GIB,
+            home_grow_free_bytes: GIB,
+            home_min_free_bytes: 256 * 1024 * 1024,
+            agy_log_retention_days: 14,
             free_space_reserve_bytes: 8 * GIB,
             ip_deny: Vec::new(),
             ip_allow: vec!["127.0.0.53/32".to_owned()],
@@ -123,6 +138,8 @@ impl Default for Tools {
             useradd: "/usr/sbin/useradd".into(),
             userdel: "/usr/sbin/userdel".into(),
             mkfs_ext4: "/usr/sbin/mkfs.ext4".into(),
+            losetup: "/usr/sbin/losetup".into(),
+            resize2fs: "/usr/sbin/resize2fs".into(),
             mount: "/usr/bin/mount".into(),
             umount: "/usr/bin/umount".into(),
         }
@@ -171,6 +188,18 @@ impl Config {
         ensure!(
             self.home_image_inodes >= 1024,
             "home_image_inodes is below 1024"
+        );
+        ensure!(
+            self.home_image_max_bytes >= self.home_image_bytes,
+            "home_image_max_bytes is below home_image_bytes"
+        );
+        ensure!(
+            self.home_min_free_bytes < self.home_grow_free_bytes,
+            "home_min_free_bytes must be below home_grow_free_bytes"
+        );
+        ensure!(
+            self.home_grow_free_bytes < self.home_image_bytes,
+            "home_grow_free_bytes must be below home_image_bytes"
         );
         ensure!(
             self.max_runtime_units != Some(0),
@@ -249,6 +278,42 @@ mod tests {
             ..Config::default()
         };
         assert!(bad.validated().is_err());
+    }
+
+    #[test]
+    fn home_capacity_bounds_are_ordered() {
+        for (adjust, valid) in [
+            (
+                Config {
+                    home_image_max_bytes: GIB,
+                    ..Config::default()
+                },
+                false,
+            ),
+            (
+                Config {
+                    home_min_free_bytes: 2 * GIB,
+                    ..Config::default()
+                },
+                false,
+            ),
+            (
+                Config {
+                    home_grow_free_bytes: 8 * GIB,
+                    ..Config::default()
+                },
+                false,
+            ),
+            (
+                Config {
+                    home_image_max_bytes: 4 * GIB,
+                    ..Config::default()
+                },
+                true,
+            ),
+        ] {
+            assert_eq!(adjust.validated().is_ok(), valid);
+        }
     }
 
     #[test]

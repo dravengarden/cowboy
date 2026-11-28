@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{Result, bail};
 
-use crate::host::{Host, UnitChild, UnitStatus, UnitStdio};
+use crate::host::{FsUsage, Host, UnitChild, UnitStatus, UnitStdio};
 
 #[derive(Default)]
 pub struct State {
@@ -22,6 +22,12 @@ pub struct State {
     pub stdio: Vec<UnitStdio>,
     /// Units whose `systemd-run` client was killed.
     pub killed: HashSet<String>,
+    /// Usage of filesystems mounted at a path; others are nearly empty.
+    pub usage: HashMap<PathBuf, FsUsage>,
+    /// `(image, target)` of every online grow.
+    pub grown: Vec<(PathBuf, PathBuf)>,
+    /// The next online grow fails.
+    pub grow_fails: bool,
     next_invocation: u64,
 }
 
@@ -242,5 +248,34 @@ impl Host for FakeHost {
 
     fn free_bytes(&self, _path: &Path) -> Result<u64> {
         Ok(self.free.load(Ordering::Relaxed))
+    }
+
+    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage> {
+        Ok(self.state().usage.get(path).copied().unwrap_or(FsUsage {
+            size_bytes: 1 << 40,
+            free_bytes: 1 << 40,
+            inodes: 1 << 20,
+            free_inodes: 1 << 20,
+        }))
+    }
+
+    /// The filesystem takes the image file's length; its used space and
+    /// inodes stay, so the new space is free.
+    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()> {
+        let length = std::fs::metadata(image)?.len();
+        let mut state = self.state();
+        if std::mem::take(&mut state.grow_fails) {
+            bail!("resize2fs failed");
+        }
+        state.grown.push((image.to_owned(), target.to_owned()));
+        if let Some(usage) = state.usage.get_mut(target) {
+            let added = length.saturating_sub(usage.size_bytes);
+            let scale = length / usage.size_bytes.max(1);
+            usage.free_bytes += added;
+            usage.free_inodes += usage.inodes * scale.saturating_sub(1);
+            usage.inodes *= scale.max(1);
+            usage.size_bytes = length;
+        }
+        Ok(())
     }
 }
