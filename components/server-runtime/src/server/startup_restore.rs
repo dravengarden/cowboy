@@ -156,8 +156,8 @@ pub async fn open_persistence(
             .await
             .context("connecting database")?;
         store.migrate().await.context("running migrations")?;
-        // Read-only, before any retirement write: a refused upgrade leaves
-        // the database as the previous Controller left it.
+        // Before retiring account rows, validate the credentials and sessions.
+        // A previously admitted dataset can settle rejected intake rows here.
         provider_accounts::retirement::admit_store(provider_auth, &store, service_id)
             .await
             .context("admitting the legacy card retirement")?;

@@ -166,6 +166,51 @@ impl Store {
         Ok(recipients)
     }
 
+    /// Settle rows registered by the old enrolled-Machine intake path before
+    /// the launch gate rejected the retired account. Only use this after the
+    /// same dataset and root wipes have already passed retirement admission.
+    pub async fn settle_retired_intake_registrations(&self) -> Result<Vec<String>> {
+        macro_rules! settle {
+            ($db:expr, $updated:literal, $deleted:literal, $empty_queue:literal) => {{
+                let mut tx = $db.pool.begin().await?;
+                let mut settled = Vec::new();
+                for provider in super::legacy_cards::retired_providers() {
+                    let ids = sqlx::query_scalar::<_, String>(concat!(
+                        "UPDATE sessions SET status='crashed', ", $updated,
+                        " WHERE provider=$1 AND provider_account_id='default' AND ",
+                        $deleted, " IS NULL AND status='starting' ",
+                        "AND origin='api' AND system=TRUE AND machine_id<>'local' ",
+                        "AND owner_user_id IS NULL AND execution_binding IS NULL ",
+                        "AND workspace_id IS NULL AND agent_session_id IS NULL ",
+                        "AND provider_version='' AND provider_generation_digest='' ",
+                        "AND provider_auth_generation IS NULL AND provider_behavior IS NULL ",
+                        "AND next_seq=0 AND ", $empty_queue,
+                        " AND NOT EXISTS (SELECT 1 FROM events WHERE session_id=sessions.id) ",
+                        "AND NOT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id=sessions.id) ",
+                        "RETURNING id",
+                    ))
+                    .bind(provider)
+                    .fetch_all(&mut *tx)
+                    .await?;
+                    settled.extend(ids);
+                }
+                tx.commit().await?;
+                settled
+            }};
+        }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => {
+                settle!(db, "updated_at=now()", "deleted_at", "queue='[]'::jsonb")
+            }
+            StorageBackend::Sqlite(db) => settle!(
+                db,
+                "updated_at_ms=CAST(strftime('%s','now') AS INTEGER)*1000",
+                "deleted_at_ms",
+                "json(queue)='[]'"
+            ),
+        })
+    }
+
     /// Live sessions (starting, running or busy) on a retired card's
     /// `default` account: their workers may still hold a card credential.
     pub async fn live_retired_default_sessions(&self) -> Result<Vec<String>> {

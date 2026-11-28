@@ -329,6 +329,15 @@ async fn start_intake_session(
     prompt: String,
 ) -> Result<(), Response> {
     if service.config.machine == "local" {
+        super::provider_accounts::creatable_default(&service.config.provider).map_err(
+            |reason| {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "session_start_failed", "detail": reason })),
+                )
+                    .into_response()
+            },
+        )?;
         service
             .state
             .supervisor

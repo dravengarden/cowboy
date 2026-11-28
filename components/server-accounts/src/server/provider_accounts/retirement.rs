@@ -108,10 +108,17 @@ pub async fn admit_store(
     dataset: &str,
 ) -> anyhow::Result<()> {
     let admitted = admission(auth, dataset);
+    let wipes_admitted = auth.admitted_retirement().as_ref() == Some(&admitted);
+    if wipes_admitted {
+        let settled = store.settle_retired_intake_registrations().await?;
+        if !settled.is_empty() {
+            tracing::warn!(sessions = ?settled, "settled rejected legacy intake registrations");
+        }
+    }
     // Every start: an older Controller after a rollback can resume a card
     // session without changing any wipe (only the wipe check is cached).
     let sessions = store.live_retired_default_sessions().await?;
-    if auth.admitted_retirement().as_ref() == Some(&admitted) {
+    if wipes_admitted {
         return admit(auth, &admitted, None, &sessions);
     }
     let recipients = store.credential_recipients().await?;

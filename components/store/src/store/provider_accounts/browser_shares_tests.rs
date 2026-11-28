@@ -1653,3 +1653,55 @@ async fn only_live_sessions_on_a_retired_card_default_block_admission() {
         ["busy-card", "live-card"]
     );
 }
+
+#[tokio::test]
+async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = sqlite_store(&dir).await;
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        panic!("sqlite")
+    };
+    for (id, origin, system, status, next_seq) in [
+        ("intake", "api", true, "starting", 0),
+        ("ordinary", "api", false, "starting", 0),
+        ("web", "web", true, "starting", 0),
+        ("ran", "api", true, "running", 0),
+        ("logged", "api", true, "starting", 1),
+        ("dispatched", "api", true, "starting", 0),
+    ] {
+        sqlx::query(
+            "INSERT INTO sessions(id,provider,machine_id,cwd,title,origin,system,status,next_seq) \
+             VALUES ($1,'codex','hawk','/tmp',$1,$2,$3,$4,$5)",
+        )
+        .bind(id)
+        .bind(origin)
+        .bind(system)
+        .bind(status)
+        .bind(next_seq)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO prompt_dispatches(session_id,cmid,origin,trigger_origin,dispatched_at_ms) \
+         VALUES ('dispatched','cmid','api','api',0)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store.settle_retired_intake_registrations().await.unwrap(),
+        ["intake"]
+    );
+    assert!(
+        store
+            .settle_retired_intake_registrations()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.live_retired_default_sessions().await.unwrap(),
+        ["dispatched", "logged", "ordinary", "ran", "web"]
+    );
+}

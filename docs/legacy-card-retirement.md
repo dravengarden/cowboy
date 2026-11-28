@@ -240,7 +240,11 @@ start with exactly those (a reboot with a Machine offline) skips the
 Machine wipe check; any change (a rollback signed a card in and out again)
 runs it again. The live-session check runs on every start (an older
 Controller after a rollback could resume a card session without changing any
-wipe). Delivery acknowledgements are recorded under exactly the enrollment
+wipe). When the recorded admission still matches, startup can settle empty
+system registrations left by the old enrolled-Machine External Intake path.
+That path registered a session before the retired-account launch gate
+rejected it. The live-session check still runs for every other session.
+Delivery acknowledgements are recorded under exactly the enrollment
 key the envelope was sealed to. A reconnecting Machine only wakes the
 reconciler for itself; there is no fleet-wide redelivery on reconnect, and
 failed-session recovery follows each successful root delivery.
