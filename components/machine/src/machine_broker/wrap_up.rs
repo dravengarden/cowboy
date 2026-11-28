@@ -311,29 +311,7 @@ pub(super) use super::account_unit::sanitize_snapshot_for_controller;
 
 /// Sanitize a live `CURRENT_TURN_CAPABILITIES_UPDATE` event before forwarding
 /// to the currently attached Controller.
-pub(super) fn sanitize_capability_event(
-    update: &mut serde_json::Value,
-    raw_wrap_up: bool,
-    worker_protocol: u16,
-    controller_outer_protocol: Option<u16>,
-    controller_runtime_protocol: u16,
-    declared_provider: Option<&str>,
-) {
-    let eff = effective_wrap_up_steering(
-        declared_provider,
-        raw_wrap_up,
-        controller_outer_protocol,
-        worker_protocol.min(controller_runtime_protocol),
-        true,
-    );
-    if let Some(obj) = update.as_object_mut() {
-        if declared_provider.is_none_or(crate::wrap_up::is_antigravity_provider) {
-            obj.insert("currentTurn".into(), serde_json::Value::Bool(false));
-            obj.insert("nextCheckpoint".into(), serde_json::Value::Bool(false));
-        }
-        obj.insert("wrapUpSteering".into(), serde_json::Value::Bool(eff));
-    }
-}
+pub(super) use super::account_unit::sanitize_capability_event;
 
 /// Build and enqueue a bounded `WorkerCommand::WrapUpHint` onto a worker's
 /// dedicated hint channel when all protocol, provider, target, and dedup
@@ -647,15 +625,32 @@ impl DispatchedPrompts {
     }
     const MAX_EVICTED_COMMANDS: usize = 262_144;
 
-    pub(super) fn has_unacked_for_epoch_or_ingress(
+    pub(super) fn queued_core_prompts_count(&self, sid: &str, cid: &str) -> usize {
+        self.queued_core_prompts
+            .get(&(sid.to_owned(), cid.to_owned()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn has_unacked_for_epoch_or_active_ingress(
         &self,
-        session_id: &str,
-        worker_epoch: &str,
+        sid: &str,
+        epoch: &str,
+        pending: &std::collections::HashMap<String, std::collections::VecDeque<WorkerCommand>>,
     ) -> bool {
-        self.entries.iter().any(|((sid, _), rec)| {
-            sid == session_id
+        self.entries.iter().any(|((s, cid), rec)| {
+            s == sid
                 && !rec.acked
-                && (rec.epoch.is_none() || rec.epoch.as_deref() == Some(worker_epoch))
+                && match rec.epoch.as_deref() {
+                    Some(e) => e == epoch,
+                    None => {
+                        self.queued_core_prompts_count(sid, cid) > 0
+                            || pending.get(sid).is_some_and(|q| {
+                                q.iter()
+                                    .any(|c| super::worker_command_id(c) == Some(cid.as_str()))
+                            })
+                    }
+                }
         })
     }
 
@@ -2686,15 +2681,19 @@ mod tests {
     #[test]
     fn dead_epoch_unacked_prompt_does_not_block_newer_epoch_drain_check() {
         let mut dispatched = DispatchedPrompts::default();
+        let pending = std::collections::HashMap::new();
         dispatched.record("s-m5", "cmd-old", "1-1");
-        assert!(dispatched.has_unacked_for_epoch_or_ingress("s-m5", "1-1"));
+        assert!(dispatched.has_unacked_for_epoch_or_active_ingress("s-m5", "1-1", &pending));
         assert!(
-            !dispatched.has_unacked_for_epoch_or_ingress("s-m5", "2-1"),
+            !dispatched.has_unacked_for_epoch_or_active_ingress("s-m5", "2-1", &pending),
             "dead-epoch unacked prompt must not veto a newer replacement epoch"
         );
-        // An ingress-stage prompt (epoch=None) still blocks any epoch.
+        // An orphaned ingress record (neither in core queue nor pending_commands) does not block.
         assert!(dispatched.mark_ingressed("s-m5", "cmd-ingress"));
-        assert!(dispatched.has_unacked_for_epoch_or_ingress("s-m5", "2-1"));
+        assert!(!dispatched.has_unacked_for_epoch_or_active_ingress("s-m5", "2-1", &pending));
+        // An active core-queued ingress prompt still blocks any epoch.
+        dispatched.inc_core_queue("s-m5", "cmd-ingress");
+        assert!(dispatched.has_unacked_for_epoch_or_active_ingress("s-m5", "2-1", &pending));
     }
 
     #[test]

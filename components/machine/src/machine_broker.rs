@@ -2205,7 +2205,7 @@ impl Broker {
         self.sessions.lock().remove(&session_id);
         self.awaiting_reconnect.lock().remove(&session_id);
         self.session_states.lock().remove(&session_id);
-        self.pending_commands.lock().remove(&session_id);
+        self.clear_pending_commands_and_retire_unhanded(&session_id);
         self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
         if !self.force_recycle_failed_start(&session_id).await {
@@ -2253,7 +2253,7 @@ impl Broker {
             "session reset superseded crashed worker drain",
             false,
         );
-        self.pending_commands.lock().remove(&session_id);
+        self.clear_pending_commands_and_retire_unhanded(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.sessions
             .lock()
@@ -2343,7 +2343,7 @@ impl Broker {
         if let Some(session) = &released {
             self.revoke_cache_protection(session, &session_id, "session_hibernated");
         }
-        self.pending_commands.lock().remove(&session_id);
+        self.clear_pending_commands_and_retire_unhanded(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.session_states.lock().remove(&session_id);
         snapshot.state = WorkerState::Exited;
@@ -2442,7 +2442,7 @@ impl Broker {
             return;
         }
         self.awaiting_reconnect.lock().remove(&session_id);
-        self.pending_commands.lock().remove(&session_id);
+        self.clear_pending_commands_and_retire_unhanded(&session_id);
         let _ = self.mark_dormant_exited_and_invalidate_drain(&session_id);
         if let Some(mut snapshot) = snapshot {
             snapshot.state = WorkerState::Exited;
@@ -2505,7 +2505,7 @@ impl Broker {
             .provider_store
             .readmit_native_session(binding, &session)?;
         self.sessions.lock().insert(id.clone(), session.clone());
-        self.pending_commands.lock().remove(id);
+        self.clear_pending_commands_and_retire_unhanded(id);
         self.awaiting_reconnect.lock().remove(id);
         let _ = self.mark_dormant_exited_and_invalidate_drain(id);
         self.account_quiesced_sessions.lock().remove(id);
@@ -4042,7 +4042,7 @@ async fn recover_account_stops_with<F, Fut>(
         }
         let stopped = stop(session.clone()).await;
         if stopped {
-            broker.pending_commands.lock().remove(&session);
+            broker.clear_pending_commands_and_retire_unhanded(&session);
             tracing::info!(
                 session,
                 "durable account stop recovered; credentials and stop intent retained"
@@ -4301,6 +4301,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 broker.route_worker(&session_id, WorkerCommand::Drain);
             }
             broker.replay_pending_crashed_drain(&session_id, connection_id);
+            broker.arm_crashed_drain_deadline_if_active(&session_id, &epoch, connection_id);
             broker.flush_pending(&session_id);
             let worker_result = handle_worker(
                 Arc::clone(&broker),

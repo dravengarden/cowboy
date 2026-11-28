@@ -18,6 +18,10 @@ use super::{Shared, command_ack};
 
 const MAX_REMEMBERED_DECISIONS: usize = 8;
 const DRAIN_OUTBOX_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// Hard upper bound on total cooperative drain settlement (ACP exit +
+/// execution cleanup + outbox flush) so a hung provider or refused relay
+/// cannot wedge revive/reset indefinitely.
+const DRAIN_SETTLEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 #[derive(Default)]
 pub(super) struct State {
@@ -41,6 +45,9 @@ pub(super) struct State {
     /// When the worker began waiting on final outbox flush after ACP settled,
     /// bounding cooperative drain fencing if ACKs are permanently withheld (R8-M2).
     drain_wait_started: Mutex<Option<std::time::Instant>>,
+    /// When `DrainCrashed` was accepted, bounding total settlement time even
+    /// while ACP or execution publishers remain in flight.
+    drain_accepted_at: Mutex<Option<std::time::Instant>>,
     /// Bounded recent `(command_id, accepted, reason)` decisions so a replayed
     /// `DrainCrashed` after a lost acceptance/refusal ACK returns the exact
     /// original decision.
@@ -93,6 +100,7 @@ impl State {
             .store(false, Ordering::Release);
         self.pending_abort.lock().take();
         self.drain_wait_started.lock().take();
+        self.drain_accepted_at.lock().take();
     }
 
     /// Active accepted `DrainCrashed` command id carried on `Frame::Hello` so a
@@ -360,6 +368,7 @@ pub(super) fn handle_drain_crashed(
             } else {
                 shared.crashed_drain.drain_wait_started.lock().take();
             }
+            *shared.crashed_drain.drain_accepted_at.lock() = Some(std::time::Instant::now());
             shared.crashed_drain.draining.store(true, Ordering::Release);
             None
         }
@@ -524,6 +533,7 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
                 .draining
                 .store(false, Ordering::Release);
             shared.crashed_drain.drain_wait_started.lock().take();
+            shared.crashed_drain.drain_accepted_at.lock().take();
             let snapshot = shared.snapshot.lock().clone();
             let effect = snapshot.uncertain_effect.clone();
             *shared.crashed_drain.pending_abort.lock() = Some((command_id.clone(), effect.clone()));
@@ -576,6 +586,7 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
             .draining
             .store(false, Ordering::Release);
         shared.crashed_drain.drain_wait_started.lock().take();
+        shared.crashed_drain.drain_accepted_at.lock().take();
         *shared.crashed_drain.pending_abort.lock() =
             Some((command_id.clone(), Some(effect.clone())));
         CommitDecision::Aborted(command_id, Some(effect), Box::new(snapshot.clone()))
@@ -598,10 +609,85 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
 /// `drain_commit_lock`, read the ledger's uncertain effect, and either abort
 /// (retaining `pending_abort` while holding) or emit `Frame::CrashedDrainCompleted`
 /// ONLY when ACP settled cleanly (R7-H1, R7-M1, R7-M5, R8-M2).
+fn abort_stuck_drain_if_timed_out(
+    shared: &Shared,
+    timeout: std::time::Duration,
+) -> Option<CommitDecision> {
+    let _commit = shared.crashed_drain.drain_commit_lock.lock();
+    if !shared.crashed_drain.draining.load(Ordering::Acquire)
+        || shared.crashed_drain.drain_committed()
+        || shared.crashed_drain.terminal_stop.load(Ordering::Acquire)
+    {
+        return None;
+    }
+    let elapsed = shared
+        .crashed_drain
+        .drain_accepted_at
+        .lock()
+        .map(|started| started.elapsed());
+    if !elapsed.is_some_and(|d| d >= timeout) {
+        return None;
+    }
+    let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+    shared.crashed_drain.record_abort_decision(
+        command_id.as_deref(),
+        "crashed_worker_drain_aborted: drain settlement timed out",
+    );
+    shared
+        .crashed_drain
+        .holding_uncertain_effect
+        .store(true, Ordering::Release);
+    shared
+        .crashed_drain
+        .draining
+        .store(false, Ordering::Release);
+    shared.crashed_drain.drain_wait_started.lock().take();
+    shared.crashed_drain.drain_accepted_at.lock().take();
+    let mut snapshot = shared.snapshot.lock().clone();
+    if let Some(ledger) = shared.execution.as_ref().and_then(|c| c.ledger())
+        && let Some(method) = ledger.uncertain_effect()
+    {
+        crate::runtime_wire::merge_uncertain_effect(
+            &mut snapshot.uncertain_effect,
+            crate::runtime_wire::UncertainEffect {
+                method,
+                sequence: ledger.uncertain_sequence().max(1),
+            },
+        );
+    }
+    let effect = snapshot.uncertain_effect.clone();
+    *shared.crashed_drain.pending_abort.lock() = Some((command_id.clone(), effect.clone()));
+    Some(CommitDecision::Aborted(
+        command_id,
+        effect,
+        Box::new(snapshot),
+    ))
+}
+
 pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<bool> {
+    if let Some(CommitDecision::Aborted(command_id, uncertain_effect, snapshot)) =
+        abort_stuck_drain_if_timed_out(shared, DRAIN_SETTLEMENT_TIMEOUT)
+    {
+        if shared.observation.peer_protocol.load(Ordering::Relaxed)
+            >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+        {
+            write_frame(
+                writer,
+                &Frame::CrashedDrainAborted {
+                    session_id: shared.session_id.clone(),
+                    worker_epoch: shared.worker_epoch.clone(),
+                    command_id,
+                    uncertain_effect,
+                },
+            )
+            .await?;
+        }
+        write_frame(writer, &Frame::Snapshot { worker: snapshot }).await?;
+        return Ok(false);
+    }
     let Some(settled_cleanly) = shared.crashed_drain.agent_settled() else {
         return Ok(false);
     };
@@ -684,5 +770,34 @@ mod r13_tests {
         // Refused command IDs evicted from the 8-entry cache remain in seen_drain_commands (R15-L2).
         assert!(state.remembered_decision("dc-fill-0").is_none());
         assert!(state.seen_drain_commands.lock().contains("dc-fill-0"));
+    }
+
+    #[test]
+    fn stuck_drain_settlement_aborts_after_timeout_even_before_acp_settles() {
+        let (shared, _notify_rx) = crate::worker::shared();
+        shared.crashed_drain.draining.store(true, Ordering::Release);
+        *shared.crashed_drain.accepted_command_id.lock() = Some("dc-stuck".into());
+        *shared.crashed_drain.drain_accepted_at.lock() =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        // ACP has not settled and a publisher is still in flight.
+        shared
+            .crashed_drain
+            .pending_event_publishers
+            .store(1, Ordering::Release);
+        assert!(shared.crashed_drain.agent_settled().is_none());
+
+        let decision = abort_stuck_drain_if_timed_out(&shared, DRAIN_SETTLEMENT_TIMEOUT);
+        assert!(matches!(
+            decision,
+            Some(CommitDecision::Aborted(Some(ref cid), _, _)) if cid == "dc-stuck"
+        ));
+        assert!(!shared.crashed_drain.draining.load(Ordering::Acquire));
+        assert!(
+            shared
+                .crashed_drain
+                .holding_uncertain_effect
+                .load(Ordering::Acquire)
+        );
+        assert!(shared.crashed_drain.was_aborted("dc-stuck"));
     }
 }

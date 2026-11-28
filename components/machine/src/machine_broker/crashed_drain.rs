@@ -6,6 +6,7 @@
 //! `crashed_drains`) and never held across `.await` or `send_controller`.
 //! Lifecycle mutations serialize on the broker's `session_lifecycle_gate`.
 
+mod deadline;
 mod teardown;
 
 use super::*;
@@ -15,11 +16,28 @@ use crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION;
 const RECENTLY_DRAINED_TTL: Duration = Duration::from_secs(120);
 const MAX_RECENTLY_DRAINED: usize = 256;
 const DIRECT_EXIT_GRACE: Duration = Duration::from_secs(2);
+const CRASHED_DRAIN_DEADLINE: Duration = Duration::from_secs(60);
 
-#[derive(Default)]
 pub(super) struct State {
     inner: Mutex<Inner>,
     pub(super) settled: Arc<tokio::sync::Notify>,
+    drain_deadline: Mutex<Duration>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(Inner::default()),
+            settled: Arc::new(tokio::sync::Notify::new()),
+            drain_deadline: Mutex::new(CRASHED_DRAIN_DEADLINE),
+        }
+    }
+}
+
+impl State {
+    fn deadline_duration(&self) -> Duration {
+        *self.drain_deadline.lock()
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +92,7 @@ struct PendingDrain {
     /// True ONLY after a same-epoch disconnect/reconnect when the command must
     /// be replayed; false while the live worker's ACK is already in flight (R4-M1).
     needs_replay: bool,
+    deadline: Instant,
 }
 
 struct ActiveDrain {
@@ -83,6 +102,7 @@ struct ActiveDrain {
     confirmed: bool,
     peer_pid: Option<u32>,
     retired_launch: RetiredLaunch,
+    deadline: Instant,
 }
 
 #[derive(Clone)]
@@ -93,7 +113,7 @@ struct UnconfirmedTeardown {
 }
 
 enum DrainAdmission {
-    Forwarded,
+    Forwarded(u64, Instant),
     RetryUnconfirmedTeardown(UnconfirmedTeardown),
     Rejected(String),
 }
@@ -172,7 +192,14 @@ impl Broker {
             acknowledged_uncertain_sequence,
             current_launch,
         ) {
-            DrainAdmission::Forwarded => {}
+            DrainAdmission::Forwarded(connection_id, deadline) => {
+                self.spawn_crashed_drain_deadline_watchdog(
+                    session_id,
+                    worker_epoch,
+                    connection_id,
+                    deadline,
+                );
+            }
             DrainAdmission::Rejected(reason) => {
                 self.command_rejected(&session_id, command_id, reason);
             }
@@ -246,9 +273,9 @@ impl Broker {
             {
                 DrainAdmission::Rejected("worker protocol does not support crashed drain".into())
             }
-            Some(worker) if worker.crashed_drain_fenced => {
-                DrainAdmission::Rejected("crashed worker drain already in progress".into())
-            }
+            Some(worker) if worker.crashed_drain_fenced => DrainAdmission::Rejected(
+                crate::runtime_wire::CRASHED_DRAIN_ALREADY_IN_PROGRESS_REASON.to_owned(),
+            ),
             Some(worker) if worker.snapshot.state != WorkerState::Crashed => {
                 DrainAdmission::Rejected("worker is not in Crashed state".into())
             }
@@ -264,7 +291,11 @@ impl Broker {
                 if pending_cmds
                     .get(session_id)
                     .is_some_and(|queue| !queue.is_empty())
-                    || dispatched.has_unacked_for_epoch_or_ingress(session_id, worker_epoch)
+                    || dispatched.has_unacked_for_epoch_or_active_ingress(
+                        session_id,
+                        worker_epoch,
+                        &pending_cmds,
+                    )
                     || pending_core.get(session_id).copied().unwrap_or(0) > 1 =>
             {
                 DrainAdmission::Rejected("session has queued or in-flight prompt handoffs".into())
@@ -290,42 +321,35 @@ impl Broker {
                     },
                 };
                 if worker.tx.send(frame).is_ok() {
+                    let deadline = Instant::now() + self.crashed_drains.deadline_duration();
+                    let connection_id = worker.connection_id;
                     worker.crashed_drain_fenced = true;
                     state.pending.insert(
                         command_id.to_owned(),
                         PendingDrain {
                             session_id: session_id.to_owned(),
                             epoch: worker_epoch.to_owned(),
-                            connection_id: worker.connection_id,
+                            connection_id,
                             acknowledged_uncertain_sequence,
                             peer_pid: trusted_pid,
                             retired_launch,
                             needs_replay: false,
+                            deadline,
                         },
                     );
                     // Publish broker-verified `crashed_drain_active: true`
                     // atomically under `controller -> sessions -> workers`
-                    // BEFORE any trailing worker event can be forwarded to the
-                    // Controller (R9-H2).
-                    let mut snap = worker.snapshot.clone();
-                    if snap.launch.is_none() {
-                        snap.launch = sessions.get(session_id).cloned();
-                    }
-                    snap.crashed_drain_active = true;
-                    snap.incarnation = self.reported_lineage(session_id);
-                    let declared_provider = sessions.get(session_id).map(|s| s.provider.as_str());
-                    wrap_up::sanitize_snapshot_for_controller(
-                        &mut snap,
-                        worker.raw_wrap_up_steering,
-                        worker.negotiated_protocol,
+                    // BEFORE any trailing worker event can be forwarded (R9-H2).
+                    self.publish_drain_fence_snapshot(
+                        session_id,
+                        &sessions,
+                        worker,
+                        &ctrl_tx,
                         ctrl_outer,
                         ctrl_protocol,
-                        declared_provider,
+                        true,
                     );
-                    let _ = ctrl_tx.send(Frame::Snapshot {
-                        worker: Box::new(snap),
-                    });
-                    DrainAdmission::Forwarded
+                    DrainAdmission::Forwarded(connection_id, deadline)
                 } else {
                     DrainAdmission::Rejected(
                         "worker disconnected before crashed drain handoff".into(),
@@ -414,6 +438,7 @@ impl Broker {
         }
         let peer_pid = entry.peer_pid;
         let retired_launch = entry.retired_launch;
+        let deadline = entry.deadline;
         state.pending.remove(command_id);
         if accepted {
             let already_confirmed = state.active.get(session_id).is_some_and(|active| {
@@ -428,6 +453,7 @@ impl Broker {
                     confirmed: already_confirmed,
                     peer_pid,
                     retired_launch,
+                    deadline,
                 },
             );
             if let Some(worker) = workers.get_mut(session_id) {
@@ -507,6 +533,19 @@ impl Broker {
             Some(launch) if launch != RetiredLaunch::Unresolved => launch,
             _ => matching_pending_launch.unwrap_or(RetiredLaunch::Unresolved),
         };
+        let deadline = state
+            .active
+            .get(session_id)
+            .filter(|a| a.epoch == epoch)
+            .map(|a| a.deadline)
+            .or_else(|| {
+                state
+                    .pending
+                    .values()
+                    .find(|p| p.session_id == session_id && p.epoch == epoch)
+                    .map(|p| p.deadline)
+            })
+            .unwrap_or_else(|| Instant::now() + self.crashed_drains.deadline_duration());
         worker.crashed_drain_fenced = true;
         state.active.insert(
             session_id.to_owned(),
@@ -517,6 +556,7 @@ impl Broker {
                 confirmed: true,
                 peer_pid: worker.peer_pid,
                 retired_launch,
+                deadline,
             },
         );
     }
@@ -612,6 +652,7 @@ impl Broker {
         // atomically during registration before `Welcome` and `flush_pending`
         // (R7-H4).
         if let Some((cmd_id, retired_launch)) = resumed_drain {
+            let deadline = Instant::now() + self.crashed_drains.deadline_duration();
             state.unconfirmed_teardown.remove(session_id);
             let orphaned = drain_pending_for_session(&mut state.pending, session_id);
             state.active.insert(
@@ -623,6 +664,7 @@ impl Broker {
                     confirmed: false,
                     peer_pid: preserved_pid,
                     retired_launch,
+                    deadline,
                 },
             );
             worker.crashed_drain_fenced = true;
@@ -2028,6 +2070,7 @@ mod tests {
                 confirmed: false,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
 
@@ -2182,6 +2225,7 @@ mod tests {
                 confirmed: false,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
         let make_req = |command: crate::execution_protocol::Command| {
@@ -2351,6 +2395,7 @@ mod tests {
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
                 needs_replay: false,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
         broker.handle_worker_command_ack(
@@ -2536,7 +2581,11 @@ mod tests {
             broker
                 .dispatched_prompts
                 .lock()
-                .has_unacked_for_epoch_or_ingress("s-r14-h1", "80-1")
+                .has_unacked_for_epoch_or_active_ingress(
+                    "s-r14-h1",
+                    "80-1",
+                    &broker.pending_commands.lock()
+                )
         );
         broker.handle_worker_event(
             "s-r14-h1",
@@ -2556,7 +2605,11 @@ mod tests {
             !broker
                 .dispatched_prompts
                 .lock()
-                .has_unacked_for_epoch_or_ingress("s-r14-h1", "80-1")
+                .has_unacked_for_epoch_or_active_ingress(
+                    "s-r14-h1",
+                    "80-1",
+                    &broker.pending_commands.lock()
+                )
         );
     }
 
@@ -2587,6 +2640,7 @@ mod tests {
                 confirmed: false,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
         broker.crashed_drains.inner.lock().pending.insert(
@@ -2599,6 +2653,7 @@ mod tests {
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
                 needs_replay: false,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
         // Worker A sends an abort naming session B's pending command ID (R14-M2).
@@ -2895,6 +2950,7 @@ mod tests {
                 confirmed: true,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
+                deadline: Instant::now() + CRASHED_DRAIN_DEADLINE,
             },
         );
         assert!(
@@ -2920,5 +2976,170 @@ mod tests {
                 .is_err(),
             "active launching must block stale drain commit"
         );
+    }
+
+    #[tokio::test]
+    async fn expired_crashed_drain_escalates_stop_releases_fence_and_unblocks_ensure() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        *broker.crashed_drains.drain_deadline.lock() = Duration::from_millis(25);
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        let mut worker_rx = attach_crashed_worker(
+            &broker,
+            "s-timeout",
+            "ep-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        broker.attach_worker_peer_pid("s-timeout", 1, Some(999_999));
+        while ctrl_rx.try_recv().is_ok() {}
+
+        broker
+            .drain_crashed_worker("s-timeout".into(), "dc-1".into(), "ep-1".into(), 0)
+            .await;
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::DrainCrashed { .. },
+                ..
+            })
+        ));
+        // Duplicate drain while fenced must emit the shared machine-readable reason.
+        broker
+            .drain_crashed_worker("s-timeout".into(), "dc-dup".into(), "ep-1".into(), 0)
+            .await;
+        let mut saw_dup_reason = false;
+        while let Ok(frame) = ctrl_rx.try_recv() {
+            if let Frame::CommandAck {
+                command_id,
+                accepted: false,
+                reason: Some(reason),
+                ..
+            } = frame
+                && command_id == "dc-dup"
+            {
+                assert_eq!(
+                    reason,
+                    crate::runtime_wire::CRASHED_DRAIN_ALREADY_IN_PROGRESS_REASON
+                );
+                saw_dup_reason = true;
+            }
+        }
+        assert!(saw_dup_reason, "duplicate drain must emit shared constant");
+
+        // Promote to accepted ActiveDrain; worker then hangs without completing.
+        broker.handle_worker_command_ack(
+            "ep-1",
+            1,
+            Frame::CommandAck {
+                session_id: "s-timeout".into(),
+                command_id: "dc-1".into(),
+                accepted: true,
+                reason: None,
+            },
+        );
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(
+            !broker
+                .workers
+                .lock()
+                .get("s-timeout")
+                .unwrap()
+                .crashed_drain_fenced,
+            "expired drain must release fence"
+        );
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .active
+                .contains_key("s-timeout"),
+            "expired unconfirmed drain must be removed from active"
+        );
+        let mut saw_stop = false;
+        while let Ok(frame) = worker_rx.try_recv() {
+            if matches!(
+                frame,
+                Frame::WorkerCommand {
+                    command: WorkerCommand::Stop { .. },
+                    ..
+                }
+            ) {
+                saw_stop = true;
+            }
+        }
+        assert!(saw_stop, "expired drain must route Stop to stuck worker");
+        let mut saw_cleared_snap = false;
+        while let Ok(frame) = ctrl_rx.try_recv() {
+            if let Frame::Snapshot { worker } = frame
+                && worker.session_id == "s-timeout"
+                && !worker.crashed_drain_active
+            {
+                saw_cleared_snap = true;
+            }
+        }
+        assert!(saw_cleared_snap, "expired drain must refresh snapshot");
+        let claim = broker
+            .claim_ensure_slot("s-timeout", false, "gen-1")
+            .await
+            .expect("ensure unblocked after drain timeout");
+        assert!(matches!(claim.0, Some(Ok(_))));
+    }
+
+    #[tokio::test]
+    async fn dropped_pending_prompt_queue_does_not_permanently_block_crashed_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        broker
+            .dispatched_prompts
+            .lock()
+            .mark_ingressed("s-drop", "cmd-orphan");
+        broker
+            .pending_commands
+            .lock()
+            .entry("s-drop".into())
+            .or_default()
+            .push_back(WorkerCommand::Prompt {
+                command_id: "cmd-orphan".into(),
+                turn_id: "turn-orphan".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "stale"})],
+                cmid: None,
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            });
+        broker.clear_pending_commands_and_retire_unhanded("s-drop");
+
+        let mut worker_rx = attach_crashed_worker(
+            &broker,
+            "s-drop",
+            "ep-2",
+            2,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        broker.attach_worker_peer_pid("s-drop", 2, Some(std::process::id()));
+        while ctrl_rx.try_recv().is_ok() {}
+        broker
+            .drain_crashed_worker("s-drop".into(), "dc-ok".into(), "ep-2".into(), 0)
+            .await;
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::DrainCrashed { command_id, .. },
+                ..
+            }) if command_id == "dc-ok"
+        ));
     }
 }

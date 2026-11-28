@@ -32,6 +32,24 @@ impl Drop for PendingCoreCommandGuard {
 }
 
 impl Broker {
+    /// Drop queued worker commands for `session_id` and retire any unhanded
+    /// prompt ingress records that have no remaining copy in the core queue.
+    /// Canonical lock order: `pending_commands -> dispatched_prompts`.
+    pub(super) fn clear_pending_commands_and_retire_unhanded(&self, session_id: &str) {
+        let mut pending = self.pending_commands.lock();
+        let Some(queue) = pending.remove(session_id) else {
+            return;
+        };
+        let mut dispatched = self.dispatched_prompts.lock();
+        for cmd in queue {
+            if let WorkerCommand::Prompt { command_id, .. } = cmd
+                && dispatched.queued_core_prompts_count(session_id, &command_id) == 0
+            {
+                dispatched.retire_if_unhanded(session_id, &command_id);
+            }
+        }
+    }
+
     pub(super) fn retire_core_queue_copy(&self, session_id: &str, command_id: &str) {
         let pending = self.pending_commands.lock();
         let queued_worker = pending.get(session_id).is_some_and(|queue| {
@@ -361,4 +379,28 @@ pub(super) fn purge_queued_prompt_on_refusal(
         && workers
             .get(session_id)
             .is_some_and(|w| w.snapshot.state == crate::runtime_wire::WorkerState::Crashed)
+}
+
+pub(super) fn sanitize_capability_event(
+    update: &mut serde_json::Value,
+    raw_wrap_up: bool,
+    worker_protocol: u16,
+    controller_outer_protocol: Option<u16>,
+    controller_runtime_protocol: u16,
+    declared_provider: Option<&str>,
+) {
+    let eff = crate::wrap_up::effective_wrap_up_steering(
+        declared_provider,
+        raw_wrap_up,
+        controller_outer_protocol,
+        worker_protocol.min(controller_runtime_protocol),
+        true,
+    );
+    if let Some(obj) = update.as_object_mut() {
+        if declared_provider.is_none_or(crate::wrap_up::is_antigravity_provider) {
+            obj.insert("currentTurn".into(), serde_json::Value::Bool(false));
+            obj.insert("nextCheckpoint".into(), serde_json::Value::Bool(false));
+        }
+        obj.insert("wrapUpSteering".into(), serde_json::Value::Bool(eff));
+    }
 }

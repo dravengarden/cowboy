@@ -360,7 +360,9 @@ pub(super) fn handle_crashed_drain_command_ack(
         return;
     };
     if !accepted {
-        if reason.is_some_and(|r| r.contains("already_in_progress")) {
+        if reason.is_some_and(|r| {
+            r.starts_with(crate::runtime_wire::CRASHED_DRAIN_ALREADY_IN_PROGRESS_PREFIX)
+        }) {
             return;
         }
         let matches_active_command = shared
@@ -1475,7 +1477,7 @@ mod crashed_drain_tests {
             "s-r11-h5",
             Some(&second_cmd),
             false,
-            Some("crashed_worker_drain_already_in_progress"),
+            Some(crate::runtime_wire::CRASHED_DRAIN_ALREADY_IN_PROGRESS_REASON),
         );
         assert!(is_draining_crashed_epoch(&rt.shared, "s-r11-h5", "105-1"));
 

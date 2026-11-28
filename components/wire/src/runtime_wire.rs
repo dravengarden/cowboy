@@ -31,6 +31,13 @@ pub struct DeliveryTarget {
 /// worker completion receipt `Frame::CrashedDrainCompleted`, and broker-only
 /// retirement notice `Frame::CrashedWorkerDrained`.
 pub const CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION: u16 = 10;
+/// Machine-readable prefix emitted by the Machine broker and matched by
+/// the Controller when a duplicate `DrainCrashedWorker` arrives while a
+/// drain is already in progress for the session.
+pub const CRASHED_DRAIN_ALREADY_IN_PROGRESS_PREFIX: &str =
+    "crashed_worker_drain_already_in_progress";
+pub const CRASHED_DRAIN_ALREADY_IN_PROGRESS_REASON: &str =
+    "crashed_worker_drain_already_in_progress: crashed worker drain already in progress";
 pub const PROTOCOL_VERSION: u16 = 10;
 pub use crate::post_edit_inspect::{
     POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION, PostEditInspectOutcome, PostEditInspectReply,
