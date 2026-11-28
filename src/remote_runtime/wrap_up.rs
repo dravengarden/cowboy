@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replacement_worker_with_unacknowledged_uncertain_effect_requeues_admitted_prompt() {
+    async fn replacement_worker_with_uncertain_effect_keeps_admitted_prompt_ready() {
         let hub = Hub::new();
         hub.create_local_session(
             "s-unc".into(),
@@ -584,13 +584,6 @@ mod tests {
             "s-unc".into(),
             SessionOrigin::Web,
             false,
-        );
-        hub.set_setting(
-            format!(
-                "{}s-unc",
-                crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
-            ),
-            serde_json::json!({"observed": 1, "acknowledged": 1, "method": "process/terminate"}),
         );
         let rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
         rt.shared.config_startups.lock().insert("s-unc".into());
@@ -619,11 +612,11 @@ mod tests {
         });
         super::super::config_sync::sync_config_for_worker(&rt.shared, &replacement);
         assert!(
-            rt.shared.pending.lock().is_empty(),
-            "admitted prompt must be withdrawn from pending instead of woken"
+            rt.shared.pending.lock().contains_key("prompt-1"),
+            "uncertain_effect must not park or withdraw an admitted prompt"
         );
         let (queue, _) = hub.queue_and_drafts("s-unc", |_| true).unwrap();
-        assert_eq!(queue.len(), 1, "withdrawn prompt must return to Hub queue");
+        assert_eq!(queue.len(), 0);
     }
 
     #[tokio::test]
@@ -730,7 +723,7 @@ mod tests {
             stored,
             CoreCommand::Prompt {
                 expected_worker_epoch: Some(ref ep),
-                acknowledged_uncertain_sequence: Some(0),
+                acknowledged_uncertain_sequence: Some(u64::MAX),
                 ..
             } if ep == "epoch-1"
         ));

@@ -1317,9 +1317,73 @@ pub struct DuplicateOptionsRequest {
     pub provider: String,
     pub provider_account_id: crate::provider_account::ProviderAccountId,
     #[serde(default)]
+    pub machine_id: Option<String>,
+    #[serde(default)]
+    pub runtime_machine_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
     pub preset: Option<String>,
     #[serde(default = "inherit_by_default")]
     pub inherit_settings: bool,
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn source_execution_machine(source: &SessionMeta) -> Result<String, String> {
+    let Some(binding) = &source.execution_binding else {
+        return Ok(source.machine_id.clone());
+    };
+    let binding = binding
+        .decode()
+        .map_err(|_| "Wait until this session's workspace is ready before forking it")?;
+    if binding.managed.is_some() {
+        return Err("A managed call cannot be forked".into());
+    }
+    Ok(binding.environment.machine_id)
+}
+
+fn duplicate_options_placement(
+    source: &SessionMeta,
+    machine_id: Option<&str>,
+    runtime_machine_id: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<(String, Option<String>, String), String> {
+    if source
+        .execution_binding
+        .as_ref()
+        .and_then(|binding| binding.decode().ok())
+        .is_some_and(|binding| binding.managed.is_some())
+    {
+        return Err("A managed call cannot be forked".into());
+    }
+    let req_machine = non_empty(machine_id);
+    let req_runtime = non_empty(runtime_machine_id);
+    let req_cwd = non_empty(cwd);
+    if req_machine.is_none() && req_runtime.is_none() && req_cwd.is_none() {
+        return placement(source);
+    }
+    let project = req_cwd
+        .or_else(|| non_empty(source.workspace_id.as_deref()))
+        .ok_or("This session has no project to fork")?;
+    let (machine_id, runtime_machine_id) = match (req_machine, req_runtime) {
+        (Some(machine), runtime) => (machine, runtime),
+        (None, Some(runtime)) => (source_execution_machine(source)?, Some(runtime)),
+        (None, None) => {
+            let machine = source_execution_machine(source)?;
+            let runtime = source
+                .execution_binding
+                .as_ref()
+                .map(|_| source.machine_id.clone());
+            (machine, runtime)
+        }
+    };
+    Ok((machine_id, runtime_machine_id, project))
 }
 
 /// The options a copy on another Provider or subscription would offer, so
@@ -1333,7 +1397,12 @@ pub async fn duplicate_options(
     let result = async {
         current_authority(&state, &auth)?;
         let source = owned(&state, &auth.principal, &id)?.meta;
-        let (machine_id, runtime_machine_id, project) = placement(&source)?;
+        let (machine_id, runtime_machine_id, project) = duplicate_options_placement(
+            &source,
+            request.machine_id.as_deref(),
+            request.runtime_machine_id.as_deref(),
+            request.cwd.as_deref(),
+        )?;
         let selection = NextAgent {
             provider: request.provider,
             provider_account_id: request.provider_account_id,
@@ -1483,6 +1552,67 @@ mod tests {
         let mut detached = info.meta;
         detached.workspace_id = None;
         assert!(placement(&detached).is_err());
+    }
+
+    #[test]
+    fn duplicate_options_placement_prefers_selected_target_machines() {
+        let hub = Hub::new();
+        let mut meta = source(&hub).meta;
+        meta.machine_id = "hawk".into();
+        // Omitting target machines keeps the source placement.
+        assert_eq!(
+            duplicate_options_placement(&meta, None, None, None),
+            Ok(("hawk".to_owned(), None, "columbus".to_owned()))
+        );
+        assert_eq!(
+            duplicate_options_placement(&meta, Some(" "), Some(""), Some(" ")),
+            Ok(("hawk".to_owned(), None, "columbus".to_owned()))
+        );
+        // Switching from Hawk local to OVH split execution resolves against OVH.
+        assert_eq!(
+            duplicate_options_placement(&meta, Some("hawk"), Some("ovh"), Some("columbus")),
+            Ok((
+                "hawk".to_owned(),
+                Some("ovh".to_owned()),
+                "columbus".to_owned()
+            ))
+        );
+        // Switching from OVH split execution back to Hawk local clears the source runtime machine.
+        meta.machine_id = "ovh".into();
+        meta.execution_binding = Some(crate::execution_environment::fixture());
+        assert_eq!(
+            duplicate_options_placement(&meta, None, None, None),
+            Ok((
+                "hawk".to_owned(),
+                Some("ovh".to_owned()),
+                "columbus".to_owned()
+            ))
+        );
+        assert_eq!(
+            duplicate_options_placement(&meta, Some("hawk"), None, None),
+            Ok(("hawk".to_owned(), None, "columbus".to_owned()))
+        );
+        assert_eq!(
+            duplicate_options_placement(&meta, None, Some("falcon"), None),
+            Ok((
+                "hawk".to_owned(),
+                Some("falcon".to_owned()),
+                "columbus".to_owned()
+            ))
+        );
+        // Replacing a session with no registered project previews options once
+        // the caller supplies a destination project and Machine.
+        meta.workspace_id = None;
+        meta.execution_binding = None;
+        assert!(duplicate_options_placement(&meta, None, None, None).is_err());
+        assert_eq!(
+            duplicate_options_placement(&meta, Some("hawk"), Some("ovh"), Some("columbus")),
+            Ok((
+                "hawk".to_owned(),
+                Some("ovh".to_owned()),
+                "columbus".to_owned()
+            ))
+        );
     }
 
     #[test]

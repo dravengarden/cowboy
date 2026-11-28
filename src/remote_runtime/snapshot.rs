@@ -260,20 +260,13 @@ impl SightingActivity {
         *self = Self::from_snapshot(worker);
     }
 
-    fn to_sighting(&self, hub: &crate::core::Hub, session_id: &str) -> CrashedWorkerSighting {
-        let required_uncertain = self
-            .uncertain_effect
-            .as_ref()
-            .map_or(0, |effect| effect.sequence.max(1));
-        let unacked_uncertain = required_uncertain > 0
-            && super::config_sync::acknowledged_uncertain_sequence_for(hub, session_id)
-                < required_uncertain;
+    fn to_sighting(&self) -> CrashedWorkerSighting {
         let idle = !self.busy_turn
             && self.pending_permissions.is_empty()
             && !self.background_tasks
             && self.pending_prompt_count == 0
             && !self.native_cycle_active
-            && !unacked_uncertain;
+            && self.uncertain_effect.is_none();
         CrashedWorkerSighting {
             worker_epoch: self.worker_epoch.clone(),
             generation: self.generation.clone(),
@@ -980,8 +973,21 @@ impl super::RemoteRuntime {
         if sighting.worker_epoch != worker_epoch || !sighting.idle {
             return false;
         }
-        let acknowledged_uncertain_sequence =
-            super::config_sync::acknowledged_uncertain_sequence_for(&self.shared.hub, session_id);
+        if self
+            .shared
+            .workers
+            .lock()
+            .get(session_id)
+            .is_some_and(|worker| {
+                worker.worker_epoch == worker_epoch && worker.uncertain_effect.is_some()
+            })
+        {
+            return false;
+        }
+        // Never synthesize a non-zero uncertainty cutoff for cooperative
+        // crashed-worker drain: broker-retained session history can outrank a
+        // replacement worker's own ledger sequence after clock skew, so sending
+        // a cutoff > 0 could mask a fresh cleanup failure during drain.
         let command_id = self.next_id("drain-crashed");
         self.queue(
             command_id.clone(),
@@ -989,7 +995,7 @@ impl super::RemoteRuntime {
                 session_id: session_id.to_owned(),
                 command_id,
                 worker_epoch: worker_epoch.to_owned(),
-                acknowledged_uncertain_sequence,
+                acknowledged_uncertain_sequence: 0,
             },
         );
         true
@@ -1006,7 +1012,7 @@ impl super::RemoteRuntime {
             .get(session_id)
             .filter(|entry| entry.state == WorkerState::Crashed)
             .map_or(CrashedWorkerObservation::Absent, |entry| {
-                CrashedWorkerObservation::Seen(entry.to_sighting(&self.shared.hub, session_id))
+                CrashedWorkerObservation::Seen(entry.to_sighting())
             })
     }
 }
@@ -1328,13 +1334,21 @@ mod crashed_drain_tests {
         snap.native_cycle_active = false;
         snap.uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
             method: "user_mcp".into(),
-            sequence: 2,
+            sequence: 42,
         });
         observe_crashed_sighting(&rt.shared, &snap);
+        rt.shared.protocol.store(
+            crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Ordering::Release,
+        );
         assert!(matches!(
             rt.last_crashed_worker("s-1"),
             CrashedWorkerObservation::Seen(s) if !s.idle
         ));
+        assert!(
+            !rt.drain_crashed_worker("s-1", "100-1"),
+            "crashed worker carrying an uncertain effect must not synthesize a drain cutoff"
+        );
 
         snap.uncertain_effect = None;
         observe_crashed_sighting(&rt.shared, &snap);
@@ -1342,6 +1356,17 @@ mod crashed_drain_tests {
             rt.last_crashed_worker("s-1"),
             CrashedWorkerObservation::Seen(s) if s.idle && s.worker_epoch == "100-1"
         ));
+        assert!(rt.drain_crashed_worker("s-1", "100-1"));
+        let queued = rt.shared.pending.lock();
+        assert!(queued.values().any(|cmd| matches!(
+            cmd,
+            super::super::CoreCommand::DrainCrashedWorker {
+                session_id,
+                worker_epoch,
+                acknowledged_uncertain_sequence: 0,
+                ..
+            } if session_id == "s-1" && worker_epoch == "100-1"
+        )));
     }
 
     #[tokio::test]

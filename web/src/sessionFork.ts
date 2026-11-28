@@ -182,6 +182,9 @@ export async function duplicateOptions(
   body: {
     provider: string;
     provider_account_id: string;
+    machine_id?: string | null;
+    runtime_machine_id?: string | null;
+    cwd?: string | null;
     preset?: string | null;
     inherit_settings?: boolean;
   },
@@ -196,6 +199,9 @@ export async function duplicateOptions(
       body: JSON.stringify({
         provider: body.provider,
         provider_account_id: body.provider_account_id,
+        ...(body.machine_id ? { machine_id: body.machine_id } : {}),
+        ...(body.runtime_machine_id ? { runtime_machine_id: body.runtime_machine_id } : {}),
+        ...(body.cwd ? { cwd: body.cwd } : {}),
         ...(body.preset ? { preset: body.preset } : {}),
         ...(body.inherit_settings === false ? { inherit_settings: false } : {}),
       }),

@@ -18,7 +18,7 @@ import {
 import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker } from "./AiInstallationPicker";
-import { ForkConfiguration, type ForkConfig, useForkTargetOptions } from "./ForkConfiguration";
+import { ForkConfiguration, resolveForkOverrides, useForkTargetOptions, useScopedForkOverrides } from "./ForkConfiguration";
 import { ForkOutcome } from "./ForkOutcome";
 import { NewSessionActions } from "./NewSessionActions";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
@@ -315,7 +315,6 @@ function NewSessionForm({
   const setCopyUncommitted = (v: boolean) => setForkOpts((o) => ({ ...o, uncommitted: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [overrides, setOverrides] = useState<ForkConfig>({});
   const liveOptions = useStoreSelector((state) => state.configOptions.get(session.id));
   const machines = useStoreSelector((state) => state.machines);
   const execution = sessionExecution(session);
@@ -339,8 +338,12 @@ function NewSessionForm({
   useEffect(() => {
     if (provider === defaults.provider) subscription.select(account);
   }, [provider, account]);
-  const target = useForkTargetOptions(session.id, { provider, account: subscription.value, preset, inherit: inheritSettings },
-    provider === session.provider ? liveOptions : undefined, Boolean(subscription.value));
+  const sameAccount = provider === session.provider && subscription.value === sourceAccount;
+  const targetGen = placement.installation?.installed.generation_digest ?? "";
+  const [rawOverrides, setOverrides] = useScopedForkOverrides(JSON.stringify([placement.installation?.value ?? "", targetGen, placement.machineId, placement.runtimeMachineId, subscription.value]));
+  const target = useForkTargetOptions(session.id, { provider, account: subscription.value, machineId: placement.machineId, runtimeMachineId: placement.runtimeMachineId || null, generationDigest: targetGen, cwd: placement.project?.projectId || "", preset, inherit: inheritSettings },
+    sameAccount && (placement.runtimeMachineId || placement.machineId) === session.machine_id && (!targetGen || targetGen === (session.provider_generation_digest ?? "")) ? liveOptions : undefined, Boolean(subscription.value && placement.installation));
+  const overrideState = resolveForkOverrides(rawOverrides, target.loadedOptions);
   const nextAgent = {
     provider,
     provider_account_id: subscription.value,
@@ -349,9 +352,8 @@ function NewSessionForm({
     cwd: placement.project?.projectId || "",
     preset: preset || null,
     inherit_settings: inheritSettings,
-    ...(Object.keys(overrides).length > 0 ? { config: overrides } : {}),
+    ...(Object.keys(overrideState.submitted).length > 0 ? { config: overrideState.submitted } : {}),
   };
-  const sameAccount = provider === session.provider && subscription.value === sourceAccount;
   // Worktrees live on the execution Machine, per project.
   const sameHome =
     nextAgent.cwd === (session.workspace_id || "") &&
@@ -377,7 +379,7 @@ function NewSessionForm({
       account: subscription.value,
       preset,
       inheritSettings,
-      overrides,
+      overrides: overrideState.submitted,
       copyUncommitted,
       queued,
       initialForkPoint,
@@ -388,7 +390,7 @@ function NewSessionForm({
   const continueSources =
     snapshot.next_agent || sources.includes(session.id) ? sources : [session.id, ...sources];
   const full = continueSources.length > observed.max_sources;
-  const ready = placement.ready && subscription.allowed && validPreset;
+  const ready = placement.ready && subscription.allowed && validPreset && overrideState.ready;
   const locked = busy || changedElsewhere || unresolved;
   useEffect(() => {
     if (changedElsewhere && !touched && !busy) onRestart();
@@ -450,7 +452,6 @@ function NewSessionForm({
         onChange={(value) => {
           if (placement.installations.find((item) => item.value === value)?.provider !== provider) {
             setPreset(undefined);
-            setOverrides({});
           }
           placement.selectInstallation(value);
         }}
@@ -502,7 +503,7 @@ function NewSessionForm({
         options={target.options}
         loading={target.loading}
         optionsError={target.error}
-        overrides={overrides}
+        overrides={overrideState.display}
         onOverrides={setOverrides}
         advanced={advanced}
         locked={locked}

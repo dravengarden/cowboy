@@ -153,13 +153,11 @@ impl Controls {
         policy::group_reset_ms(&limits, group, now_ms())
     }
 
-    /// One reconciliation pass: record uncertain effects, deliver fences and
-    /// logouts.
+    /// One reconciliation pass: deliver fences and logouts.
     pub async fn tick(&self) {
         if self.refresh().await.is_err() {
             return;
         }
-        self.observe_uncertain_effects().await;
         self.close_stop_fences().await;
         self.run_fences();
         self.run_logouts();
@@ -212,41 +210,6 @@ impl Controls {
                 }
                 Err(error) => tracing::warn!(%error, "adding a missing stop fence failed"),
             }
-        }
-    }
-
-    /// Record each governed session's newest uncertain effect durably, so a
-    /// dormant session stays parked until the owner acknowledges it.
-    async fn observe_uncertain_effects(&self) {
-        // Serialized with the owner's acknowledgement of the same record.
-        let _write = self.cache.writes.lock().await;
-        for meta in self.env.sessions() {
-            if !governed(&meta) {
-                continue;
-            }
-            let Some(effect) = self
-                .env
-                .worker(&meta.id)
-                .and_then(|worker| worker.uncertain_effect)
-            else {
-                continue;
-            };
-            let key = uncertain_key(&meta.id);
-            let mut record = self.env.setting(&key).unwrap_or_else(|| json!({}));
-            let sequence = effect.sequence.max(1);
-            if record["observed"].as_u64().unwrap_or(0) >= sequence {
-                continue;
-            }
-            record["observed"] = json!(sequence);
-            record["method"] = json!(effect.method);
-            record["observed_at_ms"] = json!(now_ms());
-            // Durable, then published, both under the writer lock the
-            // acknowledgement holds: the record only ever moves forward.
-            if let Err(error) = self.store.put_setting(&key, &record).await {
-                tracing::warn!(session = %meta.id, %error, "recording an uncertain effect failed");
-                continue;
-            }
-            self.env.set_setting(key, record);
         }
     }
 

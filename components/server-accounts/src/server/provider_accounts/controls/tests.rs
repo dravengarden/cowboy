@@ -664,49 +664,21 @@ async fn an_observed_backend_signal_parks_the_account_until_it_commits() {
 }
 
 #[tokio::test]
-async fn an_uncertain_effect_parks_the_session_until_acknowledged() {
+async fn an_uncertain_effect_does_not_park_the_session() {
     let (fake, controls, _root) = fixture().await;
     fake.uncertain("s1", 2);
-    parked(controls.before_dispatch("s1").await, "fs/writeFile");
-    // Other sessions of the account are not parked by it.
-    assert!(controls.parked_reason(&meta(&fake, "s2")).is_none());
-    // Observed durably: still parked when the worker is gone.
-    controls.tick().await;
-    fake.workers.lock().clear();
-    assert!(
-        controls
-            .parked_reason(&meta(&fake, "s1"))
-            .unwrap()
-            .contains("fs/writeFile")
-    );
-    assert_eq!(
-        controls.acknowledge("s1", 1).await.unwrap_err(),
-        "uncertain_effect_changed"
-    );
-    // Published by the acknowledgement itself, under the writer lock.
-    controls.acknowledge("s1", 2).await.unwrap();
     assert!(controls.parked_reason(&meta(&fake, "s1")).is_none());
     controls.before_dispatch("s1").await.unwrap();
-    // A newer lost reply parks it again, and acknowledging the older one
-    // never erases it.
-    fake.uncertain("s1", 3);
-    assert!(controls.parked_reason(&meta(&fake, "s1")).is_some());
     controls.tick().await;
+    assert!(fake.setting(&uncertain_key("s1")).is_none());
+    let read = controls.read_value(&[(ACCOUNT.parse().unwrap(), "antigravity".into())]);
+    assert_eq!(read["accounts"][0]["uncertain_effects"], json!([]));
+    // Legacy acknowledge endpoint remains idempotent for existing sessions.
+    assert_eq!(controls.acknowledge("s1", 2).await, Ok(2));
     assert_eq!(
-        controls.acknowledge("s1", 2).await.unwrap_err(),
-        "uncertain_effect_changed"
+        controls.acknowledge("missing", 2).await.unwrap_err(),
+        "session_not_found"
     );
-    assert_eq!(
-        fake.setting(&uncertain_key("s1")).unwrap()["observed"],
-        json!(3)
-    );
-    // The observation is durable, not only published.
-    let stored = controls.store.load_settings().await.unwrap();
-    let (_, record) = stored
-        .iter()
-        .find(|(key, _)| *key == uncertain_key("s1"))
-        .unwrap();
-    assert_eq!(record["observed"], json!(3));
 }
 
 #[tokio::test]

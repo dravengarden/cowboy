@@ -146,40 +146,14 @@ pub async fn apply(
 }
 
 impl Controls {
-    /// Acknowledge exactly the session's current uncertain effect, durably,
-    /// before its parked queue is released.
-    pub async fn acknowledge(
-        &self,
-        session: &str,
-        sequence: u64,
-    ) -> Result<(String, Value), &'static str> {
+    /// Backwards-compatible idempotent acknowledgement endpoint: uncertain
+    /// effects no longer park session queues, so acknowledging any existing
+    /// session succeeds without modifying durable state.
+    pub async fn acknowledge(&self, session: &str, sequence: u64) -> Result<u64, &'static str> {
         if self.env.session(session).is_none() {
             return Err("session_not_found");
         }
-        // Serialized with every other writer of the record, and decided on
-        // the record as it is now: only exactly the newest observed sequence
-        // is acknowledged, and a newer observation is never overwritten.
-        let _write = self.cache.writes.lock().await;
-        let (method, current) = self.uncertain(session).ok_or("no_uncertain_effect")?;
-        if current != sequence {
-            return Err("uncertain_effect_changed");
-        }
-        let key = uncertain_key(session);
-        let mut record = self.env.setting(&key).unwrap_or_else(|| json!({}));
-        if record["observed"].as_u64().unwrap_or(0) > sequence {
-            return Err("uncertain_effect_changed");
-        }
-        record["observed"] = json!(sequence);
-        record["method"] = json!(method);
-        record["acknowledged"] = json!(sequence);
-        record["acknowledged_at_ms"] = json!(now_ms());
-        self.store
-            .put_setting(&key, &record)
-            .await
-            .map_err(|_| "outcome_unknown")?;
-        // Published under the same lock as every observation of the record.
-        self.env.set_setting(key.clone(), record.clone());
-        Ok((key, record))
+        Ok(sequence)
     }
 }
 
@@ -266,7 +240,5 @@ pub async fn acknowledge(
         .ok_or("unavailable")?
         .acknowledge(session, sequence)
         .await?;
-    // Durable and published above; let the parked queue drain.
-    state.hub.retry_resource_wait(session);
     Ok(json!({"status":"committed","session_id":session,"acknowledged":sequence}))
 }

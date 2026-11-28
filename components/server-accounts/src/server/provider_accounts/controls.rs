@@ -420,38 +420,6 @@ impl Controls {
         Ok(())
     }
 
-    /// The session's unacknowledged uncertain effect: the live worker
-    /// snapshot or the Controller's durable observation of it, beyond the
-    /// owner's acknowledged sequence.
-    pub fn uncertain(&self, session: &str) -> Option<(String, u64)> {
-        let record = self.env.setting(&uncertain_key(session));
-        let field = |name: &str| {
-            record
-                .as_ref()
-                .and_then(|value| value.get(name))
-                .and_then(Value::as_u64)
-        };
-        let acknowledged = field("acknowledged").unwrap_or(0);
-        let live = self
-            .env
-            .worker(session)
-            .and_then(|worker| worker.uncertain_effect)
-            .map(|effect| (effect.method, effect.sequence.max(1)));
-        let stored = field("observed").map(|observed| {
-            let method = record
-                .as_ref()
-                .and_then(|value| value["method"].as_str())
-                .unwrap_or("request")
-                .to_owned();
-            (method, observed)
-        });
-        [live, stored]
-            .into_iter()
-            .flatten()
-            .max_by_key(|(_, sequence)| *sequence)
-            .filter(|(_, sequence)| *sequence > acknowledged)
-    }
-
     /// The quota group a session's turns draw on, only when every model
     /// value the Controller holds for it (durable selection, last advertised
     /// value, the worker's reported options) is of one group: a selection the
@@ -487,14 +455,10 @@ impl Controls {
             return Gate::Park(SIGNAL_PENDING.into());
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
-        let uncertain = self.uncertain(&meta.id);
         let group = self.quota_group(&meta.id);
         policy::gate(&GateInput {
             admitted: self.env.admitted(&meta.provider_account_id),
             control: control.as_ref(),
-            uncertain: uncertain
-                .as_ref()
-                .map(|(method, sequence)| (method.as_str(), *sequence)),
             quota_group: group,
             now_ms: now_ms(),
         })
@@ -711,14 +675,7 @@ impl Controls {
             .map(|(id, provider)| {
                 let account = id.as_str();
                 let control = self.cache.control(account);
-                let uncertain: Vec<Value> = sessions
-                    .iter()
-                    .filter(|meta| governed(meta) && meta.provider_account_id == *id)
-                    .filter_map(|meta| {
-                        let (method, sequence) = self.uncertain(&meta.id)?;
-                        Some(json!({"session_id":meta.id,"method":method,"sequence":sequence}))
-                    })
-                    .collect();
+                let uncertain: Vec<Value> = Vec::new();
                 json!({
                     "account_id": account,
                     "provider_id": provider,

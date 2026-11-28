@@ -17,7 +17,6 @@ fn input(control: Option<&Control>, now_ms: i64) -> GateInput<'_> {
     GateInput {
         admitted: true,
         control,
-        uncertain: None,
         quota_group: None,
         now_ms,
     }
@@ -73,11 +72,6 @@ fn every_non_ok_state_parks_dispatch_and_admission_comes_first() {
         );
         assert!(revival_allowed(true, Some(&record), 0).is_err());
     }
-    let uncertain = GateInput {
-        uncertain: Some(("fs/writeFile", 2)),
-        ..input(None, 0)
-    };
-    assert!(matches!(gate(&uncertain), Gate::Park(reason) if reason.contains("fs/writeFile")));
 }
 
 #[test]

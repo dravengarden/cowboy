@@ -925,10 +925,11 @@ control `expected_revision`), `stop_units` (retry unconfirmed fences),
 history-preserving native sign-out; one operation per block, pending while a
 Machine is offline, outcome in `logout.state` and its per-Machine `targets`), and
 `admit`/`unadmit` (Service owner; edits `accounts.antigravity_admitted` through
-the checked Service configuration writer). A queue parked by an uncertain
-target effect is released with `sessions.acknowledge_uncertain_effect
-{session_id, body:{sequence}}` (`POST /api/sessions/{id}/uncertain-effect/acknowledge`)
-after the owner reviewed the workspace.
+the checked Service configuration writer). Uncertain target effects no longer park session queues (`uncertain_effects` is
+always empty); `sessions.acknowledge_uncertain_effect {session_id, body:{sequence}}`
+(`POST /api/sessions/{id}/uncertain-effect/acknowledge`) remains as a deprecated
+idempotent compatibility endpoint that preserves its response shape without
+mutating durable state or dispatching queued prompts.
 
 The legacy default cards are retired
 ([`legacy-card-retirement.md`](legacy-card-retirement.md)): `accounts.adopt_legacy`,

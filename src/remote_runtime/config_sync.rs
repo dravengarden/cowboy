@@ -90,20 +90,6 @@ pub(super) fn queue_persisted_config(
 }
 
 pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
-    if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
-        // Requeue ONLY provably unsent prompts. Already-attempted sends are
-        // rejected explicitly by the broker/worker via CommandAck(accepted=false)
-        // when epoch or acknowledged_uncertain_sequence mismatches.
-        let rejected = take_unsent_pending_prompts(shared, &worker.session_id);
-        for command in rejected {
-            notice_recovery::requeue_rejected_command(
-                shared,
-                &worker.session_id,
-                Some(command),
-                Some(reason.clone()),
-            );
-        }
-    }
     if !worker.has_connected_owner() || worker.config_options.is_none() {
         return;
     }
@@ -141,77 +127,15 @@ pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
         }
     };
     if released_startup || released_recovery {
-        if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
-            let rejected = take_unsent_pending_prompts(shared, &worker.session_id);
-            for command in rejected {
-                notice_recovery::requeue_rejected_command(
-                    shared,
-                    &worker.session_id,
-                    Some(command),
-                    Some(reason.clone()),
-                );
-            }
-        } else {
-            let _ = shared.notify.send(());
-        }
+        let _ = shared.notify.send(());
     }
 }
 
-/// Check whether `worker` reports a newer `uncertain_effect` than the owner has
-/// acknowledged in Hub settings, so a replacement worker reviving on a prompt
-/// never runs an already-admitted prompt ahead of owner acknowledgment.
-pub(super) fn acknowledged_uncertain_sequence_for(hub: &crate::core::Hub, session_id: &str) -> u64 {
-    let key = format!(
-        "{}{}",
-        crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
-        session_id
-    );
-    hub.setting(&key)
-        .and_then(|value| {
-            value
-                .get("acknowledged")
-                .and_then(serde_json::Value::as_u64)
-        })
-        .unwrap_or(0)
-}
-
-pub(super) fn unacknowledged_uncertain_effect(
-    hub: &crate::core::Hub,
-    worker: &WorkerSnapshot,
-) -> Option<String> {
-    let effect = worker.uncertain_effect.as_ref()?;
-    let required = effect.sequence.max(1);
-    let acknowledged = acknowledged_uncertain_sequence_for(hub, &worker.session_id);
-    (required > acknowledged).then(|| {
-        format!(
-            "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
-            effect.method
-        )
-    })
-}
-
-/// Remove and return ONLY pending prompts for `session_id` that have never been
-/// handed off to the transport (`!sent && !attempted_sends`). Commands whose
-/// send was already attempted must settle via explicit `CommandAck` or turn
-/// lifecycle so the Controller never causes duplicate execution.
-pub(super) fn take_unsent_pending_prompts(shared: &Shared, session_id: &str) -> Vec<CoreCommand> {
-    let mut pending = shared.pending.lock();
-    let sent = shared.sent.lock();
-    let attempted = shared.attempted_sends.lock();
-    let mut rejected = Vec::new();
-    pending.retain(|key, command| {
-        if matches!(command, CoreCommand::Prompt { session_id: owner, .. } if owner == session_id)
-            && !sent.contains(key)
-            && !attempted.contains(key)
-        {
-            rejected.push(command.clone());
-            false
-        } else {
-            true
-        }
-    });
-    rejected
-}
+/// Uncertain target effects no longer park session queues or require owner
+/// acknowledgement. Send `u64::MAX` on prompt commands so already-deployed
+/// Machine brokers (which normalize `None` to `Some(0)` on v8+ Controllers) and
+/// workers never refuse prompts on an uncertain effect.
+pub(super) const UNCERTAIN_EFFECT_BYPASS_SEQUENCE: u64 = u64::MAX;
 
 // Completion proves admission when the separate CommandAck was lost. Start
 // events and active snapshots precede the fallible ACP send and cannot prove it.
@@ -376,10 +300,9 @@ pub(super) fn prepare_or_park_prompt_for_send(
     }
 }
 
-/// Check whether `command` (when `CoreCommand::Prompt`) is gated by an
-/// unacknowledged `uncertain_effect` on the current worker — withdrawing and
-/// requeuing it ONLY if provably unsent — and stamp its epoch + acknowledged
-/// sequence binding before transport handoff.
+/// Stamp `command`'s (when `CoreCommand::Prompt`) worker epoch and legacy
+/// uncertain-effect bypass sequence before transport handoff, parking any
+/// already-attempted send across a worker epoch change.
 #[allow(clippy::too_many_lines)]
 pub(super) fn prepare_prompt_for_send(
     shared: &Shared,
@@ -444,30 +367,11 @@ pub(super) fn prepare_prompt_for_send(
         if current_epoch.is_none() {
             return PromptPrep::Skip;
         }
-        if let Some(worker) = worker_snapshot.as_ref()
-            && unacknowledged_uncertain_effect(&shared.hub, worker).is_some()
-        {
-            return PromptPrep::Skip;
-        }
         return PromptPrep::Ready;
-    }
-    if let Some(worker) = worker_snapshot.as_ref()
-        && let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker)
-    {
-        if let Some(removed) = shared.pending.lock().remove_if_version(key, version) {
-            notice_recovery::requeue_rejected_command(
-                shared,
-                session_id,
-                Some(removed),
-                Some(reason),
-            );
-        }
-        return PromptPrep::Skip;
     }
     let mut mutated = false;
     if acknowledged_uncertain_sequence.is_none() {
-        *acknowledged_uncertain_sequence =
-            Some(acknowledged_uncertain_sequence_for(&shared.hub, session_id));
+        *acknowledged_uncertain_sequence = Some(UNCERTAIN_EFFECT_BYPASS_SEQUENCE);
         mutated = true;
     }
     if expected_worker_epoch.is_none() {

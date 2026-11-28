@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { nextScopedForkOverrides, resolveForkOverrides, validForkOverrides } from "./ForkConfiguration";
 import {
   duplicateMode,
   duplicateOptions,
@@ -119,7 +120,15 @@ test("duplicateOptions previews the target agent's options before it exists", as
   const calls: { url: string; body: unknown }[] = [];
   const options = await duplicateOptions(
     "sess/1",
-    { provider: "antigravity", provider_account_id: "husky", preset: "antigravity/neon", inherit_settings: false },
+    {
+      provider: "antigravity",
+      provider_account_id: "husky",
+      machine_id: "hawk",
+      runtime_machine_id: "ovh",
+      cwd: "columbus",
+      preset: "antigravity/neon",
+      inherit_settings: false,
+    },
     undefined,
     (url, init) => {
       calls.push({ url, body: JSON.parse(String(init.body)) });
@@ -137,6 +146,9 @@ test("duplicateOptions previews the target agent's options before it exists", as
       body: {
         provider: "antigravity",
         provider_account_id: "husky",
+        machine_id: "hawk",
+        runtime_machine_id: "ovh",
+        cwd: "columbus",
         preset: "antigravity/neon",
         inherit_settings: false,
       },
@@ -223,4 +235,97 @@ test("forkSession distinguishes typed pre-admission unsupported refusals from po
     expect(err).toBeInstanceOf(ForkSessionError);
     expect((err as ForkSessionError).definitiveUnsupported).toBe(true);
   }
+});
+
+
+test("validForkOverrides drops hidden, incompatible, or default-matching overrides", () => {
+  const options = [
+    {
+      id: "model",
+      name: "Model",
+      currentValue: "gpt-6.2-sol",
+      options: [
+        { value: "gpt-6.2-sol", name: "Sol 6.2" },
+        { value: "gpt-6.2-astra", name: "Astra" },
+      ],
+    },
+    {
+      id: "cache_protection",
+      name: "Cache protection",
+      currentValue: false,
+      options: [],
+    },
+  ];
+  expect(
+    validForkOverrides(
+      {
+        model: "gpt-6.2-astra",
+        removed_on_other_machine: "fast",
+        cache_protection: true,
+      },
+      options,
+    ),
+  ).toEqual({
+    model: "gpt-6.2-astra",
+    cache_protection: true,
+  });
+  expect(
+    validForkOverrides(
+      {
+        model: "unsupported-model-on-target",
+        cache_protection: "not-a-bool",
+      },
+      options,
+    ),
+  ).toEqual({});
+  expect(
+    validForkOverrides(
+      {
+        model: "gpt-6.2-sol",
+        cache_protection: false,
+      },
+      options,
+    ),
+  ).toEqual({});
+});
+
+
+test("resolveForkOverrides blocks pending overrides until target preview loads and never drops restrictive overrides on fallback", () => {
+  const targetPreview = [
+    {
+      id: "permission_mode",
+      name: "Permissions",
+      currentValue: "bypassPermissions",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "bypassPermissions", name: "Bypass" },
+      ],
+    },
+  ];
+  // Empty overrides do not block submission while loading.
+  expect(resolveForkOverrides({}, null)).toEqual({
+    submitted: {},
+    display: {},
+    ready: true,
+  });
+  // Pending restrictive permission override holds submission while preview is loading.
+  expect(resolveForkOverrides({ permission_mode: "default" }, null)).toEqual({
+    submitted: {},
+    display: { permission_mode: "default" },
+    ready: false,
+  });
+  // Once the target preview loads with bypassPermissions default, the restrictive override is submitted.
+  expect(resolveForkOverrides({ permission_mode: "default" }, targetPreview)).toEqual({
+    submitted: { permission_mode: "default" },
+    display: { permission_mode: "default" },
+    ready: true,
+  });
+});
+
+test("nextScopedForkOverrides resets stored draft on scope change so switching back never restores discarded edits", () => {
+  const editedA = { scope: "target-a", values: { model: "astra" } };
+  const switchedB = nextScopedForkOverrides(editedA, "target-b");
+  expect(switchedB).toEqual({ scope: "target-b", values: {} });
+  const backToA = nextScopedForkOverrides(switchedB, "target-a");
+  expect(backToA).toEqual({ scope: "target-a", values: {} });
 });

@@ -12,18 +12,106 @@ import { providerConfigOptionOrder } from "./providerConfigOptions";
 
 export type ForkConfig = Record<string, string | boolean>;
 
+/** Pure transition for scoped fork overrides: changing scope resets the
+ *  stored draft so returning to a prior target never restores discarded edits. */
+export function nextScopedForkOverrides(
+  current: { scope: string; values: ForkConfig },
+  scope: string,
+): { scope: string; values: ForkConfig } {
+  return current.scope === scope ? current : { scope, values: {} };
+}
+
+/** Draft overrides scoped to one target installation, active generation, and
+ *  subscription, resetting stored state whenever the scope changes. */
+export function useScopedForkOverrides(
+  scope: string,
+): [ForkConfig, (value: ForkConfig) => void] {
+  const [state, setState] = useState<{ scope: string; values: ForkConfig }>({
+    scope,
+    values: {},
+  });
+  const current = nextScopedForkOverrides(state, scope);
+  if (current !== state) {
+    setState(current);
+  }
+  const setValues = (next: ForkConfig): void => setState({ scope, values: next });
+  return [current.values, setValues];
+}
+
+/** Keep only overrides supported by the active preview `options` that still
+ *  differ from each option's default, preventing hidden or incompatible
+ *  configuration values from being submitted after a Machine, generation, or
+ *  subscription change. */
+export function validForkOverrides(
+  overrides: ForkConfig,
+  options: readonly ConfigOption[],
+): ForkConfig {
+  const valid: ForkConfig = {};
+  for (const [id, value] of Object.entries(overrides)) {
+    const option = options.find((entry) => entry.id === id);
+    if (!option) continue;
+    const supported = option.options.length > 0
+      ? option.options.some((choice) => choice.value === value)
+      : typeof value === typeof option.currentValue;
+    if (!supported) continue;
+    if (String(option.currentValue) === String(value)) continue;
+    valid[id] = value;
+  }
+  return valid;
+}
+
+/** Resolve pending overrides for display and submission. Live fallback options
+ *  are display-only; any pending override requires a successful preview for
+ *  the exact current target before submission so fallback defaults can never
+ *  strip an explicit restrictive override (such as permission mode). */
+export function resolveForkOverrides(
+  rawOverrides: ForkConfig,
+  loadedOptions: readonly ConfigOption[] | null,
+): { submitted: ForkConfig; display: ForkConfig; ready: boolean } {
+  const hasPending = Object.keys(rawOverrides).length > 0;
+  if (loadedOptions === null) {
+    return { submitted: {}, display: rawOverrides, ready: !hasPending };
+  }
+  const valid = validForkOverrides(rawOverrides, loadedOptions);
+  return { submitted: valid, display: valid, ready: true };
+}
+
 /** The target agent's options before it exists, as the Controller previews
- *  them for this Provider, subscription, preset and inheritance: every
- *  option with what the new agent would start on as its current value.
- *  `fallback` (the source's live options) stands in for the same Provider
- *  while the preview loads or when it is unavailable. */
+ *  them for this Provider, installed generation, subscription, preset and
+ *  inheritance: every option with what the new agent would start on as its
+ *  current value. `fallback` (the source's live options) stands in for display
+ *  only while the preview loads or when it is unavailable. */
 export function useForkTargetOptions(
   sessionId: string,
-  target: { provider: string; account: string; preset: string; inherit: boolean },
+  target: {
+    provider: string;
+    account: string;
+    machineId?: string;
+    runtimeMachineId?: string | null;
+    generationDigest?: string;
+    cwd?: string;
+    preset: string;
+    inherit: boolean;
+  },
   fallback: readonly ConfigOption[] | undefined,
   enabled: boolean,
-): { options: readonly ConfigOption[]; loading: boolean; error: string } {
-  const key = JSON.stringify([sessionId, target.provider, target.account, target.preset, target.inherit]);
+): {
+  options: readonly ConfigOption[];
+  loadedOptions: readonly ConfigOption[] | null;
+  loading: boolean;
+  error: string;
+} {
+  const key = JSON.stringify([
+    sessionId,
+    target.provider,
+    target.account,
+    target.machineId ?? "",
+    target.runtimeMachineId ?? "",
+    target.generationDigest ?? "",
+    target.cwd ?? "",
+    target.preset,
+    target.inherit,
+  ]);
   const [state, setState] = useState<{ key: string; options: ConfigOption[] | null; error: string }>({
     key: "",
     options: null,
@@ -37,6 +125,9 @@ export function useForkTargetOptions(
       {
         provider: target.provider,
         provider_account_id: target.account,
+        machine_id: target.machineId || null,
+        runtime_machine_id: target.runtimeMachineId || null,
+        cwd: target.cwd || null,
         preset: target.preset || null,
         inherit_settings: target.inherit,
       },
@@ -54,10 +145,12 @@ export function useForkTargetOptions(
     );
     return () => abort.abort();
   }, [key, enabled]);
-  const current = state.key === key ? state : null;
-  const options = current?.options ?? fallback ?? [];
+  const current = enabled && state.key === key ? state : null;
+  const loadedOptions = current?.options ?? null;
+  const options = loadedOptions ?? fallback ?? [];
   return {
     options,
+    loadedOptions,
     loading: enabled && current === null,
     error: current?.error ?? "",
   };

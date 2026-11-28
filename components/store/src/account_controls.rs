@@ -393,8 +393,6 @@ pub enum Gate {
 pub struct GateInput<'a> {
     pub admitted: bool,
     pub control: Option<&'a Control>,
-    /// The method and sequence of an unacknowledged uncertain effect.
-    pub uncertain: Option<(&'a str, u64)>,
     /// The quota group of the model the session's next turn uses
     /// ([`quota_group`]); `None` when unknown, which a scoped rate limit
     /// parks like an account-wide one.
@@ -438,11 +436,6 @@ pub fn gate(input: &GateInput<'_>) -> Gate {
             state => return Gate::Park(state.describe().into()),
         }
     }
-    if let Some((method, _)) = input.uncertain {
-        return Gate::Park(format!(
-            "the outcome of a target {method} is unknown; acknowledge it after reviewing the workspace"
-        ));
-    }
     Gate::Proceed { clears_rate_limit }
 }
 
@@ -462,7 +455,6 @@ pub fn revival_allowed(
     match gate(&GateInput {
         admitted,
         control: control.filter(|_| !scoped),
-        uncertain: None,
         quota_group: None,
         now_ms,
     }) {

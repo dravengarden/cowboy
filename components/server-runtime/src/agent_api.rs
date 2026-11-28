@@ -210,7 +210,7 @@ export interface AccountList {account_controls:AccountControls}
 // Any non-ok state or a missing admission parks the account's queues (prompts stay queued; the session's wait
 // shows why). Many sessions of one account run concurrently. A rate limit resumes on the next dispatch after until_ms.
 // Owner actions via control.apply accounts.control {account,body:{action,expected_revision?,confirm?}};
-// sessions.acknowledge_uncertain_effect {session_id,body:{sequence}} releases a queue parked by an unknown target effect.
+// sessions.acknowledge_uncertain_effect {session_id,body:{sequence}} is a deprecated compatibility no-op (uncertain effects no longer park queues; uncertain_effects is always empty).
 // Write: cowboy_execute({action:"accounts.update",operation,arguments:{expected_revision,change:AccountChange}}).
 export type AccountChange =
  | {type:"create";provider_id:string;label:string}

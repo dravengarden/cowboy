@@ -105,6 +105,44 @@ pub(crate) fn waiting(hub: &Hub, session: &str) -> Option<(i64, String)> {
     ))
 }
 
+fn is_legacy_uncertain_effect_wait(reason: &str) -> bool {
+    (reason.starts_with("the outcome of a target ")
+        && reason.ends_with(" is unknown; acknowledge it after reviewing the workspace"))
+        || (reason.contains("outcome is uncertain")
+            && reason.contains("acknowledge before continuing"))
+}
+
+/// Rewrite a persisted wait reason left behind by the retired uncertain-effect
+/// acknowledgement gate under the serialized wait update, preserving Pause,
+/// queue contents, retry/target flags (so Resume can still revive an Exited
+/// session), and held send intent.
+fn normalize_legacy_uncertain_wait(hub: &Hub, meta: &crate::core::SessionMeta) {
+    let explicit = hub.explicit_wait(&meta.id);
+    let mut normalized = None;
+    hub.edit_resource_wait(&meta.id, |current| match current {
+        Some(value)
+            if value
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_legacy_uncertain_effect_wait) =>
+        {
+            let replacement = if !explicit && crate::core::wait_awaits_target(&value) {
+                TARGET_WAIT_REASON
+            } else {
+                EXPLICIT_RETRY_WAIT
+            };
+            normalized = Some(replacement);
+            Some(crate::core::next_wait(Some(&value), replacement))
+        }
+        other => other,
+    });
+    if let Some(reason) = normalized
+        && waiting(hub, &meta.id).is_some_and(|(_, current)| current == reason)
+    {
+        hub.set_resource_wait(&meta.id, Some(reason.to_owned()));
+    }
+}
+
 /// A held explicit send always has a wait that retries it. Its row and the
 /// wait are separate records: a Controller crash between their writes, or a
 /// fence that returned the row by itself, can leave the row without one.
@@ -118,6 +156,14 @@ fn restore_held_waits(hub: &Hub, sessions: &[crate::core::SessionMeta]) {
             // later restart cannot apply it again.
             Some(stale) if stale.get("explicit").is_some() => {
                 hub.edit_resource_wait(&meta.id, |current| current);
+            }
+            Some(value)
+                if value
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(is_legacy_uncertain_effect_wait) =>
+            {
+                normalize_legacy_uncertain_wait(hub, meta);
             }
             _ => {}
         }
@@ -676,5 +722,130 @@ mod tests {
             Some(EXPLICIT_RETRY_WAIT)
         );
         assert!(waiting(&hub, "plain").is_none());
+    }
+
+    #[test]
+    fn legacy_uncertain_wait_reasons_normalize_while_preserving_pause_queue_and_held_intent() {
+        let hub = Hub::new();
+        for (id, paused) in [
+            ("paused-exited", true),
+            ("paused-target", true),
+            ("paused-held", true),
+            ("unpaused", false),
+        ] {
+            hub.create_local_session(
+                id.into(),
+                "antigravity".into(),
+                "/tmp".into(),
+                "test".into(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+            hub.set_paused(id, paused);
+            hub.submit(
+                id,
+                format!("msg-{id}"),
+                vec![],
+                Some(format!("c-{id}")),
+                &crate::prompt_origin::RequestCaller::Person,
+            );
+        }
+        hub.set_status("paused-exited", Status::Exited, None);
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("paused-held") else {
+            panic!("queue missing");
+        };
+        let held_row = value["queue"][0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            hub.hold_queued(
+                "paused-held",
+                &held_row,
+                &crate::prompt_origin::RequestCaller::Person,
+                Some("send"),
+                "r",
+            ),
+            crate::core::HoldOutcome::Held
+        );
+        wait(
+            &hub,
+            "paused-exited",
+            "the outcome of a target process/terminate is unknown; acknowledge it after reviewing the workspace",
+        );
+        wait(&hub, "paused-target", TARGET_WAIT_REASON);
+        wait(
+            &hub,
+            "paused-target",
+            "the outcome of a target process/terminate is unknown; acknowledge it after reviewing the workspace",
+        );
+        wait(
+            &hub,
+            "paused-held",
+            "Target process/terminate outcome is uncertain (sequence 9); review and acknowledge before continuing",
+        );
+        wait(
+            &hub,
+            "unpaused",
+            "the outcome of a target fs/writeFile is unknown; acknowledge it after reviewing the workspace",
+        );
+
+        restore_held_waits(&hub, &hub.session_list());
+
+        // Ordinary paused Exited session rewrites the obsolete acknowledgement
+        // instruction while keeping its retry wait so Resume still revives it.
+        assert_eq!(
+            waiting(&hub, "paused-exited")
+                .map(|(_, reason)| reason)
+                .as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        let exited_info = hub.session_info("paused-exited").unwrap();
+        assert!(exited_info.meta.paused);
+        assert_eq!(
+            exited_info.meta.resource_wait.as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        assert_eq!(exited_info.queue_count, 1);
+
+        // Paused target wait preserves its target retry right and drops legacy text.
+        assert!(awaits_target(&hub, "paused-target"));
+        assert_eq!(
+            waiting(&hub, "paused-target")
+                .map(|(_, reason)| reason)
+                .as_deref(),
+            Some(TARGET_WAIT_REASON)
+        );
+        assert!(hub.session_info("paused-target").unwrap().meta.paused);
+
+        // Held explicit send stays paused, keeps its held intent, and replaces
+        // the obsolete acknowledgement text with the standard retry wait.
+        assert_eq!(
+            waiting(&hub, "paused-held")
+                .map(|(_, reason)| reason)
+                .as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        let held_info = hub.session_info("paused-held").unwrap();
+        assert!(held_info.meta.paused);
+        assert!(hub.explicit_wait("paused-held"));
+        assert_eq!(
+            held_info.meta.resource_wait.as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        assert_eq!(held_info.queue_count, 1);
+
+        // Unpaused queued prompt keeps a normalized wait so maintenance wakes it.
+        assert_eq!(
+            waiting(&hub, "unpaused")
+                .map(|(_, reason)| reason)
+                .as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        assert_eq!(
+            hub.session_info("unpaused")
+                .unwrap()
+                .meta
+                .resource_wait
+                .as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
     }
 }

@@ -76,6 +76,30 @@ fn preset_values(
         .collect())
 }
 
+fn effective_runtime_machine(selection: &NextAgent) -> &str {
+    selection
+        .runtime_machine_id
+        .as_deref()
+        .unwrap_or(&selection.machine_id)
+}
+
+fn target_preview_meta(
+    source: &SessionMeta,
+    selection: &NextAgent,
+    generation: &ResolvedProviderGeneration,
+) -> SessionMeta {
+    let mut target = source.clone();
+    target.machine_id = effective_runtime_machine(selection).to_owned();
+    target.provider.clone_from(&selection.provider);
+    target.provider_account_id = selection.provider_account_id.clone();
+    target.provider_version.clone_from(&generation.version);
+    target
+        .provider_generation_digest
+        .clone_from(&generation.digest);
+    target.provider_auth_generation = generation.auth_generation;
+    target
+}
+
 /// The options a copy for `selection` would offer before it is created:
 /// the target generation's signed defaults, then what creation saves
 /// (inherited settings and the preset, or the preset alone).
@@ -86,12 +110,7 @@ pub async fn target_options(
     selection: &NextAgent,
 ) -> Result<serde_json::Value, String> {
     let generation = target_generation(state, auth, selection).await?;
-    let mut target = source.clone();
-    target.provider.clone_from(&selection.provider);
-    target.provider_account_id = selection.provider_account_id.clone();
-    target.provider_version = generation.version;
-    target.provider_generation_digest = generation.digest;
-    target.provider_auth_generation = generation.auth_generation;
+    let mut target = target_preview_meta(source, selection, &generation);
     let mut default_val = serde_json::to_value(&generation.behavior.default_preferences)
         .unwrap_or_else(|_| serde_json::json!({}));
     crate::managed_config::strip_opt_in_defaults(&mut default_val);
@@ -163,10 +182,7 @@ pub async fn target_generation(
     auth: &AuthenticatedProductRequest,
     selection: &NextAgent,
 ) -> Result<ResolvedProviderGeneration, String> {
-    let machine_id = selection
-        .runtime_machine_id
-        .as_deref()
-        .unwrap_or(&selection.machine_id);
+    let machine_id = effective_runtime_machine(selection);
     let store = state.store.as_ref().ok_or("Machine registry unavailable")?;
     let machine = store
         .list_machines()
@@ -436,5 +452,54 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn target_preview_meta_uses_effective_target_runtime_machine() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "source".into(),
+            "codex".into(),
+            "/worktree".into(),
+            "Task".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let mut source = hub.session_info("source").unwrap().meta;
+        source.machine_id = "hawk".into();
+        let generation = ResolvedProviderGeneration {
+            version: "0.2.42".into(),
+            digest: "signed-ovh".into(),
+            auth_generation: Some(1),
+            named_carry: None,
+            service_lineage: false,
+            behavior: crate::provider::legacy_behavior("antigravity"),
+        };
+        let split_selection = NextAgent {
+            provider: "antigravity".into(),
+            provider_account_id: serde_json::from_value(json!(
+                "5f5f8e08-c104-4982-be58-717f0be79f01"
+            ))
+            .unwrap(),
+            machine_id: "hawk".into(),
+            cwd: "columbus".into(),
+            runtime_machine_id: Some("ovh".into()),
+            preset: None,
+            inherit_settings: true,
+            config: serde_json::Map::new(),
+        };
+        let target = target_preview_meta(&source, &split_selection, &generation);
+        assert_eq!(target.machine_id, "ovh");
+        assert_eq!(target.provider, "antigravity");
+
+        let local_selection = NextAgent {
+            runtime_machine_id: None,
+            machine_id: "falcon".into(),
+            ..split_selection
+        };
+        assert_eq!(
+            target_preview_meta(&source, &local_selection, &generation).machine_id,
+            "falcon"
+        );
     }
 }
