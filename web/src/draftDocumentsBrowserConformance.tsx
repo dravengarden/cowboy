@@ -1607,6 +1607,39 @@ export async function runDraftDocumentsBrowserConformance(
             `${pane} pane header renders the symmetrical focus dot`,
           );
         }
+        // App-wide hairline & seam geometry: Row-1 top strip alignment, crisp
+        // single 1px Sessions splitter (no double borderRight + ::after), and
+        // aligned Prompt/Conversation pane header hairlines.
+        const activityBar = container.querySelector<HTMLElement>("[data-desktop-sessions-activity-bar]");
+        const tabStrip = container.querySelector<HTMLElement>("[data-desktop-tabs]");
+        if (activityBar && tabStrip) {
+          const leftBottom = activityBar.getBoundingClientRect().bottom;
+          const rightBottom = tabStrip.getBoundingClientRect().bottom;
+          check(
+            Math.abs(leftBottom - rightBottom) <= 0.5,
+            `Row-1 top hairlines align pixel-for-pixel (sessions=${leftBottom.toFixed(2)} vs tabs=${rightBottom.toFixed(2)})`,
+          );
+        }
+        const sessionsPane = container.querySelector<HTMLElement>('[data-desktop-pane="sessions"]');
+        const sessionsSplitter = container.querySelector<HTMLElement>('[data-desktop-splitter="sessions-prompt"]');
+        if (sessionsPane && sessionsSplitter) {
+          const borderRight = parseFloat(getComputedStyle(sessionsPane).borderRightWidth);
+          const splitterWidth = sessionsSplitter.getBoundingClientRect().width;
+          check(
+            borderRight === 0 && Math.abs(splitterWidth - 1) <= 0.5,
+            `Sessions seam is a single crisp 1px flex hairline (borderRight=${String(borderRight)}, splitter=${splitterWidth.toFixed(2)})`,
+          );
+        }
+        const promptHead = container.querySelector<HTMLElement>('[data-desktop-pane="prompt"] > [data-desktop-pane-header]');
+        const convHead = container.querySelector<HTMLElement>('[data-desktop-pane="conversation"] > [data-desktop-pane-header]');
+        if (promptHead && convHead) {
+          const promptBottom = promptHead.getBoundingClientRect().bottom;
+          const convBottom = convHead.getBoundingClientRect().bottom;
+          check(
+            Math.abs(promptBottom - convBottom) <= 0.5,
+            `Prompt and Conversation pane headers align pixel-for-pixel (${promptBottom.toFixed(2)} vs ${convBottom.toFixed(2)})`,
+          );
+        }
         const assertFocusInvariant = async (targetRegion: (typeof regions)[number]) => {
           const targetEl = container.querySelector<HTMLElement>(`[data-desktop-region="${targetRegion}"]`)!;
           targetEl.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0 }));

@@ -91,6 +91,7 @@ function InspectorRegion({ review, panel, language, findings }: {
   return (
     <Box
       data-desktop-region={REVIEW_INSPECTOR_REGION}
+      data-desktop-region-position={panel.beside ? undefined : "absolute"}
       data-review-inspector-placement={panel.beside ? "beside" : "inset"}
       tabIndex={-1}
       sx={{

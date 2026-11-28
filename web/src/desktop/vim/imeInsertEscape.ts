@@ -70,16 +70,30 @@ export function normalizeImeCompositionText(text: string): string {
 export type ImeEscapeKeyEvent = Pick<
   KeyboardEvent,
   "code" | "key" | "keyCode" | "isComposing" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"
->;
+> & { readonly repeat?: boolean };
 
 export type ImeEscapeKeyAction = "none" | "arm" | "escape";
 
 const START_BRIDGE_MS = 250;
 
-/** Per-editor/field tracker for IME Insert-mode escape sequences. */
+interface ActiveCompositionState {
+  physicalKeys: string;
+  lastPhysicalAt: number;
+  compositionText: string;
+  lastCompositionAt: number;
+  startedAt: number;
+  disqualified: boolean;
+}
+
+/** Per-editor/field tracker for IME Insert-mode escape sequences.
+ *
+ * Physical `keydown` keys (`physicalKeys`) and `compositionupdate` text
+ * (`compositionText`) are tracked on separate channels so out-of-order
+ * macOS WebKit/IMK delivery (`compositionstart` -> `compositionupdate("j")`
+ * -> `keydown(KeyJ, 229)`) never double-counts a single `j` as `"jj"`. */
 export class ImeInsertEscapeTracker {
-  private pendingStart: { keys: string; at: number; disqualified: boolean } | null = null;
-  private active: { keys: string; lastKeyAt: number; disqualified: boolean } | null = null;
+  private pendingStart: { physicalKey: string; at: number; disqualified: boolean } | null = null;
+  private active: ActiveCompositionState | null = null;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -104,19 +118,34 @@ export class ImeInsertEscapeTracker {
       return "none";
     }
     const time = this.now();
+    if (event.repeat) {
+      if (this.active) this.active.disqualified = true;
+      else this.pendingStart = { physicalKey: "", at: time, disqualified: true };
+      return "none";
+    }
     const letter = physicalAsciiLetter(event);
 
     if (composing) {
       if (!this.active) {
         if (this.pendingStart && time - this.pendingStart.at <= START_BRIDGE_MS) {
           this.active = {
-            keys: this.pendingStart.keys,
-            lastKeyAt: this.pendingStart.at,
+            physicalKeys: this.pendingStart.physicalKey,
+            lastPhysicalAt: this.pendingStart.at,
+            compositionText: "",
+            lastCompositionAt: time,
+            startedAt: this.pendingStart.at,
             disqualified: this.pendingStart.disqualified,
           };
           this.pendingStart = null;
         } else {
-          this.active = { keys: "", lastKeyAt: time, disqualified: false };
+          this.active = {
+            physicalKeys: "",
+            lastPhysicalAt: time,
+            compositionText: "",
+            lastCompositionAt: time,
+            startedAt: time,
+            disqualified: false,
+          };
         }
       }
       if (this.active.disqualified) return "none";
@@ -124,53 +153,38 @@ export class ImeInsertEscapeTracker {
         this.active.disqualified = true;
         return "none";
       }
-      if (this.active.keys.length > 0 && time - this.active.lastKeyAt > timeoutMs) {
+      if (this.active.physicalKeys.length > 0 && time - this.active.lastPhysicalAt > timeoutMs) {
         this.active.disqualified = true;
         return "none";
       }
-      const candidate = this.active.keys + letter;
+      const candidate = this.active.physicalKeys + letter;
       if (sequences.includes(candidate)) {
         this.active.disqualified = true;
         this.pendingStart = null;
         return "escape";
       }
       if (sequences.some((seq) => seq.startsWith(candidate))) {
-        this.active.keys = candidate;
-        this.active.lastKeyAt = time;
+        this.active.physicalKeys = candidate;
+        this.active.lastPhysicalAt = time;
         return candidate.length === 1 ? "arm" : "none";
       }
       this.active.disqualified = true;
       return "none";
     }
 
-    // Not composing yet, but key carries an IME marker (`Process`/229): typically
-    // the first key of a fresh composition, arriving just before `compositionstart`.
+    // Not composing yet, but key carries an IME marker (`Process`/229): record
+    // ONLY this single key as a short bridge to the imminent `compositionstart`.
+    // Never concatenate pre-composition keys into an escape here — an idle CJK
+    // source or keystroke without composition must never pair with the next `j`.
     if (letter === null) {
-      this.pendingStart = { keys: "", at: time, disqualified: true };
+      this.pendingStart = { physicalKey: "", at: time, disqualified: true };
       return "none";
     }
-    if (
-      this.pendingStart &&
-      !this.pendingStart.disqualified &&
-      this.pendingStart.keys.length > 0 &&
-      time - this.pendingStart.at <= timeoutMs
-    ) {
-      const candidate = this.pendingStart.keys + letter;
-      if (sequences.includes(candidate)) {
-        this.pendingStart = null;
-        this.active = { keys: candidate, lastKeyAt: time, disqualified: true };
-        return "escape";
-      }
-      if (sequences.some((seq) => seq.startsWith(candidate))) {
-        this.pendingStart = { keys: candidate, at: time, disqualified: false };
-        return "none";
-      }
-    }
     if (sequences.some((seq) => seq.startsWith(letter))) {
-      this.pendingStart = { keys: letter, at: time, disqualified: false };
+      this.pendingStart = { physicalKey: letter, at: time, disqualified: false };
       return "arm";
     }
-    this.pendingStart = { keys: "", at: time, disqualified: true };
+    this.pendingStart = { physicalKey: "", at: time, disqualified: true };
     return "none";
   }
 
@@ -179,15 +193,25 @@ export class ImeInsertEscapeTracker {
     const time = this.now();
     if (this.pendingStart && time - this.pendingStart.at <= START_BRIDGE_MS) {
       this.active = {
-        keys: this.pendingStart.keys,
-        lastKeyAt: this.pendingStart.at,
+        physicalKeys: this.pendingStart.physicalKey,
+        lastPhysicalAt: this.pendingStart.at,
+        compositionText: "",
+        lastCompositionAt: time,
+        startedAt: this.pendingStart.at,
         disqualified: this.pendingStart.disqualified,
       };
       this.pendingStart = null;
       return !this.active.disqualified;
     }
     this.pendingStart = null;
-    this.active = { keys: "", lastKeyAt: time, disqualified: false };
+    this.active = {
+      physicalKeys: "",
+      lastPhysicalAt: time,
+      compositionText: "",
+      lastCompositionAt: time,
+      startedAt: time,
+      disqualified: false,
+    };
     return true;
   }
 
@@ -201,7 +225,10 @@ export class ImeInsertEscapeTracker {
     const normalized = normalizeImeCompositionText(data);
     if (normalized.length === 0) return "none";
     const time = this.now();
-    if (this.active.keys.length > 0 && time - this.active.lastKeyAt > timeoutMs) {
+    if (
+      (this.active.compositionText.length > 0 && time - this.active.lastCompositionAt > timeoutMs) ||
+      (this.active.physicalKeys.length > 0 && time - this.active.lastPhysicalAt > timeoutMs)
+    ) {
       this.active.disqualified = true;
       return "none";
     }
@@ -210,17 +237,20 @@ export class ImeInsertEscapeTracker {
       return "escape";
     }
     if (sequences.some((seq) => seq.startsWith(normalized))) {
-      if (normalized.length > this.active.keys.length) {
-        this.active.keys = normalized;
-        this.active.lastKeyAt = time;
+      if (normalized !== this.active.compositionText) {
+        this.active.compositionText = normalized;
+        this.active.lastCompositionAt = time;
       }
       return "none";
     }
     // Inline-preview CJK/Japanese/Zhuyin IMEs may emit non-ASCII pre-edit text
-    // (`就`, `じ`, `ㄨ`) right after a valid physical prefix key. Keep tracking
-    // physical keys rather than disqualifying; ASCII pinyin (`ji`, `wo`) still
-    // disqualifies immediately.
-    if (this.active.keys.length > 0 && /[^A-Za-z]/.test(normalized)) {
+    // (`就`, `じ`, `ㄨ`) right after (or just before) a valid physical prefix
+    // key. Keep tracking physical keys rather than disqualifying; ASCII pinyin
+    // (`ji`, `wo`) still disqualifies immediately.
+    if (
+      /[^A-Za-z]/.test(normalized) &&
+      (this.active.physicalKeys.length > 0 || time - this.active.startedAt <= START_BRIDGE_MS)
+    ) {
       return "none";
     }
     this.active.disqualified = true;

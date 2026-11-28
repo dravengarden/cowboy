@@ -31,6 +31,7 @@ import {
   desktopModalBackdropSx,
   desktopModalPaperSx,
 } from "./DesktopEmbeddedControl";
+import { desktopFocusRootSx } from "./desktopFocusPrimitives";
 import {
   DesktopShortcutBar,
   type DesktopShortcutGroup,
@@ -136,6 +137,7 @@ export function desktopDialogSlotProps(options?: {
       ...(options?.paperRef ? { ref: options.paperRef } : {}),
       sx: {
         ...desktopModalPaperSx(),
+        ...desktopFocusRootSx(),
         ...options?.paperSx,
       },
     },

@@ -91,7 +91,9 @@ function PaneHeader({
       data-desktop-pane-header
       data-pane={pane}
       sx={{
-        minHeight: desktopSize(36),
+        height: desktopSize(38),
+        minHeight: desktopSize(38),
+        boxSizing: "border-box",
         px: 2,
         display: "flex",
         alignItems: "center",

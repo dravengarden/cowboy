@@ -13,6 +13,10 @@ export const DESKTOP_INSET_RADIUS = 6;
 export const DESKTOP_TOPBAR_CONTROL_HEIGHT = 38;
 /** The same height as a CSS length that follows the global font size. */
 export const DESKTOP_TOPBAR_CONTROL_SIZE = desktopSize(DESKTOP_TOPBAR_CONTROL_HEIGHT);
+/** Unified Row-1 chrome height shared by DesktopTabStrip, Sessions activity
+ *  bar, and the collapsed Sessions rail header so their bottom hairlines align
+ *  pixel-for-pixel across every font scale. */
+export const DESKTOP_TOP_STRIP_HEIGHT = desktopSize(38);
 export const DESKTOP_TOPBAR_CONTROL_GAP = 0.75;
 export const DESKTOP_TOPBAR_CONTROL_GAP_PX = 6;
 

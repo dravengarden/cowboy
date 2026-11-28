@@ -170,3 +170,86 @@ test("inline-preview non-ASCII pre-edit (Hanzi/Kana/Zhuyin) preserves physical K
   now = 420;
   assertEquals(tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000), "none");
 });
+
+test("macOS WebKit/IMK compositionupdate-before-keydown never double-counts first lowercase j", () => {
+  let now = 0;
+  const tracker = new ImeInsertEscapeTracker(() => now);
+  // First physical `j` delivers compositionstart + compositionupdate("j") BEFORE keydown(KeyJ, 229).
+  assertEquals(tracker.onCompositionStart(), true);
+  now = 2;
+  assertEquals(tracker.onCompositionUpdate("j", ["jj"], 1000), "none");
+  now = 4;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "arm",
+  );
+  // Continuing normal Chinese pinyin (`ji`) disqualifies and stays in Insert.
+  now = 80;
+  assertEquals(tracker.onCompositionUpdate("ji", ["jj"], 1000), "none");
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyI", { isComposing: true }), true, ["jj"], 1000),
+    "none",
+  );
+  tracker.onCompositionEnd();
+
+  // In a fresh composition under the same order, a real second `j` still escapes.
+  now = 200;
+  assertEquals(tracker.onCompositionStart(), true);
+  now = 202;
+  assertEquals(tracker.onCompositionUpdate("j", ["jj"], 1000), "none");
+  now = 204;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "arm",
+  );
+  now = 300;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "escape",
+  );
+  tracker.onCompositionEnd();
+});
+
+test("orphaned non-composing IME KeyJ and held repeat KeyJ never false-trigger escape", () => {
+  let now = 0;
+  const tracker = new ImeInsertEscapeTracker(() => now);
+  // Two non-composing keyCode 229 KeyJ events (idle CJK source without composition) never escape.
+  assertEquals(tracker.onKeyDown(imeKey("KeyJ"), false, ["jj"], 1000), "arm");
+  now = 120;
+  assertEquals(tracker.onKeyDown(imeKey("KeyJ"), false, ["jj"], 1000), "arm");
+  // When a composition actually starts right after, only the latest single `j` is bridged.
+  now = 125;
+  assertEquals(tracker.onCompositionStart(), true);
+  assertEquals(tracker.onCompositionUpdate("j", ["jj"], 1000), "none");
+  // Key repeat while holding `j` disqualifies instead of escaping.
+  now = 350;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true, repeat: true }), true, ["jj"], 1000),
+    "none",
+  );
+  now = 420;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "none",
+  );
+  tracker.onCompositionEnd();
+});
+
+test("inline-preview non-ASCII arriving before first KeyJ still tracks real jj cleanly", () => {
+  let now = 0;
+  const tracker = new ImeInsertEscapeTracker(() => now);
+  assertEquals(tracker.onCompositionStart(), true);
+  now = 2;
+  assertEquals(tracker.onCompositionUpdate("就", ["jj"], 1000), "none");
+  now = 4;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "arm",
+  );
+  now = 120;
+  assertEquals(
+    tracker.onKeyDown(imeKey("KeyJ", { isComposing: true }), true, ["jj"], 1000),
+    "escape",
+  );
+  tracker.onCompositionEnd();
+});

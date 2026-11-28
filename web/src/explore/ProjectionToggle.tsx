@@ -59,8 +59,8 @@ export function DesktopProjectionToggle({
         // ToggleButtonGroup below owns the History/Explore selection.
         ...desktopEmbeddedControlSx(),
         mr: 0.75,
-        height: desktopSize(34),
-        p: "3px",
+        height: desktopSize(28),
+        p: "2px",
         gap: 0.25,
         display: "inline-flex",
         alignItems: "center",
@@ -76,7 +76,7 @@ export function DesktopProjectionToggle({
         }}
         aria-label="Transcript view"
         sx={{
-          height: desktopSize(28),
+          height: desktopSize(24),
           "& .MuiToggleButtonGroup-grouped": {
             minWidth: desktopSize(62),
             px: 1.1,

@@ -8,24 +8,15 @@ import {
 } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import { registerVimSink } from "./vimSinkInput";
-import {
-  clearImeStatus,
-  setImeCommitted,
-  setImeComposing,
-} from "./imeStatusStore";
-import {
-  clearVimMacroRecording,
-  setVimMacroRecording,
-} from "./macroStatusStore";
+import { clearImeStatus, setImeCommitted, setImeComposing } from "./imeStatusStore";
+import { clearVimMacroRecording, setVimMacroRecording } from "./macroStatusStore";
 import { vimCommandKey } from "./vimCommandKey";
 import { syncVimCursorOwnership } from "./vimCursorOwnership";
 import { connectVimRegisterController } from "./vimRegister";
 import { getVimConfigSource, subscribeVimConfigSource } from "../../vimSetting";
 import { parseVimConfig } from "./vimConfig";
-import {
-  getInsertEscapeConfig,
-  ImeInsertEscapeTracker,
-} from "./imeInsertEscape";
+import { getInsertEscapeConfig, ImeInsertEscapeTracker } from "./imeInsertEscape";
+import { isImeKeyEvent } from "../../imeKey";
 import { clearNativeCompositionHold } from "../commands/keyIntent";
 import { DESKTOP_EDITOR_INSERT_EVENT } from "../editorInsert";
 
@@ -322,11 +313,19 @@ export function createImeAutoInsertVim(): {
       };
     }
 
+    private clearVimInsertKeyBuffer(): void {
+      const inputState = this.cm?.state?.vim?.inputState as { keyBuffer?: string[]; changeQueue?: unknown } | undefined;
+      if (inputState?.keyBuffer) inputState.keyBuffer.length = 0;
+      if (inputState && "changeQueue" in inputState) inputState.changeQueue = undefined;
+    }
+
     private normalizeVimState(preserveMode = false): void {
       if (composing || this.view.composing) {
         this.pendingFocusExit = true;
         return;
       }
+      this.imeEscape.reset();
+      this.imeAnchor = null;
       const macro = Vim.getVimGlobalState_().macroModeState;
       if (macro.isRecording) macro.exitMacroRecordMode();
       clearVimMacroRecording();
@@ -339,8 +338,7 @@ export function createImeAutoInsertVim(): {
         // Keep Insert mode across Desktop region focus moves, but drop any
         // pending insert-escape prefix (`j` of `jj`) so returning later cannot
         // accidentally pair with the next typed `j`.
-        if (inputState?.keyBuffer) inputState.keyBuffer.length = 0;
-        if (inputState && "changeQueue" in inputState) inputState.changeQueue = undefined;
+        this.clearVimInsertKeyBuffer();
         return;
       }
       const partialCommand = Boolean(inputState?.operator) ||
@@ -352,6 +350,10 @@ export function createImeAutoInsertVim(): {
 
     private syncFocusToMode(): void {
       const insertMode = !!this.cm?.state?.vim?.insertMode;
+      if (!composing && !this.pendingImeEscape) {
+        this.imeEscape.reset();
+        this.imeAnchor = null;
+      }
       // Vim mode is the cursor authority. Do this before focus transfer so a
       // WebView frame with stale `.cm-focused` state cannot paint both the old
       // Vim layer and the native Insert caret.
@@ -610,15 +612,14 @@ export function createImeAutoInsertVim(): {
       this.onNativeInput();
       if (!this.cm) this.connect();
       if (!this.cm?.state?.vim?.insertMode || this.pendingImeEscape) return;
+      // Drop any pending codemirror-vim insert keyBuffer while IME owns keys so
+      // browsers that emit literal `key: "j"` with `keyCode: 229` (Safari/WebKit)
+      // cannot pair a prior key across composition boundaries.
+      if (composing || isImeKeyEvent(event)) this.clearVimInsertKeyBuffer();
       const { sequences, timeoutMs } = getInsertEscapeConfig();
-      const action = this.imeEscape.onKeyDown(
-        event,
-        composing || this.view.composing,
-        sequences,
-        timeoutMs,
-      );
+      const action = this.imeEscape.onKeyDown(event, composing, sequences, timeoutMs);
       if (action === "arm") {
-        this.imeAnchor = this.captureDocAnchor();
+        if (!composing || !this.imeAnchor) this.imeAnchor = this.captureDocAnchor();
       } else if (action === "escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -627,6 +628,7 @@ export function createImeAutoInsertVim(): {
     };
 
     private readonly onImeCompositionStart = (): void => {
+      this.clearVimInsertKeyBuffer();
       if (this.pendingImeEscape) return;
       if (this.imeEscape.onCompositionStart()) {
         if (!this.imeAnchor) this.imeAnchor = this.captureDocAnchor();
@@ -644,6 +646,7 @@ export function createImeAutoInsertVim(): {
     };
 
     private readonly onImeCompositionEnd = (data: string): boolean => {
+      this.clearVimInsertKeyBuffer();
       this.imeEscape.onCompositionEnd();
       if (!this.pendingImeEscape) {
         this.imeAnchor = null;

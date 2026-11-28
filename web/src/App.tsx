@@ -129,6 +129,7 @@ import { DesktopShortcut, desktopShortcutCaps } from "./desktop/commands/Desktop
 import { ResourceLightbox } from "./ResourceLightbox";
 import type { Mode as ThemeMode } from "./theme";
 import { desktopFocusRootSx } from "./desktop/desktopFocusPrimitives";
+import { DESKTOP_TOP_STRIP_HEIGHT } from "./desktop/DesktopEmbeddedControl";
 
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -961,10 +962,12 @@ export function App({
                 borderColor: "divider",
                 gap: desktopSize(6),
                 px: desktopSize(10),
-                // Match the right pane's AppBar Toolbar EXACTLY, so the sidebar
-                // bar's bottom border lines up with the chat header's edge.
-                minHeight: desktopSize(44),
-                "@media (min-width: 600px)": { minHeight: desktopSize(44), px: desktopSize(10) },
+                // Match DesktopTabStrip's Row-1 height so the sidebar hairline
+                // runs cleanly into the tab strip's bottom border.
+                height: DESKTOP_TOP_STRIP_HEIGHT,
+                minHeight: DESKTOP_TOP_STRIP_HEIGHT,
+                boxSizing: "border-box",
+                "@media (min-width: 600px)": { minHeight: DESKTOP_TOP_STRIP_HEIGHT, px: desktopSize(10) },
                 // Installed desktop PWA (manifest `display_override:
                 // window-controls-overlay`): the browser's title bar is gone and
                 // content reaches the window's top edge. macOS overlays its window
@@ -1086,6 +1089,7 @@ export function App({
 
     return (
         <Box
+            data-desktop-workspace-root={surface === "desktop" ? "" : undefined}
             sx={{
                 display: "flex",
                 flexDirection: "column",
@@ -1298,25 +1302,18 @@ export function App({
                     sx={{
                         width: sidebarWidth,
                         flexShrink: 0,
-                        borderRight: 1,
-                        borderColor: "divider",
                         height: "100%",
                         // Collapsed Sessions stays mounted: its list still owns
                         // the ␣␣ session labels and folder state.
                         display: sessionsCollapsed ? "none" : "flex",
                         opacity: sessionsCollapseIntent ? 0.38 : 1,
                         transition: "opacity 120ms ease",
-                        // Anchor the absolutely-positioned resize handle.
-                        position: "relative",
                     }}
                 >
                     {sidebarHeader}
                     <Box sx={{ flex: 1, minHeight: 0 }}>{list}</Box>
-                    {/* VSCode-style divider: a thin grab strip straddling the
-                    right border. Desktop-only — it lives in the non-Drawer
-                    branch, so iPad/iPhone never render it. Invisible until
-                    hover/drag; an accent line marks it on hover, the full
-                    strip tints while dragging. */}
+                </Stack>
+                {!sessionsCollapsed && (
                     <HintTooltip
                         title="Resize layout"
                         shortcut={DESKTOP_SHORTCUTS.resize}
@@ -1344,37 +1341,31 @@ export function App({
                             tabIndex={-1}
                             onPointerDown={startResize}
                             sx={{
-                                position: "absolute",
-                                top: 0,
-                                // Wide hit area centred on the edge — easy to grab; the
-                                // visible 1px accent line stays centred via `::after`.
-                                right: -11,
-                                width: 22,
-                                height: "100%",
+                                // Single 1px flex hairline — identical to
+                                // prompt-conversation and review-navigator so no
+                                // borderRight + ::after double-seam can ever form.
+                                flex: "0 0 auto",
+                                alignSelf: "stretch",
+                                width: "1px",
+                                bgcolor: resizing ||
+                                        desktopWorkspace?.selectedSplitter ===
+                                            "sessions-prompt"
+                                    ? "primary.main"
+                                    : "divider",
+                                transition: "background-color 120ms",
+                                position: "relative",
                                 cursor: "col-resize",
-                                zIndex: 2,
-                                // Centered VSCode-style hairline: a SOLID 1px line
-                                // (divider) that just recolours to the accent on hover /
-                                // while dragging — never thickens. Identical to the
-                                // composer-column divider below so the two read the same.
+                                touchAction: "none",
+                                zIndex: 3,
                                 "&::after": {
                                     content: '""',
                                     position: "absolute",
                                     top: 0,
-                                    left: "50%",
-                                    transform: "translateX(-50%)",
-                                    width: "1px",
-                                    height: "100%",
-                                    bgcolor: resizing ||
-                                            desktopWorkspace?.selectedSplitter ===
-                                                "sessions-prompt"
-                                        ? "primary.main"
-                                        : "divider",
-                                    transition: "background-color 120ms",
+                                    bottom: 0,
+                                    left: "-11px",
+                                    right: "-11px",
                                 },
-                                "&:hover::after": {
-                                    bgcolor: "primary.main",
-                                },
+                                "&:hover": { bgcolor: "primary.main" },
                                 "&:focus": { outline: "none" },
                             }}
                         >
@@ -1386,7 +1377,7 @@ export function App({
                             )}
                         </Box>
                     </HintTooltip>
-                </Stack>
+                )}
                 </>
             ) : null}
 

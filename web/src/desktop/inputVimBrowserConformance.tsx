@@ -224,6 +224,40 @@ export async function checkInputVim(): Promise<string> {
       mode(first) === "normal" && text(first) === beforeJj,
       "CJK IME jj aborts j'j composition cleanly and enters Normal",
     );
+    // macOS WebKit/IMK order (compositionstart -> compositionupdate("j") -> keydown(KeyJ, 229)):
+    // a single lowercase `j` must stay in Insert rather than double-counting as `jj`.
+    press("A");
+    check(mode(first) === "insert", "A re-enters Insert for macOS IMK order check");
+    first.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+    setter.call(first, `${beforeJj}j`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "j" }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    await tick();
+    check(
+      mode(first) === "insert",
+      "first lowercase j under macOS IMK order stays in Insert (no premature Esc)",
+    );
+    setter.call(first, `${beforeJj}ji`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "ji" }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyI", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    first.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "ji" }));
+    setter.call(first, beforeJj);
+    first.dispatchEvent(new Event("input", { bubbles: true }));
+    first.setSelectionRange(first.value.length, first.value.length);
+    check(mode(first) === "insert", "macOS IMK pinyin ji stays in Insert cleanly");
+    // A real second `j` under the same macOS IMK order still exits to Normal cleanly.
+    first.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+    setter.call(first, `${beforeJj}j`);
+    first.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "j" }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    setter.call(first, `${beforeJj}j'j`);
+    first.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "j'j" }));
+    await tick();
+    check(
+      mode(first) === "normal" && text(first) === beforeJj,
+      "real second j under macOS IMK order still exits to Normal cleanly",
+    );
     // Textarea: j/k move lines.
     const notes = field("notes");
     notes.focus();

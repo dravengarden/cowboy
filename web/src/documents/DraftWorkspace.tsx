@@ -290,7 +290,7 @@ function DraftWorkspaceBody(
   }
   const sidebar = (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
-      <Toolbar variant="dense" sx={{ px: 1, gap: 0.5 }} {...dropProps(null)}>
+      <Toolbar variant="dense" sx={{ px: 1, gap: 0.5, height: desktopSize(44), minHeight: desktopSize(44), boxSizing: "border-box", borderBottom: 1, borderColor: "divider" }} {...dropProps(null)}>
         <Button color="inherit" startIcon={<ArrowBack />} onClick={leave}>
           Sessions
         </Button>
@@ -497,85 +497,40 @@ function DraftWorkspaceBody(
     <Stack
       ref={canvas}
       data-draft-workspace
+      data-desktop-workspace-root={desktop ? "" : undefined}
       sx={{ height: "100%", minHeight: 0, bgcolor: "background.default", pt: desktop ? 0 : "var(--cowboy-system-top-clearance)", pb: desktop ? 0 : "var(--kb-inset, 0px)", ...(desktop ? desktopFocusRootSx() : {}) }}
     >
       {desktop && <DraftCommands create={create} close={leave} />}
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
         {inlineSidebar
           ? (
-            <Box
-              component="nav"
-              aria-label="Draft library"
-              data-desktop-pane="sessions"
-              data-desktop-region="sessions.list"
-              tabIndex={-1}
-              sx={{
-                width: navWidth,
-                minWidth: 190,
-                maxWidth: "45%",
-                borderRight: 1,
-                borderColor: "divider",
-                flexShrink: 0,
-                position: "relative",
-              }}
-            >
+            <>
+            <Box component="nav" aria-label="Draft library" data-desktop-pane="sessions" data-desktop-region="sessions.list" tabIndex={-1} sx={{ width: navWidth, minWidth: 190, maxWidth: "45%", flexShrink: 0 }}>
               {sidebar}
-              <Box
-                role="separator"
-                aria-label="Resize draft sidebar"
-                aria-orientation="vertical"
-                aria-valuenow={navWidth}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  const key = shortcutKey(e.nativeEvent);
-                  if (
-                    key === null || e.ctrlKey || e.metaKey ||
-                    e.altKey
-                  ) return;
-                  if (key === "ArrowLeft" || key === "ArrowRight") {
-                    e.preventDefault();
-                    setNavWidth((n) =>
-                      Math.max(
-                        190,
-                        Math.min(500, n + (key === "ArrowLeft" ? -20 : 20)),
-                      )
-                    );
-                  }
-                }}
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return;
-                  e.preventDefault();
-                  const start = e.clientX;
-                  const width = navWidth;
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  const el = e.currentTarget;
-                  const move = (event: PointerEvent): void =>
-                    setNavWidth(
-                      Math.max(
-                        190,
-                        Math.min(500, width + event.clientX - start),
-                      ),
-                    );
-                  const stop = (): void => {
-                    el.removeEventListener("pointermove", move);
-                    el.removeEventListener("lostpointercapture", stop);
-                  };
-                  el.addEventListener("pointermove", move);
-                  el.addEventListener("lostpointercapture", stop, {
-                    once: true,
-                  });
-                }}
-                sx={{
-                  position: "absolute",
-                  right: -4,
-                  top: 0,
-                  bottom: 0,
-                  width: 8,
-                  cursor: "col-resize",
-                  zIndex: 2,
-                }}
-              />
             </Box>
+            <Box role="separator" aria-label="Resize draft sidebar" aria-orientation="vertical" aria-valuenow={navWidth} tabIndex={0}
+              onKeyDown={(e) => {
+                const key = shortcutKey(e.nativeEvent);
+                if (key === null || e.ctrlKey || e.metaKey || e.altKey) return;
+                if (key === "ArrowLeft" || key === "ArrowRight") {
+                  e.preventDefault();
+                  setNavWidth((n) => Math.max(190, Math.min(500, n + (key === "ArrowLeft" ? -20 : 20))));
+                }
+              }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                const start = e.clientX; const width = navWidth;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                const el = e.currentTarget;
+                const move = (event: PointerEvent): void => setNavWidth(Math.max(190, Math.min(500, width + event.clientX - start)));
+                const stop = (): void => { el.removeEventListener("pointermove", move); el.removeEventListener("lostpointercapture", stop); };
+                el.addEventListener("pointermove", move);
+                el.addEventListener("lostpointercapture", stop, { once: true });
+              }}
+              sx={{ flex: "0 0 auto", alignSelf: "stretch", width: "1px", bgcolor: "divider", transition: "background-color 120ms", position: "relative", cursor: "col-resize", touchAction: "none", zIndex: 3, "&::after": { content: '""', position: "absolute", top: 0, bottom: 0, left: "-5px", right: "-5px" }, "&:hover": { bgcolor: "primary.main" }, "&:focus": { outline: "none", bgcolor: "primary.main" } }}
+            />
+            </>
           )
           : (
             <Drawer
@@ -606,7 +561,7 @@ function DraftWorkspaceBody(
           >
             <Toolbar
               variant="dense"
-              sx={{ gap: 1, minHeight: desktopSize(44) }}
+              sx={{ gap: 1, height: desktopSize(44), minHeight: desktopSize(44), boxSizing: "border-box" }}
             >
               {!inlineSidebar && (
                 <IconButton

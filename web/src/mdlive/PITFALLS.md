@@ -3387,3 +3387,10 @@ via `<Esc>`, and clears `nativeCompositionEndedAt` so the next Normal key works
 immediately. Mobile/iOS touch editors do not load this module, and physical
 iPhone issue #69 is untouched; macOS WeType/Pinyin live spot-check still
 depends on the host OS IME beyond CDP `Input.imeSetComposition`.
+Keep `physicalKeys` (`keydown`) and `compositionText` (`compositionupdate`) on
+separate channels, never trigger escape before `compositionstart`, ignore
+`event.repeat`, pass live DOM `composing` (not CM6's post-end `view.composing`
+hold), and clear `codemirror-vim`'s `keyBuffer` across compositions: under
+macOS WebKit/IMK delivery `compositionstart` + `compositionupdate("j")` can
+precede `keydown(KeyJ, 229)` for the same first keypress, which previously
+double-counted a single lowercase `j` as `jj` and immediately exited Insert.

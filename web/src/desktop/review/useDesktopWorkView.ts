@@ -16,6 +16,7 @@ import {
   DESKTOP_WORKSPACE_KEYS,
 } from "../commands/workspaceShortcuts";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
+import { isDesktopRegionVisible } from "../desktopFocusResolution";
 import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent } from "../../mobile/appPagerMotion";
 import { useReviewOpenRequest } from "../../useReviewOpenRequest";
 import {
@@ -33,20 +34,26 @@ const REVIEW_FOCUS_REGION = "review.document";
 /** Opening or focusing Tasks lands in its Reader, falling back to Roster. */
 const TASKS_FOCUS_REGIONS = ["tasks.reader", "tasks.roster"] as const;
 
-/** Focus the first matching region once it exists (Review loads lazily),
- *  returning a cancel function so switching sessions drops stale requests. */
+/** Focus the first visible matching region once it exists (Review loads lazily),
+ *  returning a cancel function so switching views, sessions, or opening modals
+ *  drops stale requests instead of claiming hidden regions. */
 function focusAnyRegionWhenMounted(
   focusRegion: (region: string) => void,
   regions: readonly string[],
+  shouldContinue: () => boolean,
   frames = 120,
 ): () => void {
   let cancelled = false;
   let rafId = 0;
   const step = (remaining: number): void => {
     rafId = requestAnimationFrame(() => {
-      if (cancelled) return;
+      if (cancelled || !shouldContinue()) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       for (const region of regions) {
-        if (document.querySelector(`[data-desktop-region="${CSS.escape(region)}"]`)) {
+        const el = document.querySelector<HTMLElement>(
+          `[data-desktop-region="${CSS.escape(region)}"]`,
+        );
+        if (el && isDesktopRegionVisible(el)) {
           focusRegion(region);
           return;
         }
@@ -91,14 +98,24 @@ export function useDesktopWorkView(sessionId: string): {
   if (view === "review" && !reviewMounted) setReviewMounted(true);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const callsDockLegacyRef = useRef(callsDockLegacy);
   callsDockLegacyRef.current = callsDockLegacy;
   const cancelFocusRef = useRef<(() => void) | null>(null);
-
-  const scheduleFocus = useCallback((regions: readonly string[]): void => {
+  const cancelPendingFocus = useCallback((): void => {
     cancelFocusRef.current?.();
-    cancelFocusRef.current = focusAnyRegionWhenMounted(focusRegion, regions);
-  }, [focusRegion]);
+    cancelFocusRef.current = null;
+  }, []);
+
+  const scheduleFocus = useCallback((expectedView: DesktopWorkView, regions: readonly string[]): void => {
+    cancelPendingFocus();
+    cancelFocusRef.current = focusAnyRegionWhenMounted(
+      focusRegion,
+      regions,
+      () => viewRef.current === expectedView,
+    );
+  }, [cancelPendingFocus, focusRegion]);
 
   // Retire pending focus requests and inspector ownership when leaving a session.
   useEffect(() => {
@@ -117,33 +134,35 @@ export function useDesktopWorkView(sessionId: string): {
     if (inspectorState().sessionId === sessionId) closeBackgroundTasks();
     setStored({ sessionId, view: "conversation" });
     if (workspace.focusedPane === "conversation") {
-      scheduleFocus(["conversation.transcript"]);
+      scheduleFocus("conversation", ["conversation.transcript"]);
     }
   }, [callsDockLegacy, rawView, scheduleFocus, sessionId, workspace.focusedPane]);
 
   const showView = useCallback((next: DesktopWorkView): void => {
     const id = sessionIdRef.current;
     const effective: DesktopWorkView = callsDockLegacyRef.current && next === "tasks" ? "conversation" : next;
+    cancelPendingFocus();
+    viewRef.current = effective;
     saveDesktopWorkView(id, effective);
     setStored({ sessionId: id, view: effective });
-  }, []);
+  }, [cancelPendingFocus]);
   const selectView = useCallback((next: DesktopWorkView): void => {
     const effective: DesktopWorkView = callsDockLegacyRef.current && next === "tasks" ? "conversation" : next;
     showView(effective);
-    if (effective === "review") scheduleFocus([REVIEW_FOCUS_REGION, "review.navigator"]);
-    else if (effective === "tasks") scheduleFocus(TASKS_FOCUS_REGIONS);
-    else scheduleFocus(["conversation.transcript"]);
+    if (effective === "review") scheduleFocus("review", [REVIEW_FOCUS_REGION, "review.navigator"]);
+    else if (effective === "tasks") scheduleFocus("tasks", TASKS_FOCUS_REGIONS);
+    else scheduleFocus("conversation", ["conversation.transcript"]);
   }, [scheduleFocus, showView]);
   useLayoutEffect(() => publishDesktopWorkView(view), [view]);
   useLayoutEffect(() => () => publishDesktopWorkView("conversation"), []);
   const showReview = useCallback((): void => {
     showView("review");
-    scheduleFocus([REVIEW_FOCUS_REGION]);
+    scheduleFocus("review", [REVIEW_FOCUS_REGION]);
   }, [scheduleFocus, showView]);
   const showTasks = useCallback((): void => {
     if (callsDockLegacyRef.current) return;
     showView("tasks");
-    scheduleFocus(TASKS_FOCUS_REGIONS);
+    scheduleFocus("tasks", TASKS_FOCUS_REGIONS);
   }, [scheduleFocus, showView]);
 
   // Opening a task from a transcript row or deep link reveals the Tasks tab.
@@ -173,7 +192,10 @@ export function useDesktopWorkView(sessionId: string): {
       showTasks();
     };
     const toPrompt = (event: Event): void => {
-      if (mobileProductFromEvent(event) === "agent") focusRegion("prompt.composer");
+      if (mobileProductFromEvent(event) === "agent") {
+        cancelPendingFocus();
+        focusRegion("prompt.composer");
+      }
     };
     globalThis.addEventListener(DESKTOP_WORK_VIEW_EVENT, request);
     globalThis.addEventListener(OPEN_BACKGROUND_TASKS_EVENT, openTasks);
@@ -183,7 +205,7 @@ export function useDesktopWorkView(sessionId: string): {
       globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, openTasks);
       globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, toPrompt);
     };
-  }, [focusRegion, showTasks, showView]);
+  }, [cancelPendingFocus, focusRegion, showTasks, showView]);
 
   const reviewShown = view === "review";
   const openCommand = useMemo<DesktopCommand>(() => ({

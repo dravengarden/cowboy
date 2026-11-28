@@ -9,6 +9,7 @@ import {
 } from "../explore/exploreStore";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
+import { desktopSize } from "../surface/desktopSize";
 
 export function DesktopConversationControls(
   { sessionId, projection = "history", shortcutActive = false }: {
@@ -58,7 +59,7 @@ export function DesktopConversationControls(
           // Conversation focus exposes F but does not select this control.
           // Following's real state below is the only source of active paint.
           ...desktopEmbeddedControlSx(),
-          height: "2.125rem",
+          height: desktopSize(28),
           minWidth: 0,
           px: "0.45rem",
           mr: "0.375rem",

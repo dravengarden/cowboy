@@ -65,6 +65,34 @@ test("all Desktop workspaces mount desktopFocusRootSx, avoid duplicate DraftEdit
   // All 3 panes (Sessions in App.tsx, Prompt & Conversation in DesktopWorkspace.tsx) render data-desktop-pane-dot
   expect(appSrc).toContain("data-desktop-pane-dot");
   expect(wsSrc).toContain("data-desktop-pane-dot");
+  // Stable workspace root marker spans all 3 panes across compact->wide resizes
+  expect(appSrc).toContain("data-desktop-workspace-root");
+  expect(draftWsSrc).toContain("data-desktop-workspace-root");
+  // Portaled DesktopModal regions (e.g. Page Index) mount shared focus primitives
+  const [modalSrc, reviewSrc, tabStripSrc, controllerSrc, cmdProviderSrc, workViewSrc] = await Promise.all([
+    readFile(new URL("./DesktopModal.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./review/DesktopReviewView.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./DesktopTabStrip.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./DesktopWorkspaceController.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./commands/DesktopCommandProvider.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./review/useDesktopWorkView.ts", import.meta.url), "utf8"),
+  ]);
+  expect(modalSrc).toContain("desktopFocusRootSx()");
+  // Inset Inspector keeps position:absolute via host attribute without losing ::after frame
+  expect(reviewSrc).toContain('data-desktop-region-position={panel.beside ? undefined : "absolute"}');
+  const root = desktopFocusRootSx();
+  const regionRule = root["& [data-desktop-region]"] as Record<string, unknown>;
+  expect(regionRule["&[data-desktop-region-position='absolute']"]).toEqual({ position: "absolute" });
+  const focusedAfter = root["& [data-desktop-region][data-desktop-focused='true']::after"] as Record<string, unknown>;
+  expect(focusedAfter["@media (forced-colors: active)"]).toBeDefined();
+  // Row-1 top strip height is shared across App Sessions bar, collapsed rail head, and DesktopTabStrip
+  expect(appSrc).toContain("DESKTOP_TOP_STRIP_HEIGHT");
+  expect(collapseSrc).toContain("DESKTOP_TOP_STRIP_HEIGHT");
+  expect(tabStripSrc).toContain("DESKTOP_TOP_STRIP_HEIGHT");
+  // Controller scopes pane chrome to [data-desktop-workspace-root], Top Bar Ctrl+J routes via focusAdjacentRegion(1)
+  expect(controllerSrc).toContain("[data-desktop-workspace-root]");
+  expect(cmdProviderSrc).toContain('workspace.focusedRegion === "topbar.controls" && motion === "j"');
+  expect(workViewSrc).toContain("isDesktopRegionVisible");
 });
 
 test("desktopFocusResolution resolves visible sub-regions and remembers last focused sub-region per pane", () => {

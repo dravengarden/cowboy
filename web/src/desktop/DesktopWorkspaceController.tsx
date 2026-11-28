@@ -108,20 +108,11 @@ function markFocusedRegion(
   return targetEl;
 }
 
-let cachedWorkspaceEl: Element | null = null;
-function desktopWorkspaceElement(): Element | null {
-  if (!cachedWorkspaceEl?.isConnected) {
-    const pane = document.querySelector("[data-desktop-pane]");
-    cachedWorkspaceEl = pane?.parentElement ?? null;
-  }
-  return cachedWorkspaceEl;
-}
-
 function syncDesktopPaneChrome(
   focusedPane: DesktopPane,
   focusedRegion: string | null,
 ): void {
-  const scope = desktopWorkspaceElement() ?? document;
+  const scope = document.querySelector("[data-desktop-workspace-root]") ?? document;
   for (const element of scope.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
     const pane = element.dataset.desktopPane;
     if (pane === "sessions" || pane === "prompt" || pane === "conversation") {

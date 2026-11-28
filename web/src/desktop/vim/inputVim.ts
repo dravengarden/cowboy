@@ -230,6 +230,8 @@ function cursorOf(field: Field): number {
 /** Enter Normal on `field`, the cursor on `cursor` (default: where it is). */
 export function enterInputNormal(field: Field, cursor?: number): void {
   escapeMatcher(field).reset();
+  imeTrackers.get(field)?.reset();
+  imeAnchors.delete(field);
   const current = state(field);
   if (
     field.getAttribute(MODE) !== "normal" && current.insertStart &&
@@ -252,6 +254,8 @@ export function enterInputNormal(field: Field, cursor?: number): void {
 /** Enter Insert with the caret at `at`. */
 export function enterInputInsert(field: Field, at: number): void {
   escapeMatcher(field).reset();
+  imeTrackers.get(field)?.reset();
+  imeAnchors.delete(field);
   const current = state(field);
   current.insertStart = snapshot(field);
   current.pending = "";
@@ -601,6 +605,10 @@ function syncCopiedSelectionToVimRegister(event: ClipboardEvent): void {
 export function installInputVim(): () => void {
   const onFocusIn = (event: FocusEvent): void => {
     const field = inputVimField(event.target);
+    if (field) {
+      imeTrackers.get(field)?.reset();
+      imeAnchors.delete(field);
+    }
     if (field && field.getAttribute(MODE) === null) {
       field.setAttribute(MODE, "insert");
       state(field).insertStart = snapshot(field);
@@ -615,14 +623,17 @@ export function installInputVim(): () => void {
       return;
     }
     const { sequences, timeoutMs } = getInsertEscapeConfig();
+    const composing = composingFields.has(field);
     const action = imeTracker(field).onKeyDown(
       event,
-      composingFields.has(field),
+      composing,
       sequences,
       timeoutMs,
     );
     if (action === "arm") {
-      imeAnchors.set(field, { value: field.value, from: field.selectionStart ?? 0 });
+      if (!composing || !imeAnchors.has(field)) {
+        imeAnchors.set(field, { value: field.value, from: field.selectionStart ?? 0 });
+      }
     } else if (action === "escape") {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -699,6 +710,10 @@ export function installInputVim(): () => void {
     const field = event.target;
     if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
     escapeMatchers.get(field)?.reset();
+    if (!composingFields.has(field)) {
+      imeTrackers.get(field)?.reset();
+      imeAnchors.delete(field);
+    }
     if (isInputVimNormal(field) && field.selectionStart === field.selectionEnd) {
       place(field, field.selectionStart ?? 0);
     }

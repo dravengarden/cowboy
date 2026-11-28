@@ -216,7 +216,6 @@ function ReviewFileTabs({
                 </HintTooltip>
               }
               sx={{
-                minHeight: desktopSize(32),
                 py: 0,
                 px: 1,
                 minWidth: 0,

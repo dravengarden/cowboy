@@ -25,7 +25,7 @@ import { useRef, useState } from "react";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { ProviderIcon } from "../ProviderIcon";
 import type { SessionMeta } from "../protocol";
-import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
+import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS, DESKTOP_TOP_STRIP_HEIGHT } from "./DesktopEmbeddedControl";
 import { type DesktopPane, useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
@@ -686,13 +686,10 @@ export function DesktopSessionsRail({
       <Box
         data-desktop-sessions-rail-head
         sx={{
-          // Same height as the top bar so the two hairlines meet.
-          minHeight: desktopSize(44),
-          flexShrink: 0,
-          display: "grid",
-          placeItems: "center",
-          borderBottom: 1,
-          borderColor: "divider",
+          // Same height as DesktopTabStrip so the Row-1 hairlines meet cleanly.
+          height: DESKTOP_TOP_STRIP_HEIGHT, minHeight: DESKTOP_TOP_STRIP_HEIGHT, boxSizing: "border-box",
+          flexShrink: 0, display: "grid", placeItems: "center",
+          borderBottom: 1, borderColor: "divider",
           // Installed PWA: macOS window controls overlay this corner. Make it
           // a drag handle and move the expand control into the list below.
           "@media (display-mode: window-controls-overlay)": {

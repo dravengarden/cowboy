@@ -55,16 +55,21 @@ export function desktopControlFocusRing(theme: Theme): string {
   return `0 0 0 2px ${desktopFocusHaloColor(theme)}`;
 }
 
-/** Root Desktop focus stylesheet mounted on both the main Session workspace
- *  (`App.tsx`) and the standalone Draft workspace (`DraftWorkspace.tsx`). */
+/** Root Desktop focus stylesheet mounted on the main Session workspace
+ *  (`App.tsx`), standalone Draft workspace (`DraftWorkspace.tsx`), and
+ *  portaled modal workspaces (`DesktopModal.tsx`). */
 export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknown> {
   return {
     // Tier 1: Universal paint-only perimeter frame on EVERY Desktop region.
-    // Zero `:not(...)` exclusions — every region speaks the same primitive.
+    // Zero perimeter exclusions — every region paints the exact same `::after`
+    // overlay; inset overlays keep `position: absolute` via host attribute.
     "& [data-desktop-region]": {
       position: "relative",
       outline: "none",
       transition: "background-color 120ms ease",
+      "&[data-desktop-region-position='absolute']": {
+        position: "absolute",
+      },
       "&::after": {
         content: '""',
         position: "absolute",
@@ -78,6 +83,10 @@ export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknow
     },
     "& [data-desktop-region][data-desktop-focused='true']::after": {
       boxShadow: desktopRegionFocusBoxShadow,
+      "@media (forced-colors: active)": {
+        boxShadow: "none",
+        border: "2px solid Highlight",
+      },
     },
     // Bounded Prompt auxiliary docks add a calm surface lift beneath the
     // shared perimeter frame so they separate softly inside stacked/companion
@@ -128,6 +137,10 @@ export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknow
       outline: "none",
       bgcolor: (t: Theme) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.12 : 0.09),
       boxShadow: (t: Theme) => `inset 2px 0 0 ${t.palette.primary.main}`,
+      "@media (forced-colors: active)": {
+        outline: "2px solid Highlight",
+        outlineOffset: "-2px",
+      },
     },
     // Session selection and keyboard focus stay distinct: the filled row is
     // the open session, while j/k moves a keyboard cursor that l/Enter opens.
@@ -138,6 +151,10 @@ export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknow
       outline: "none",
       bgcolor: (t: Theme) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.05),
       boxShadow: (t: Theme) => `inset 2px 0 0 ${t.palette.primary.main}`,
+      "@media (forced-colors: active)": {
+        outline: "2px solid Highlight",
+        outlineOffset: "-2px",
+      },
       "& .cowboy-session-grip": {
         color: "primary.main",
       },

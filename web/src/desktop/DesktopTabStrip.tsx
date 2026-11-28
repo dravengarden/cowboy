@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { HintTooltip } from "../HintTooltip";
+import { DESKTOP_TOP_STRIP_HEIGHT } from "./DesktopEmbeddedControl";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import {
   type DesktopCommand,
@@ -553,7 +554,9 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
           display: "flex",
           alignItems: "center",
           gap: "0.25rem",
-          height: "2.375rem",
+          height: DESKTOP_TOP_STRIP_HEIGHT,
+          minHeight: DESKTOP_TOP_STRIP_HEIGHT,
+          boxSizing: "border-box",
           px: "0.375rem",
           minWidth: 0,
           overflowX: "auto",

@@ -557,6 +557,10 @@ export function DesktopCommandProvider(
         event.preventDefault();
         event.stopImmediatePropagation();
         clearPendingJumpChord();
+        if (workspace.focusedRegion === "topbar.controls" && motion === "j") {
+          workspace.focusAdjacentRegion(1);
+          return;
+        }
         const next = desktopRegionInDirection(workspace.focusedRegion, motion);
         if (next) workspace.focusRegion(next);
         return;

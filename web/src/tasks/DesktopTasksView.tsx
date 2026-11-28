@@ -139,6 +139,34 @@ function DesktopTasksPanes({
   );
 }
 
+function useTasksSubpaneFocusRecovery(
+  active: boolean,
+  showReaderPane: boolean,
+  showRosterPane: boolean,
+  rootRef: React.RefObject<HTMLDivElement | null>,
+  focusedRegion: string | null,
+  focusRegion: (region: string) => void,
+): void {
+  const prevRef = useRef({ showReaderPane, showRosterPane });
+  useEffect(() => {
+    const prev = prevRef.current;
+    prevRef.current = { showReaderPane, showRosterPane };
+    const subpaneHidden = (prev.showReaderPane && !showReaderPane) || (prev.showRosterPane && !showRosterPane);
+    if (!active || !subpaneHidden || (focusedRegion !== "tasks.reader" && focusedRegion !== "tasks.roster")) return;
+    const node = rootRef.current;
+    const activeEl = document.activeElement;
+    if (!node || (activeEl && activeEl !== document.body && node.contains(activeEl))) return;
+    const target = showReaderPane ? "tasks.reader" : showRosterPane ? "tasks.roster" : null;
+    if (!target) return;
+    const frame = requestAnimationFrame(() => {
+      const live = document.activeElement;
+      if (live && live !== document.body && live.closest("[data-desktop-region]") !== null) return;
+      focusRegion(target);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, focusedRegion, focusRegion, rootRef, showReaderPane, showRosterPane]);
+}
+
 export function DesktopTasksView({
   sessionId,
   active,
@@ -173,14 +201,7 @@ export function DesktopTasksView({
     });
   }, [ctrl, fallbackMode, selected]);
 
-  useEffect(() => {
-    if (!active || workspace.focusedPane !== "conversation") return;
-    const node = rootRef.current;
-    const activeEl = document.activeElement;
-    if (!node || (activeEl && activeEl !== document.body && node.contains(activeEl))) return;
-    const targetRegion = showReaderPane ? "tasks.reader" : showRosterPane ? "tasks.roster" : null;
-    if (targetRegion) requestAnimationFrame(() => workspace.focusRegion(targetRegion));
-  }, [active, showReaderPane, showRosterPane, workspace]);
+  useTasksSubpaneFocusRecovery(active, showReaderPane, showRosterPane, rootRef, workspace.focusedRegion, workspace.focusRegion);
 
   const [stopTrigger, setStopTrigger] = useState<{ key: string; nonce: number } | null>(null);
   const mountedRef = useRef(true);
