@@ -226,44 +226,36 @@ impl Store {
         })
     }
 
-    /// Read-only: the live retired-default sessions that would refuse
-    /// startup. With `settles` (the dataset's admission is recorded) that is
-    /// `live_retired_default_sessions` minus what
-    /// `settle_retired_intake_registrations` would settle, each row decided
-    /// by one statement. The startup admission preflight runs it beside the
-    /// serving Controller.
-    pub async fn retired_default_sessions_refusing_startup(
-        &self,
-        settles: bool,
-    ) -> Result<Vec<String>> {
-        if !settles {
-            return self.live_retired_default_sessions().await;
-        }
-        macro_rules! refusing {
+    /// Read-only: every live retired-default session with whether
+    /// `settle_retired_intake_registrations` would settle it, each row and
+    /// its eligibility read by one statement. The startup admission
+    /// preflight runs it beside the serving Controller.
+    pub async fn live_retired_default_sessions_settleable(&self) -> Result<Vec<(String, bool)>> {
+        macro_rules! classify {
             ($db:expr, $deleted:literal, $empty_queue:literal) => {{
-                let mut ids = Vec::new();
+                let mut rows = Vec::new();
                 for provider in super::legacy_cards::retired_providers() {
-                    ids.extend(
-                        sqlx::query_scalar::<_, String>(concat!(
-                            "SELECT id FROM sessions WHERE provider=$1 AND ",
+                    rows.extend(
+                        sqlx::query_as::<_, (String, bool)>(concat!(
+                            "SELECT id, CASE WHEN ",
+                            rejected_intake_registration!($deleted, $empty_queue),
+                            " THEN TRUE ELSE FALSE END FROM sessions WHERE provider=$1 AND ",
                             $deleted,
                             " IS NULL AND provider_account_id='default' ",
-                            "AND status IN ('starting','running','busy') AND NOT (",
-                            rejected_intake_registration!($deleted, $empty_queue),
-                            ")",
+                            "AND status IN ('starting','running','busy')",
                         ))
                         .bind(provider)
                         .fetch_all(&$db.pool)
                         .await?,
                     );
                 }
-                ids.sort();
-                ids
+                rows.sort();
+                rows
             }};
         }
         Ok(match &self.backend {
-            StorageBackend::Postgres(db) => refusing!(db, "deleted_at", "queue='[]'::jsonb"),
-            StorageBackend::Sqlite(db) => refusing!(db, "deleted_at_ms", "json(queue)='[]'"),
+            StorageBackend::Postgres(db) => classify!(db, "deleted_at", "queue='[]'::jsonb"),
+            StorageBackend::Sqlite(db) => classify!(db, "deleted_at_ms", "json(queue)='[]'"),
         })
     }
 

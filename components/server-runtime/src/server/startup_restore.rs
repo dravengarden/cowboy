@@ -146,32 +146,32 @@ pub struct Persistence {
 /// startup settles on an admitted dataset stand in the way, which needs the
 /// vault's wipe generations.
 pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
+    // Whether startup may settle rejected intake registrations is decided
+    // before any read: without it only the plain live-session query runs,
+    // which needs no table a pre-retirement schema may lack.
+    let settlement = admission_settlement(
+        crate::provider_service::recorded_admission(&args.data_dir),
+        crate::service_identity::inspect(&args.data_dir),
+    );
     let read = async {
         let Some(url) = args.database_url() else {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Vec::new());
         };
         let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
             .await
             .context("opening the database read-only")?;
-        // Refusing whether or not startup settles rejected intake rows, and
-        // refusing only without that settlement.
-        let always = store
-            .retired_default_sessions_refusing_startup(true)
-            .await
-            .context("reading live sessions on retired legacy default accounts")?;
-        let unsettled = store
-            .retired_default_sessions_refusing_startup(false)
-            .await
-            .context("reading live sessions on retired legacy default accounts")?;
-        anyhow::Ok((always, unsettled))
+        let rows = if matches!(settlement, Settlement::Never) {
+            store
+                .live_retired_default_sessions()
+                .await
+                .map(|ids| ids.into_iter().map(|id| (id, false)).collect())
+        } else {
+            store.live_retired_default_sessions_settleable().await
+        };
+        rows.context("reading live sessions on retired legacy default accounts")
     };
     let report = match tokio::time::timeout(std::time::Duration::from_secs(30), read).await {
-        Ok(Ok((always, unsettled))) => admission_report(
-            always,
-            unsettled,
-            crate::provider_service::recorded_admission(&args.data_dir),
-            crate::service_identity::inspect(&args.data_dir),
-        ),
+        Ok(Ok(rows)) => admission_report(&settlement, rows),
         Ok(Err(error)) => AdmissionReport::unverified(format!("{error:#}")),
         Err(_) => AdmissionReport::unverified("timed out after 30s".to_owned()),
     };
@@ -196,6 +196,32 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
     }
 }
 
+/// Whether startup settles rejected intake registrations
+/// (`retirement::admit_store`): only when the vault's recorded admission
+/// matches this dataset and its current wipe generations.
+enum Settlement {
+    /// No recorded admission for this dataset: startup settles nothing.
+    Never,
+    /// Recorded for this dataset; the wipe generations need the vault.
+    Unconfirmed(String),
+}
+
+fn admission_settlement(
+    admitted: Option<crate::provider_service::AdmittedRetirement>,
+    identity: anyhow::Result<String>,
+) -> Settlement {
+    let Some(admitted) = admitted else {
+        return Settlement::Never;
+    };
+    match identity {
+        Ok(id) if id != admitted.dataset => Settlement::Never,
+        Ok(_) => Settlement::Unconfirmed(
+            "startup settles these only if the vault's wipe generations still match its recorded admission".to_owned(),
+        ),
+        Err(error) => Settlement::Unconfirmed(format!("reading the Service identity: {error:#}")),
+    }
+}
+
 struct AdmissionReport {
     status: &'static str,
     sessions: Vec<String>,
@@ -212,17 +238,15 @@ impl AdmissionReport {
     }
 }
 
-/// `always` refuse startup in every case; the rest of `unsettled` only when
-/// startup does not settle them, which it does when the vault's recorded
-/// admission matches this dataset and its current wipe generations
-/// (`retirement::admit_store`). The generations need the vault, so a
-/// recorded admission for this dataset leaves the answer unverified.
-fn admission_report(
-    always: Vec<String>,
-    unsettled: Vec<String>,
-    admitted: Option<crate::provider_service::AdmittedRetirement>,
-    identity: anyhow::Result<String>,
-) -> AdmissionReport {
+/// `rows`: each live retired-default session with whether startup's
+/// settlement would take it. A session it would not take refuses startup
+/// in every case; only settleable ones leave the answer unconfirmed.
+fn admission_report(settlement: &Settlement, rows: Vec<(String, bool)>) -> AdmissionReport {
+    let always: Vec<String> = rows
+        .iter()
+        .filter(|(_, settleable)| !settleable || matches!(settlement, Settlement::Never))
+        .map(|(id, _)| id.clone())
+        .collect();
     if !always.is_empty() {
         return AdmissionReport {
             status: "refused",
@@ -230,32 +254,15 @@ fn admission_report(
             unverified: None,
         };
     }
-    if unsettled.is_empty() {
-        return AdmissionReport {
+    match (rows.is_empty(), settlement) {
+        (true, _) | (_, Settlement::Never) => AdmissionReport {
             status: "admissible",
             sessions: Vec::new(),
             unverified: None,
-        };
-    }
-    let refused = AdmissionReport {
-        status: "refused",
-        sessions: unsettled.clone(),
-        unverified: None,
-    };
-    let Some(admitted) = admitted else {
-        return refused;
-    };
-    match identity {
-        Ok(id) if id != admitted.dataset => refused,
-        Ok(_) => AdmissionReport {
-            sessions: unsettled,
-            ..AdmissionReport::unverified(
-                "startup settles these only if the vault's wipe generations still match its recorded admission".to_owned(),
-            )
         },
-        Err(error) => AdmissionReport {
-            sessions: unsettled,
-            ..AdmissionReport::unverified(format!("reading the Service identity: {error:#}"))
+        (false, Settlement::Unconfirmed(reason)) => AdmissionReport {
+            sessions: rows.into_iter().map(|(id, _)| id).collect(),
+            ..AdmissionReport::unverified(reason.clone())
         },
     }
 }
@@ -392,12 +399,8 @@ pub async fn open_persistence(
 
 #[cfg(test)]
 mod admission_report_tests {
-    use super::admission_report;
+    use super::{Settlement, admission_report, admission_settlement};
     use crate::provider_service::AdmittedRetirement;
-
-    fn ids(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
 
     fn admitted(dataset: &str) -> Option<AdmittedRetirement> {
         Some(AdmittedRetirement {
@@ -406,40 +409,53 @@ mod admission_report_tests {
         })
     }
 
+    fn report(settlement: &Settlement, rows: &[(&str, bool)]) -> (&'static str, Vec<String>) {
+        let rows = rows
+            .iter()
+            .map(|(id, settleable)| ((*id).to_owned(), *settleable))
+            .collect();
+        let report = admission_report(settlement, rows);
+        (report.status, report.sessions)
+    }
+
+    #[test]
+    fn settlement_needs_a_recorded_admission_of_this_dataset() {
+        let ok = || anyhow::Ok("svc".to_owned());
+        assert!(matches!(
+            admission_settlement(None, ok()),
+            Settlement::Never
+        ));
+        assert!(matches!(
+            admission_settlement(admitted("other"), ok()),
+            Settlement::Never
+        ));
+        assert!(matches!(
+            admission_settlement(admitted("svc"), ok()),
+            Settlement::Unconfirmed(_)
+        ));
+        assert!(matches!(
+            admission_settlement(admitted("svc"), Err(anyhow::anyhow!("symlinked"))),
+            Settlement::Unconfirmed(_)
+        ));
+    }
+
     #[test]
     fn only_settlement_independent_answers_are_definitive() {
-        let report = |always: &[&str], unsettled: &[&str], admission, identity| {
-            let report = admission_report(ids(always), ids(unsettled), admission, identity);
-            (report.status, report.sessions)
-        };
-        let ok = || anyhow::Ok("svc".to_owned());
-        assert_eq!(report(&[], &[], None, ok()), ("admissible", ids(&[])));
+        let never = Settlement::Never;
+        let unconfirmed = Settlement::Unconfirmed("wipes".to_owned());
+        assert_eq!(report(&unconfirmed, &[]), ("admissible", vec![]));
         assert_eq!(
-            report(&["live"], &["intake", "live"], admitted("svc"), ok()),
-            ("refused", ids(&["live"]))
-        );
-        // Settled only on a recorded admission of this dataset whose wipe
-        // generations still match, which needs the vault.
-        assert_eq!(
-            report(&[], &["intake"], admitted("svc"), ok()),
-            ("unverified", ids(&["intake"]))
+            report(&unconfirmed, &[("intake", true), ("live", false)]),
+            ("refused", vec!["live".to_owned()])
         );
         assert_eq!(
-            report(&[], &["intake"], None, ok()),
-            ("refused", ids(&["intake"]))
+            report(&unconfirmed, &[("intake", true)]),
+            ("unverified", vec!["intake".to_owned()])
         );
         assert_eq!(
-            report(&[], &["intake"], admitted("other"), ok()),
-            ("refused", ids(&["intake"]))
+            report(&never, &[("intake", true)]),
+            ("refused", vec!["intake".to_owned()])
         );
-        assert_eq!(
-            report(
-                &[],
-                &["intake"],
-                admitted("svc"),
-                Err(anyhow::anyhow!("symlinked"))
-            ),
-            ("unverified", ids(&["intake"]))
-        );
+        assert_eq!(report(&never, &[]), ("admissible", vec![]));
     }
 }

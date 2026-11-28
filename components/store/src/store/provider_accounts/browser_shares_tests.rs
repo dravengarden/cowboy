@@ -1692,20 +1692,19 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     // The read-only preflight predicts exactly what startup still refuses
     // after settling, and settles nothing itself.
     let refusing = ["dispatched", "logged", "ordinary", "ran", "web"];
-    assert_eq!(
-        store
-            .retired_default_sessions_refusing_startup(true)
-            .await
-            .unwrap(),
-        refusing
-    );
-    // Without a recorded admission startup settles nothing.
-    assert_eq!(
-        store
-            .retired_default_sessions_refusing_startup(false)
-            .await
-            .unwrap(),
+    let classified = |settled: &[&str]| {
         ["dispatched", "intake", "logged", "ordinary", "ran", "web"]
+            .into_iter()
+            .map(|id| (id.to_owned(), id == "intake" && !settled.contains(&id)))
+            .filter(|(id, _)| !settled.contains(&id.as_str()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        store
+            .live_retired_default_sessions_settleable()
+            .await
+            .unwrap(),
+        classified(&[])
     );
     assert_eq!(
         store.settle_retired_intake_registrations().await.unwrap(),
@@ -1724,9 +1723,9 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     );
     assert_eq!(
         store
-            .retired_default_sessions_refusing_startup(true)
+            .live_retired_default_sessions_settleable()
             .await
             .unwrap(),
-        refusing
+        classified(&["intake"])
     );
 }
