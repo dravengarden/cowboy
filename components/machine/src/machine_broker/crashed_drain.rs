@@ -343,6 +343,7 @@ impl Broker {
                     self.publish_drain_fence_snapshot(
                         session_id,
                         &sessions,
+                        &pending_cmds,
                         worker,
                         &ctrl_tx,
                         ctrl_outer,
@@ -3031,6 +3032,23 @@ mod tests {
         }
         assert!(saw_dup_reason, "duplicate drain must emit shared constant");
 
+        // Queue a prompt while fenced so expiry must reflect broker_queued=1.
+        broker
+            .pending_commands
+            .lock()
+            .entry("s-timeout".into())
+            .or_default()
+            .push_back(WorkerCommand::Prompt {
+                command_id: "cmd-fenced".into(),
+                turn_id: "turn-fenced".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "queued"})],
+                cmid: None,
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            });
         // Promote to accepted ActiveDrain; worker then hangs without completing.
         broker.handle_worker_command_ack(
             "ep-1",
@@ -3080,6 +3098,7 @@ mod tests {
                 && worker.session_id == "s-timeout"
                 && !worker.crashed_drain_active
             {
+                assert_eq!(worker.pending_prompt_count, 1);
                 saw_cleared_snap = true;
             }
         }

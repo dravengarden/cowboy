@@ -12,6 +12,7 @@ impl Broker {
         &self,
         session_id: &str,
         sessions: &HashMap<String, StartSession>,
+        pending_cmds: &HashMap<String, VecDeque<WorkerCommand>>,
         worker: &WorkerPeer,
         ctrl_tx: &mpsc::UnboundedSender<Frame>,
         ctrl_outer: Option<u16>,
@@ -22,6 +23,16 @@ impl Broker {
         if snap.launch.is_none() {
             snap.launch = sessions.get(session_id).cloned();
         }
+        let broker_queued = pending_cmds.get(session_id).map_or(0, |queue| {
+            u64::try_from(
+                queue
+                    .iter()
+                    .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                    .count(),
+            )
+            .unwrap_or(u64::MAX)
+        });
+        snap.pending_prompt_count = snap.pending_prompt_count.max(broker_queued);
         snap.crashed_drain_active = crashed_drain_active;
         snap.incarnation = self.reported_lineage(session_id);
         let declared = sessions.get(session_id).map(|s| s.provider.as_str());
@@ -113,6 +124,7 @@ impl Broker {
             else {
                 return;
             };
+            let pending_cmds = self.pending_commands.lock();
             let mut state = self.crashed_drains.inner.lock();
             let active_expired = state.active.get(session_id).is_some_and(|a| {
                 a.epoch == epoch && a.connection_id == connection_id && now >= a.deadline
@@ -165,6 +177,7 @@ impl Broker {
                     self.publish_drain_fence_snapshot(
                         session_id,
                         &sessions,
+                        &pending_cmds,
                         worker,
                         &ctrl.tx,
                         ctrl.outer_machine_protocol,
