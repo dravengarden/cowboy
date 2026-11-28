@@ -425,7 +425,18 @@ impl Daemon {
         safefs::remove_file(dir.as_fd(), "home.img")?;
         // Sparse: blocks are allocated only as the account writes, so the
         // whole length is committed against the budget before it exists.
-        let staging = self.budget();
+        // Holding the account lock, never wait for a growth's allocation:
+        // the provisioning is retried.
+        let staging = match self.staging.try_lock() {
+            Ok(staging) => staging,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(fail(
+                    Code::Conflict,
+                    "the space budget is busy; retry the provisioning",
+                ));
+            }
+        };
         if self.available_space(&staging)? < self.config.home_image_bytes {
             return Err(fail(
                 Code::InsufficientSpace,
@@ -1035,14 +1046,18 @@ impl Daemon {
                 // fence or space refusal of a first login): nothing of it
                 // exists. Certify it only with no token present, and retire
                 // the generation so a delayed start of it is refused.
-                let home = self.mount_home(dir, key, meta)?;
-                if Self::token_present(&home)? {
-                    return Err(fail(
-                        Code::Precondition,
-                        format!(
-                            "credential generation {generation} is not known (current {current}) and a token is present"
-                        ),
-                    ));
+                // A home never initialized (its image refused for space)
+                // holds no token: nothing to mount or check.
+                if meta.image_ready {
+                    let home = self.mount_home(dir, key, meta)?;
+                    if Self::token_present(&home)? {
+                        return Err(fail(
+                            Code::Precondition,
+                            format!(
+                                "credential generation {generation} is not known (current {current}) and a token is present"
+                            ),
+                        ));
+                    }
                 }
                 meta.credential.generation = generation;
                 meta.credential.state = CredentialState::LoggedOut;
@@ -1063,8 +1078,12 @@ impl Daemon {
             {
                 return Ok(receipt(false, false));
             }
-            let home = self.mount_home(dir, key, meta)?;
-            let removed = Self::remove_token(&home)?;
+            let removed = if meta.image_ready {
+                let home = self.mount_home(dir, key, meta)?;
+                Self::remove_token(&home)?
+            } else {
+                false
+            };
             meta.credential.state = CredentialState::LoggedOut;
             meta.cleanups
                 .retain(|cleanup| !matches!(cleanup, Cleanup::LogoutToken { .. }));

@@ -269,3 +269,38 @@ fn log_pruning_removes_only_old_regular_log_files() {
     let home = safefs::open_root(empty.path()).unwrap();
     assert_eq!(prune_agy_logs(&home, retention, now).unwrap(), (0, 0));
 }
+
+#[test]
+fn an_image_refused_for_space_never_blocks_its_logout_cleanup() {
+    let f = fixture();
+    let reserve = f.config.free_space_reserve_bytes;
+    // Physically above the reserve, but the existing image's claim leaves
+    // no room for a second 4 GiB image.
+    f.host.free.store(reserve + 5 * GIB, Ordering::Relaxed);
+    let other = f.call(crate::protocol::Request::EnsureAccount {
+        service_id: "svc".into(),
+        account_id: "other".into(),
+    });
+    assert_eq!(code(other), Code::InsufficientSpace);
+    let key = crate::ids::derive_key("svc", "other");
+    // Its refused first login is retired without mounting a home.
+    let cleaned = f
+        .call(crate::protocol::Request::LogoutCleanup {
+            key,
+            credential_generation: 1,
+            operation_id: Some("op-1".into()),
+        })
+        .unwrap();
+    assert_eq!(cleaned["token_removed"], false);
+    assert_eq!(cleaned["credential_cleared"], true);
+}
+
+#[test]
+fn a_non_regular_home_image_fails_the_budget() {
+    let f = fixture();
+    let dir = f.root.join("state/accounts/0000000000000000");
+    std::fs::create_dir_all(&dir).unwrap();
+    symlink("/dev/null", dir.join("home.img")).unwrap();
+    let accounts = f.daemon.accounts().unwrap();
+    assert!(crate::capacity::unallocated_image_bytes(&accounts).is_err());
+}

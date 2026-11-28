@@ -1130,7 +1130,15 @@ rather than a fixed size (`packaging/account-sandbox/src/capacity.rs`):
   runs no unit (neither recorded nor live in systemd; a live `agy` reopens
   its log by name), on a thread of their own that skips an account whose
   lock is busy, at most 4,096 directory entries per pass, opened beneath the
-  home without following symlinks.
+  home without following symlinks. Residual: each pass starts at the
+  beginning of the directory, so expired logs behind more than 4,096
+  ineligible entries (only the account itself could create those) are not
+  reached; growth still absorbs them.
+- An account whose first image was refused for space keeps
+  `image_ready=false`; its logout cleanup retires the refused generation
+  without mounting a home (none exists, so no token can), so revocation and
+  removal are never blocked by it. Provisioning never waits for the budget
+  under the account lock: a busy budget is a retryable `conflict`.
 
 **Not in this revision.** Conversations no recoverable Cowboy session
 references (sessions purged from Trash, conversations of failed starts:

@@ -125,7 +125,11 @@ pub(crate) fn unallocated_image_bytes(accounts: &OwnedFd) -> anyhow::Result<u64>
                 return Err(error).with_context(|| format!("stat the home image of {key}"));
             }
         };
-        if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile {
+        anyhow::ensure!(
+            FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
+            "the home image of {key} is not a regular file"
+        );
+        {
             let length = u64::try_from(stat.st_size).unwrap_or(0);
             let allocated = u64::try_from(stat.st_blocks)
                 .unwrap_or(0)
