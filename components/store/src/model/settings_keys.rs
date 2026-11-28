@@ -110,6 +110,8 @@ pub const SESSION_CONFIG_REVERT_PREFIX: &str = "session_config_revert:";
 /// One-shot request to adopt the installed Provider release once the session
 /// is idle; the session id follows.
 pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_update_when_idle:";
+/// Product-neutral external Trigger run metadata; the session id follows.
+pub const SESSION_TRIGGER_PREFIX: &str = "session_trigger:";
 
 /// Settings tombstoned when their session is removed.
 pub const SESSION_STATE_PREFIXES: &[&str] = &[
@@ -137,6 +139,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_MCP_DEFAULT_PREFIX,
     SESSION_REVIEW_EFFORT_PREFIX,
     SESSION_TURN_BUDGET_PREFIX,
+    SESSION_TRIGGER_PREFIX,
 ];
 
 #[must_use]
@@ -179,6 +182,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
+            SESSION_TRIGGER_PREFIX,
         ]
         .into_iter()
         .any(|prefix| {
@@ -228,6 +232,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_MCP_DEFAULT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
         format!("{SESSION_CONFIG_REVERT_PREFIX}sess-1"),
+        format!("{SESSION_TRIGGER_PREFIX}sess-1"),
     ]
 }
 
@@ -259,6 +264,7 @@ mod tests {
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
             SESSION_STEER_RESERVATIONS_PREFIX,
+            SESSION_TRIGGER_PREFIX,
         ] {
             assert!(!is_persisted_setting_key(key), "{key}");
         }

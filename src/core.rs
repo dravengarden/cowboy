@@ -81,6 +81,7 @@ pub use clear_conversation::ClearCommit;
 pub use runtime_epoch_fence::RuntimeEpoch;
 mod runtime_reconciliation;
 mod session_trash;
+mod session_triggers;
 pub use code_scope::{CodeReadScope, SessionCodeScope};
 pub use session_trash::TRASHED_SESSION_REFUSAL;
 mod product_permissions;
@@ -223,8 +224,8 @@ pub use crate::model::{
     Delivery, DraftSchedule, Envelope, ExplicitSend, HISTORY_MAX_BYTES, HOT_TAIL,
     HOT_TAIL_MAX_BYTES, NON_ACTIVITY_SESSION_UPDATES_SQL, ProviderUpdate, ProviderUpdateAvailable,
     ProviderUpdateOffer, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
-    bound_history_page, counts_as_activity, estimated_envelope_bytes, merge_session_order,
-    question_summary_title,
+    TriggerSessionMeta, bound_history_page, counts_as_activity, estimated_envelope_bytes,
+    merge_session_order, question_summary_title,
 };
 #[cfg(test)]
 pub(crate) use crate::model::{HOT_TAIL_TRIM_BATCH, NON_ACTIVITY_SESSION_UPDATES};
@@ -3021,6 +3022,7 @@ impl Hub {
             continued_from: None,
             handoff_resumed: false,
             forked_from: None,
+            trigger: None,
             id: id.clone(),
             provider,
             provider_account_id,

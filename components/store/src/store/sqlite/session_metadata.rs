@@ -11,6 +11,7 @@ impl SqliteSessionRow {
             continued_from: None,
             handoff_resumed: false,
             forked_from: None,
+            trigger: None,
             id: self.id,
             provider: self.provider,
             provider_version: self.provider_version,

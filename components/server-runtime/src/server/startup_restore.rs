@@ -77,6 +77,7 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     crate::session_context::restore_announcements(hub);
     hub.restore_continuations();
     hub.restore_forks();
+    hub.restore_triggers();
     hub.warm_lineage_edges(&lineage_edges);
     for meta in hub.session_list() {
         if let Ok(ctx) = crate::session_context::read(hub, &meta.id) {

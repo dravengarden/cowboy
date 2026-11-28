@@ -1232,7 +1232,7 @@ pub fn apply_inbound_sync(
                 })
                 .map(str::to_owned)
                 .collect();
-            return state.hub.sync_apply_as(
+            let applied = state.hub.sync_apply_as(
                 &actor,
                 sync_state,
                 id,
@@ -1242,6 +1242,12 @@ pub fn apply_inbound_sync(
                     "folder": args.get("folder").cloned().unwrap_or(serde_json::Value::Null),
                 }),
             );
+            if applied.is_ok() {
+                for session_id in &allowed {
+                    state.hub.set_session_trigger(session_id, None);
+                }
+            }
+            return applied;
         }
         return state.hub.sync_apply_as(&actor, sync_state, id, name, args);
     }

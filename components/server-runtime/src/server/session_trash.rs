@@ -301,6 +301,19 @@ async fn retention_days(
 /// trashed again) meanwhile is never deleted.
 pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
     const DAY_MS: i64 = 86_400_000;
+    for session_id in state.hub.expired_trigger_sessions(now_ms) {
+        if let Ok(trashed) = state.hub.trash_items(
+            &FolderActor::local(),
+            &[],
+            std::slice::from_ref(&session_id),
+            now_ms,
+        ) {
+            for id in &trashed.sessions {
+                let _ = state.supervisor.hibernate_session(id);
+            }
+            tracing::info!(session = %session_id, "auto-trashed expired trigger session");
+        }
+    }
     let (sessions, folders) = state.hub.trash_contents();
     let trashed_drafts = match state.store.as_ref() {
         Some(store) => match store.list_trashed_drafts_for_retention().await {

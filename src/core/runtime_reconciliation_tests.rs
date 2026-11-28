@@ -166,6 +166,7 @@ pub(super) fn restored_busy(id: &str) -> RestoredSession {
             continued_from: None,
             handoff_resumed: false,
             forked_from: None,
+            trigger: None,
             id: id.to_owned(),
             provider: "codex".to_owned(),
             provider_version: String::new(),

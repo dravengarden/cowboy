@@ -10,6 +10,7 @@ import { documentNotice } from "./documents/DocumentNotifications";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 import { WorkspaceDraftRow, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { SessionTrashSection, TrashItemSheet, TrashMenuSheet, useMinuteClock, useTrashExpanded, useTrashRetention, useTrashTree } from "./SessionTrash";
+import { TriggerSessionsSection } from "./TriggerSessions";
 import { DeleteFolderToTrashShell } from "./DeleteFolderToTrash";
 import { folderDeletePlan, liveDrafts, TRASH_ROOT_KEY, TRASH_URGENT_MS, type TrashRow } from "./trashModel";
 import { reorderWorkspaceItems } from "./store";
@@ -2234,17 +2235,10 @@ export function SessionList({
                     );
                 })}
                 {loaded && !movePicking && (
-                    <SessionTrashSection
-                        tree={trashTree}
-                        expanded={trashExpanded}
-                        onToggle={(key): void => toggleTrash(key)}
-                        retentionDays={trashRetention.days}
-                        now={trashNow}
-                        desktop={desktop}
-                        rowSx={trashRowSx}
-                        onOpenRow={setTrashRow}
-                        onOpenMenu={(): void => setTrashMenu(true)}
-                    />
+                    <>
+                        <TriggerSessionsSection sessions={sessions} activeId={activeId} onPick={onPick} onRequestDelete={onRequestDelete} rowSx={trashRowSx} now={trashNow} />
+                        <SessionTrashSection tree={trashTree} expanded={trashExpanded} onToggle={(key): void => toggleTrash(key)} retentionDays={trashRetention.days} now={trashNow} desktop={desktop} rowSx={trashRowSx} onOpenRow={setTrashRow} onOpenMenu={(): void => setTrashMenu(true)} />
+                    </>
                 )}
                 {sessions.length === 0 && (
                     loaded

@@ -133,6 +133,7 @@ fn sample_session_meta() -> crate::model::SessionMeta {
         continued_from: None,
         handoff_resumed: false,
         forked_from: None,
+        trigger: None,
         id: "sess-1".to_owned(),
         provider: "codex".to_owned(),
         provider_version: String::new(),

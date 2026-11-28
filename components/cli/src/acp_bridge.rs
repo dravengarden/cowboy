@@ -2884,6 +2884,7 @@ mod tests {
             continued_from: None,
             handoff_resumed: false,
             forked_from: None,
+            trigger: None,
             id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
             provider_version: String::new(),

@@ -697,6 +697,7 @@ impl Hub {
         cmid: Option<String>,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
+        self.promote_trigger_if_person(session_id, caller);
         if self.reject_reserved_notice_cmid(session_id, cmid.as_deref()) {
             return;
         }

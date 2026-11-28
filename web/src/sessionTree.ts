@@ -1,4 +1,5 @@
 import { isManagedChild } from "./managedCalls";
+import { isTriggerSession } from "./triggerModel";
 import type { DraftMetadata } from "./documents/model";
 // Display rows for the Sessions sidebar: the folder tree with sessions filed
 // into their effective folders (docs/sessions-folders.md). Pure; both the
@@ -144,8 +145,9 @@ export function buildSessionTree(
 ): SessionTree {
   const ids = new Set(value.folders.map((folder) => folder.id));
   const parentOf = (folder: SessionFolder): string | null =>
-    folder.parent && ids.has(folder.parent) &&
-      !folderAncestors(value, folder.parent).includes(folder.id)
+    folder.parent &&
+    ids.has(folder.parent) &&
+    !folderAncestors(value, folder.parent).includes(folder.id)
       ? folder.parent
       : null;
   const children = new Map<string | null, SessionFolder[]>();
@@ -165,7 +167,7 @@ export function buildSessionTree(
   for (const session of sessions) {
     // Managed child conversations belong to their parent's Calls, not the
     // main session list; the parent links to each one.
-    if (isManagedChild(session)) continue;
+    if (isManagedChild(session) || isTriggerSession(session)) continue;
     const folder = effectiveSessionFolder(session, value, projects);
     folderOf.set(session.id, folder);
     const list = sessionsIn.get(folder) ?? [];
@@ -184,9 +186,7 @@ export function buildSessionTree(
   };
   for (const folder of children.get(null) ?? []) summarize(folder.id);
 
-  const liveDrafts = drafts.filter((draft) =>
-    !draft.deleted && draft.kind === "document"
-  );
+  const liveDrafts = drafts.filter((draft) => !draft.deleted && draft.kind === "document");
   for (const draft of liveDrafts) {
     folderOf.set(
       `draft:${draft.id}`,
@@ -203,12 +203,15 @@ export function buildSessionTree(
         folder,
         depth,
         expanded,
-        sessionCount: below.length + liveDrafts.filter((draft) => {
-          const container = folderOf.get(`draft:${draft.id}`);
-          return container === folder.id ||
-            !!container &&
-              folderAncestors(value, container).includes(folder.id);
-        }).length,
+        sessionCount:
+          below.length +
+          liveDrafts.filter((draft) => {
+            const container = folderOf.get(`draft:${draft.id}`);
+            return (
+              container === folder.id ||
+              (!!container && folderAncestors(value, container).includes(folder.id))
+            );
+          }).length,
         status: mostUrgentStatus(below.map((session) => session.status)),
         activity: sessionActivity(below),
       });
@@ -220,32 +223,32 @@ export function buildSessionTree(
       }
     }
     const items: (SessionRow | DraftRow)[] = [
-      ...liveDrafts.filter((draft) =>
-        folderOf.get(`draft:${draft.id}`) === parent
-      )
+      ...liveDrafts
+        .filter((draft) => folderOf.get(`draft:${draft.id}`) === parent)
         .sort((a, b) => a.id.localeCompare(b.id))
-        .map((draft): DraftRow => ({
-          kind: "draft",
-          draft,
+        .map(
+          (draft): DraftRow => ({
+            kind: "draft",
+            draft,
+            depth,
+            folder: parent,
+          }),
+        ),
+      ...(sessionsIn.get(parent) ?? []).map(
+        (session): SessionRow => ({
+          kind: "session",
+          session,
           depth,
           folder: parent,
-        })),
-      ...(sessionsIn.get(parent) ?? []).map((session): SessionRow => ({
-        kind: "session",
-        session,
-        depth,
-        folder: parent,
-      })),
+        }),
+      ),
     ];
     const ranks = new Map(order.map((key, index) => [key, index]));
     // Unseen newly-created resources lead; explicit order persists across devices.
-    items.sort((a, b) =>
-      (ranks.get(
-        a.kind === "draft" ? `draft:${a.draft.id}` : `session:${a.session.id}`,
-      ) ?? -1) -
-      (ranks.get(
-        b.kind === "draft" ? `draft:${b.draft.id}` : `session:${b.session.id}`,
-      ) ?? -1)
+    items.sort(
+      (a, b) =>
+        (ranks.get(a.kind === "draft" ? `draft:${a.draft.id}` : `session:${a.session.id}`) ?? -1) -
+        (ranks.get(b.kind === "draft" ? `draft:${b.draft.id}` : `session:${b.session.id}`) ?? -1),
     );
     rows.push(...items);
   };
@@ -258,10 +261,10 @@ export function sessionTreeRowKey(row: SessionTreeRow): string {
   return row.kind === "folder"
     ? `folder:${row.folder.id}`
     : row.kind === "empty"
-    ? `empty:${row.folder}`
-    : row.kind === "draft"
-    ? `draft:${row.draft.id}`
-    : row.session.id;
+      ? `empty:${row.folder}`
+      : row.kind === "draft"
+        ? `draft:${row.draft.id}`
+        : row.session.id;
 }
 
 export function folderIdFromRowKey(key: string): string | null {
@@ -272,10 +275,7 @@ export function folderIdFromRowKey(key: string): string | null {
  * The one key a drag or Order-mode step moved: removing it from both
  * sequences leaves them identical. `null` when nothing moved.
  */
-export function movedRowKey(
-  before: readonly string[],
-  after: readonly string[],
-): string | null {
+export function movedRowKey(before: readonly string[], after: readonly string[]): string | null {
   const without = (keys: readonly string[], key: string): string[] =>
     keys.filter((candidate) => candidate !== key);
   const same = (a: readonly string[], b: readonly string[]): boolean =>
@@ -283,10 +283,8 @@ export function movedRowKey(
   for (let i = 0; i < before.length; i++) {
     if (before[i] === after[i]) continue;
     for (const candidate of [after[i], before[i]]) {
-      if (
-        candidate !== undefined &&
-        same(without(before, candidate), without(after, candidate))
-      ) return candidate;
+      if (candidate !== undefined && same(without(before, candidate), without(after, candidate)))
+        return candidate;
     }
     return null;
   }
@@ -321,9 +319,7 @@ export function foldersOffSessionPath(
   value: SessionFoldersValue,
   sessionId: string | null,
 ): string[] {
-  const path = new Set(
-    sessionId ? foldersRevealing(tree, value, sessionId) : [],
-  );
+  const path = new Set(sessionId ? foldersRevealing(tree, value, sessionId) : []);
   return value.folders.map((folder) => folder.id).filter((id) => !path.has(id));
 }
 
@@ -336,9 +332,7 @@ export function sessionFoldAction(
 ): SessionFoldAction | null {
   const off = new Set(foldersOffSessionPath(tree, value, sessionId));
   if (off.size === 0) return sessionId ? "locate" : null;
-  const focused = value.folders.every((folder) =>
-    collapsed.has(folder.id) === off.has(folder.id)
-  );
+  const focused = value.folders.every((folder) => collapsed.has(folder.id) === off.has(folder.id));
   return focused && (sessionId === null || sessionInView) ? "expand" : "focus";
 }
 
@@ -348,10 +342,7 @@ export function sessionFoldAction(
  * or the folder itself when that row is a folder header (dropping "onto" a
  * folder files into it, collapsed or not); the root when dropped at the top.
  */
-export function dropTargetFolder(
-  rows: readonly SessionTreeRow[],
-  index: number,
-): string | null {
+export function dropTargetFolder(rows: readonly SessionTreeRow[], index: number): string | null {
   const above = rows[index - 1];
   if (!above) return null;
   return above.kind === "folder" ? above.folder.id : above.folder;
@@ -386,9 +377,10 @@ export function projectSessionDrop(
   const maxDepth = above.kind === "folder" ? above.depth + 1 : above.depth;
   const minDepth = Math.min(maxDepth, below?.depth ?? 0);
   const base = above.kind === "folder" ? maxDepth : originDepth;
-  const depth = depthOffset < 0
-    ? Math.max(0, Math.min(maxDepth, originDepth + depthOffset))
-    : Math.max(minDepth, Math.min(maxDepth, base + depthOffset));
+  const depth =
+    depthOffset < 0
+      ? Math.max(0, Math.min(maxDepth, originDepth + depthOffset))
+      : Math.max(minDepth, Math.min(maxDepth, base + depthOffset));
   if (depth === 0) return { folder: null, depth };
   // Rows are a pre-order walk, so the nearest header one level up is the
   // container of this slot.
@@ -408,7 +400,8 @@ export function rowInsideFolder(
   value: SessionFoldersValue,
 ): boolean {
   const container = row.kind === "folder" ? row.folder.id : row.folder;
-  return container !== null &&
-    (container === folder ||
-      folderAncestors(value, container).includes(folder));
+  return (
+    container !== null &&
+    (container === folder || folderAncestors(value, container).includes(folder))
+  );
 }

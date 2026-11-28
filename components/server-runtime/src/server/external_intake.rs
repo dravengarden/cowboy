@@ -16,6 +16,9 @@ use std::time::Duration;
 const MAX_DISPATCHES: usize = 256;
 const MIN_TOKEN_BYTES: usize = 32;
 const DEFAULT_TIMEOUT_SECS: u64 = 240;
+const POST_TURN_HIBERNATE_GRACE_SECS: u64 = 30;
+const SETTLED_TRIGGER_TTL_MS: i64 = 3 * 86_400_000;
+const ATTENTION_TRIGGER_TTL_MS: i64 = 14 * 86_400_000;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -273,20 +276,57 @@ async fn dispatch(
     }
 
     let dispatch_id = format!("intk_{}", uuid::Uuid::new_v4().simple());
-    let session_id = service.state.supervisor.reserve_session_id();
+    let correlation_key = req
+        .episode_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned);
+    let prompt = build_triage_prompt(&req);
+    let existing_session = correlation_key
+        .as_deref()
+        .and_then(|key| service.state.hub.find_active_trigger_session(key));
+    let (session_id, reused) = match existing_session {
+        Some(existing_id) => {
+            service.state.hub.submit(
+                &existing_id,
+                prompt,
+                Vec::new(),
+                Some(format!("intake:{dispatch_id}")),
+                &crate::prompt_origin::RequestCaller::Automation,
+            );
+            (existing_id, true)
+        }
+        None => {
+            let new_id = service.state.supervisor.reserve_session_id();
+            let cwd = Some(service.config.workspace.to_string_lossy().into_owned());
+            if let Err(err_res) =
+                start_intake_session(&service, &dispatch_id, &new_id, cwd, prompt).await
+            {
+                return err_res;
+            }
+            let title = trigger_session_title(&req);
+            service.state.hub.rename_session(&new_id, title);
+            (new_id, false)
+        }
+    };
+    let trigger_meta = crate::core::TriggerSessionMeta {
+        kind: req.kind.clone(),
+        source: req.source.clone(),
+        correlation_key,
+        outcome: "running".to_owned(),
+        settled_at_ms: None,
+        auto_trash_at_ms: None,
+    };
+    service
+        .state
+        .hub
+        .set_session_trigger(&session_id, Some(trigger_meta.clone()));
     let session_url = service
         .config
         .public_url
         .as_ref()
         .map(|base| format!("{base}/sessions/{session_id}"));
-    let cwd = Some(service.config.workspace.to_string_lossy().into_owned());
-    let prompt = build_triage_prompt(&req);
-
-    if let Err(err_res) =
-        start_intake_session(&service, &dispatch_id, &session_id, cwd, prompt).await
-    {
-        return err_res;
-    }
 
     let record = DispatchRecord {
         dispatch_id: dispatch_id.clone(),
@@ -307,7 +347,16 @@ async fn dispatch(
     let observer = Arc::clone(&service);
     let episode_id = req.episode_id;
     tokio::spawn(async move {
-        observe_and_emit(observer, dispatch_id, episode_id, session_id, session_url).await;
+        observe_and_emit(
+            observer,
+            dispatch_id,
+            episode_id,
+            session_id,
+            session_url,
+            trigger_meta,
+            reused,
+        )
+        .await;
     });
 
     (
@@ -346,7 +395,7 @@ async fn start_intake_session(
                 &service.config.provider,
                 cwd,
                 crate::core::SessionOrigin::Api,
-                true,
+                false,
                 &service.config.machine,
                 crate::supervisor::ProviderGeneration {
                     account_id: None,
@@ -484,10 +533,12 @@ async fn observe_and_emit(
     episode_id: String,
     session_id: String,
     session_url: Option<String>,
+    trigger_meta: crate::core::TriggerSessionMeta,
+    reused: bool,
 ) {
     let mut events = service.state.hub.subscribe();
     let deadline = tokio::time::Instant::now() + service.config.timeout;
-    let mut started = false;
+    let mut started = reused;
     let outcome = loop {
         match tokio::time::timeout_at(deadline, events.recv()).await {
             Ok(Ok(frame)) => match frame.outbound() {
@@ -545,6 +596,72 @@ async fn observe_and_emit(
     {
         tracing::warn!(%dispatch_id, %error, "external intake verdict socket delivery failed");
     }
+
+    settle_trigger_session(&service, &session_id, trigger_meta, status, &verdict);
+}
+
+fn trigger_session_title(req: &DispatchRequest) -> String {
+    let clean_source = req.source.trim().replace('\n', " ");
+    let clean_title = req.title.trim().replace('\n', " ");
+    let combined = format!("[{clean_source}] {clean_title}");
+    combined.chars().take(120).collect()
+}
+
+fn normalize_trigger_outcome(status: &str, verdict: &str) -> (&'static str, i64) {
+    if status != "completed" {
+        return ("failed", ATTENTION_TRIGGER_TTL_MS);
+    }
+    match verdict {
+        "resolved_by_ai" | "resolved" => ("resolved", SETTLED_TRIGGER_TTL_MS),
+        "suppress_noise" | "suppressed" => ("suppressed", SETTLED_TRIGGER_TTL_MS),
+        "needs_approval" => ("needs_approval", ATTENTION_TRIGGER_TTL_MS),
+        _ => ("escalated", ATTENTION_TRIGGER_TTL_MS),
+    }
+}
+
+fn settle_trigger_session(
+    service: &Arc<Service>,
+    session_id: &str,
+    mut trigger_meta: crate::core::TriggerSessionMeta,
+    status: &str,
+    verdict: &VerdictPayload,
+) {
+    // Respect human takeover: if the user promoted the session while it ran,
+    // leave it as an ordinary workspace session and do not auto-hibernate/trash.
+    let still_trigger = service
+        .state
+        .hub
+        .session_info(session_id)
+        .is_some_and(|info| info.meta.trigger.is_some());
+    if !still_trigger {
+        return;
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let (outcome, ttl_ms) = normalize_trigger_outcome(status, &verdict.verdict);
+    trigger_meta.outcome = outcome.to_owned();
+    trigger_meta.settled_at_ms = Some(now_ms);
+    trigger_meta.auto_trash_at_ms = Some(now_ms.saturating_add(ttl_ms));
+    service
+        .state
+        .hub
+        .set_session_trigger(session_id, Some(trigger_meta));
+
+    let state = Arc::clone(&service.state);
+    let sid = session_id.to_owned();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(POST_TURN_HIBERNATE_GRACE_SECS)).await;
+        let should_hibernate = state.hub.session_info(&sid).is_some_and(|info| {
+            info.meta.trigger.is_some()
+                && info.meta.trashed_at_ms.is_none()
+                && !info.meta.closing
+                && info.meta.status == crate::core::Status::Running
+                && info.meta.background_tasks == 0
+                && info.queue_count == 0
+        });
+        if should_hibernate && let Err(reason) = state.supervisor.hibernate_session(&sid) {
+            tracing::debug!(session = %sid, %reason, "trigger post-turn hibernate skipped");
+        }
+    });
 }
 
 fn extract_assistant_text(hub: &crate::core::Hub, session_id: &str) -> String {

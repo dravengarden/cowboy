@@ -25,6 +25,7 @@ fn sample_meta(id: &str, owner: &str, provider: &str, account: &str) -> SessionM
         continued_from: None,
         handoff_resumed: false,
         forked_from: None,
+        trigger: None,
         id: id.to_owned(),
         provider: provider.to_owned(),
         provider_version: "1.2.3".to_owned(),

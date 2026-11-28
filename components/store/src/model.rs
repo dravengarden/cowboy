@@ -206,6 +206,23 @@ pub struct ProviderUpdateOffer {
     pub on_open: bool,
 }
 
+/// Metadata for an externally triggered session run (product-neutral).
+/// Persisted under `session_trigger:<session_id>` and projected onto
+/// `SessionMeta::trigger`. Absent for ordinary interactive sessions, or once a
+/// human promotes/takes over a triggered run into their workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerSessionMeta {
+    pub kind: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_key: Option<String>,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_trash_at_ms: Option<i64>,
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -225,6 +242,9 @@ pub struct SessionMeta {
     /// setting and restored onto the projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<String>,
+    /// Product-neutral external Trigger run metadata, absent for ordinary sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TriggerSessionMeta>,
     /// Resolved once at creation; independent of runtime Machine and auth generation.
     #[serde(default)]
     pub provider_account_id: crate::provider_account::ProviderAccountId,

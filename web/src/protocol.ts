@@ -2,10 +2,7 @@
 // inbound commands parsed in components/server/src/server.rs. The ACP pass-through `update`
 // payloads are typed loosely; their discriminant is `sessionUpdate`.
 
-import type {
-  PluginContractInventory,
-  ProviderContractInventory,
-} from "@cowboy/provider-ui";
+import type { PluginContractInventory, ProviderContractInventory } from "@cowboy/provider-ui";
 
 export type Status =
   | "starting"
@@ -17,12 +14,7 @@ export type Status =
   // finished (src/core.rs Hub::restore). A dead/resumable state like exited.
   | "interrupted";
 
-export type MachinePresence =
-  | "online"
-  | "reconnecting"
-  | "offline"
-  | "updating"
-  | "degraded";
+export type MachinePresence = "online" | "reconnecting" | "offline" | "updating" | "degraded";
 
 export interface MachineSummary {
   id: string;
@@ -159,6 +151,15 @@ export interface ProviderUpdateAvailable {
   on_open?: boolean;
 }
 
+export interface TriggerSessionMeta {
+  kind: string;
+  source: string;
+  correlation_key?: string;
+  outcome: string;
+  settled_at_ms?: number;
+  auto_trash_at_ms?: number;
+}
+
 export interface SessionMeta {
   /** Live human requests, independent of read state and transcript hydration. */
   attention?: { approvals: number; questions: number; other?: number };
@@ -180,6 +181,8 @@ export interface SessionMeta {
   handoff_resumed?: boolean;
   /** The session this one forks with its native conversation. */
   forked_from?: string;
+  /** Product-neutral external Trigger run metadata, absent for ordinary sessions. */
+  trigger?: TriggerSessionMeta;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
   /** Present unknown/null bindings must stay present and cannot imply local execution. */
@@ -271,10 +274,11 @@ export interface AcpUpdate {
 export function isPureTerminalOutputDelta(update: AcpUpdate): boolean {
   if (update.sessionUpdate !== "tool_call_update") return false;
   if (
-    !Object.keys(update).every((key) =>
-      key === "sessionUpdate" || key === "toolCallId" || key === "_meta"
+    !Object.keys(update).every(
+      (key) => key === "sessionUpdate" || key === "toolCallId" || key === "_meta",
     )
-  ) return false;
+  )
+    return false;
   const meta = update._meta;
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) {
     return false;
@@ -283,9 +287,12 @@ export function isPureTerminalOutputDelta(update: AcpUpdate): boolean {
     return false;
   }
   const terminal = (meta as Record<string, unknown>).terminal_output_delta;
-  return typeof terminal === "object" && terminal !== null &&
+  return (
+    typeof terminal === "object" &&
+    terminal !== null &&
     !Array.isArray(terminal) &&
-    typeof (terminal as Record<string, unknown>).data === "string";
+    typeof (terminal as Record<string, unknown>).data === "string"
+  );
 }
 
 export interface ContentBlock {
@@ -315,16 +322,16 @@ export interface PermissionOption {
 export type Event =
   | { kind: "update"; update: AcpUpdate }
   | {
-    kind: "permission_request";
-    request_id: string;
-    tool_call: unknown;
-    options: PermissionOption[];
-  }
+      kind: "permission_request";
+      request_id: string;
+      tool_call: unknown;
+      options: PermissionOption[];
+    }
   | {
-    kind: "permission_resolved";
-    request_id: string;
-    option_id: string | null;
-  }
+      kind: "permission_resolved";
+      request_id: string;
+      option_id: string | null;
+    }
   | { kind: "lifecycle"; status: Status; detail: string | null }
   | { kind: "turn_end"; stop_reason: string; usage?: TurnUsage };
 
@@ -342,9 +349,7 @@ export interface TurnUsage {
   reasoning_tokens: number | null;
 }
 
-export type Envelope =
-  & { session_id: string; seq: number; cmid?: string }
-  & Event;
+export type Envelope = { session_id: string; seq: number; cmid?: string } & Event;
 
 // A single ACP config option the agent advertises for a session. Shape is
 // stable across mode / model / effort because claude-agent-acp routes them
@@ -424,11 +429,11 @@ export type Outbound =
   | { type: "session_updated"; session: SessionMeta }
   | { type: "session_removed"; session_id: string }
   | {
-    type: "machines";
-    revision: number;
-    machines: MachineSummary[];
-    resync?: boolean;
-  }
+      type: "machines";
+      revision: number;
+      machines: MachineSummary[];
+      resync?: boolean;
+    }
   // End of the deterministic connect snapshot. Browser clients need no action;
   // stdio bridges use it to avoid racing session/list against bootstrap.
   | { type: "bootstrap_complete" }
@@ -441,11 +446,11 @@ export type Outbound =
   // the whole log (nothing older to page to). Older history is fetched on demand
   // over HTTP — see loadOlder + GET /api/history/:id?before_seq=….
   | {
-    type: "snapshot";
-    session_id: string;
-    events: Envelope[];
-    reached_start: boolean;
-  }
+      type: "snapshot";
+      session_id: string;
+      events: Envelope[];
+      reached_start: boolean;
+    }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }
   // Generic optimistic-sync snapshot patch (state-sync): the absolute
@@ -456,13 +461,13 @@ export type Outbound =
   // state's sync client. See store.ts `sync_patch`. (Queue + drafts flow here as
   // state "queue:<session_id>" — no dedicated `queues` message anymore.)
   | {
-    type: "sync_patch";
-    state: string;
-    version: number;
-    value: unknown;
-    confirmed: string[];
-    resync?: boolean;
-  }
+      type: "sync_patch";
+      state: string;
+      version: number;
+      value: unknown;
+      confirmed: string[];
+      resync?: boolean;
+    }
   // Compatibility tombstone for clients cached before automatic resume was
   // retired. Current clients ignore the empty snapshot.
   | { type: "settings"; settings: Record<string, unknown> }
@@ -473,21 +478,21 @@ export type Outbound =
   // Agent calls this session's agent waits for a person to approve; null
   // once nothing waits. Re-sent while it waits (see callApproval.ts).
   | {
-    type: "call_approval";
-    session_id: string;
-    approval: import("./callApproval").CallApproval | null;
-  }
+      type: "call_approval";
+      session_id: string;
+      approval: import("./callApproval").CallApproval | null;
+    }
   // Addressed refusal of one client-authored command. Only the device whose
   // outbox owns `cmid` acts on it (docs/offline-first-sync.md §Conflict catalog).
   | {
-    type: "command_result";
-    session_id: string;
-    cmid: string;
-    // `stale`: the session exists but the targeted row already left the
-    // queue or drafts.
-    outcome: "not_found" | "rejected" | "stale";
-    message: string;
-  }
+      type: "command_result";
+      session_id: string;
+      cmid: string;
+      // `stale`: the session exists but the targeted row already left the
+      // queue or drafts.
+      outcome: "not_found" | "rejected" | "stale";
+      message: string;
+    }
   // Absent for a global error; Controllers before 2026-11-05 sent null.
   | { type: "error"; session_id?: string | null; message: string };
 
@@ -507,22 +512,22 @@ export type Inbound =
   | { type: "connection_probe"; nonce: number }
   | { type: "new_session"; provider: string; cwd?: string }
   | {
-    type: "prompt";
-    session_id: string;
-    text?: string;
-    content?: ContentBlock[];
-  }
+      type: "prompt";
+      session_id: string;
+      text?: string;
+      content?: ContentBlock[];
+    }
   | { type: "cancel"; session_id: string }
   // Stop one ACP subagent (its child session) while the turn continues.
   | { type: "cancel_subagent"; session_id: string; subagent_session_id: string }
   // ACP bridge-only: remove exactly one queued prompt by its correlation id.
   | { type: "cancel_submitted"; session_id: string; cmid: string }
   | {
-    type: "permission";
-    session_id: string;
-    request_id: string;
-    option_id?: string;
-  }
+      type: "permission";
+      session_id: string;
+      request_id: string;
+      option_id?: string;
+    }
   | { type: "delete_session"; session_id: string }
   | { type: "trash_items"; session_ids: string[]; folder_ids: string[] }
   | { type: "restore_items"; session_ids: string[]; folder_ids: string[] }
@@ -534,13 +539,13 @@ export type Inbound =
   // echoes a `sync_patch`. Supersedes rename_session/reorder_sessions for the web.
   | { type: "sync"; state: string; id: string; name: string; args: unknown }
   | {
-    // Mode / model / effort change — same wire shape, server routes the
-    // right ext_method downstream. See src/acp.rs SetConfigOption.
-    type: "set_config_option";
-    session_id: string;
-    config_id: string;
-    value: string | boolean;
-  }
+      // Mode / model / effort change — same wire shape, server routes the
+      // right ext_method downstream. See src/acp.rs SetConfigOption.
+      type: "set_config_option";
+      session_id: string;
+      config_id: string;
+      value: string | boolean;
+    }
   // Client opened/selected a session — revive its agent if it died with a
   // daemon restart, without sending a turn. Idempotent. See src/core.rs.
   | { type: "open_session"; session_id: string }
@@ -559,72 +564,78 @@ export type Inbound =
   // the front of the queue WITHOUT interrupting (runs next after the current
   // turn, ahead of the rest of the queue); no-op on an idle/empty-queue session.
   | {
-    type: "submit";
-    session_id: string;
-    text?: string;
-    content?: ContentBlock[];
-    cmid?: string;
-    force?: boolean;
-    front?: boolean;
-    wrap_up?: boolean;
-    wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
-  }
+      type: "submit";
+      session_id: string;
+      text?: string;
+      content?: ContentBlock[];
+      cmid?: string;
+      force?: boolean;
+      front?: boolean;
+      wrap_up?: boolean;
+      wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
+    }
   // `cmid` on an edit or removal is the outbox mutation id, so a replay whose
   // row already ran is answered with an addressed `stale` result.
   | { type: "remove_queued"; session_id: string; id: string; cmid?: string }
   | {
-    type: "edit_queued";
-    session_id: string;
-    id: string;
-    text?: string;
-    content?: ContentBlock[];
-    cmid?: string;
-  }
+      type: "edit_queued";
+      session_id: string;
+      id: string;
+      text?: string;
+      content?: ContentBlock[];
+      cmid?: string;
+    }
   | { type: "clear_queue"; session_id: string }
-  | { type: "request_send_queued"; session_id: string; id: string; cmid?: string; issued_ms?: number }
+  | {
+      type: "request_send_queued";
+      session_id: string;
+      id: string;
+      cmid?: string;
+      issued_ms?: number;
+    }
   | { type: "force_push_queued"; session_id: string; id: string; cmid?: string; issued_ms?: number }
   | { type: "queued_to_draft"; session_id: string; id: string }
   | { type: "set_queue_editing"; session_id: string; id: string | null; token?: string }
   | {
-    type: "add_draft";
-    session_id: string;
-    text?: string;
-    content?: ContentBlock[];
-    cmid?: string;
-  }
+      type: "add_draft";
+      session_id: string;
+      text?: string;
+      content?: ContentBlock[];
+      cmid?: string;
+    }
   | {
-    type: "edit_draft";
-    session_id: string;
-    id: string;
-    text?: string;
-    content?: ContentBlock[];
-    cmid?: string;
-  }
+      type: "edit_draft";
+      session_id: string;
+      id: string;
+      text?: string;
+      content?: ContentBlock[];
+      cmid?: string;
+    }
   | { type: "remove_draft"; session_id: string; id: string; cmid?: string }
   | { type: "clear_drafts"; session_id: string }
   | {
-    type: "activate_draft";
-    session_id: string;
-    id: string;
-    cmid?: string;
-    front?: boolean;
-    wrap_up?: boolean;
-    wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
-    editing_token?: string;
-  }
+      type: "activate_draft";
+      session_id: string;
+      id: string;
+      cmid?: string;
+      front?: boolean;
+      wrap_up?: boolean;
+      wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
+      editing_token?: string;
+    }
   | { type: "activate_all_drafts"; session_id: string }
   // Attach/replace a future fire time on a draft (creates it if id/cmid match
   // nothing). The server auto-activates it at fire_at_ms — fires even offline.
   | {
-    type: "schedule_draft";
-    session_id: string;
-    id?: string;
-    cmid?: string;
-    text?: string;
-    content?: ContentBlock[];
-    fire_at_ms: number;
-    delivery?: Delivery;
-  }
+      type: "schedule_draft";
+      session_id: string;
+      id?: string;
+      cmid?: string;
+      text?: string;
+      content?: ContentBlock[];
+      fire_at_ms: number;
+      delivery?: Delivery;
+    }
   // Strip the schedule off a draft (it stays a plain parked draft).
   | { type: "unschedule_draft"; session_id: string; id: string }
   // Move a draft to another session's drafts (the "wrong session" fix).
@@ -640,10 +651,10 @@ export type Inbound =
   // Deprecated rollout tombstones. Current clients never send these; current
   // controllers accept them as no-ops for stale service-worker clients.
   | {
-    type: "set_session_auto_resume";
-    session_id: string;
-    value: boolean | null;
-  }
+      type: "set_session_auto_resume";
+      session_id: string;
+      value: boolean | null;
+    }
   | { type: "resume_turn"; session_id: string }
   | { type: "set_setting"; key: string; value: unknown };
 
