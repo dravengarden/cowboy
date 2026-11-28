@@ -73,8 +73,14 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
   },
   "& [data-session-inline]": { display: "none" },
   "& [data-session-overflow]": { display: "inline-flex" },
+  "& [data-composer-action='cache-glance']:not([data-cache-glance-attention])": {
+    display: "none",
+  },
   "@container composer-tools (min-width: 34rem)": {
     "& [data-session-inline]": { display: "contents" },
     "& [data-session-overflow]": { display: "none" },
+    "& [data-composer-action='cache-glance']:not([data-cache-glance-attention])": {
+      display: "inline-flex",
+    },
   },
 };

@@ -1,6 +1,6 @@
 import { ScrollEdges } from "@cowboy/app-shell";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Box, Button, Stack, Typography } from "@mui/material";
+import { Box, Button, Divider, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { Tune } from "@mui/icons-material";
 import { ConfigRevertBack } from "../ConfigRevertBack";
@@ -21,6 +21,7 @@ import {
 import { setSessionConfigOptions, useStoreSelector } from "../store";
 import { SessionToolsSection } from "../AgentToolsPanel";
 import { SessionContextSettings } from "../SessionContextSettings";
+import { SessionPromptCacheCard } from "../SessionPromptCacheCard";
 import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 import { DesktopModal } from "./DesktopModal";
 import type { SessionSettingsFocus } from "../sessionSettingsOpen";
@@ -450,6 +451,47 @@ export function RunConfigurationDialog({
   );
 }
 
+function RunConfigContextBody({
+  sessionId,
+  liveSession,
+  initialFocus,
+  onNavigateToDefaults,
+}: {
+  sessionId: string;
+  liveSession: SessionMeta | undefined;
+  initialFocus: SessionSettingsFocus;
+  onNavigateToDefaults: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      {initialFocus === "cache" && (
+        <>
+          <SessionPromptCacheCard
+            sessionId={sessionId}
+            onNavigateToDefaults={onNavigateToDefaults}
+          />
+          {liveSession && <Divider sx={{ my: 1.5 }} />}
+        </>
+      )}
+      {liveSession && <SessionContextSettings session={liveSession} inlineLinks />}
+      {initialFocus !== "cache" && (
+        <>
+          {liveSession && <Divider sx={{ my: 1.5 }} />}
+          <SessionPromptCacheCard
+            sessionId={sessionId}
+            onNavigateToDefaults={onNavigateToDefaults}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+function runConfigStart(focus: SessionSettingsFocus): "first" | "new_from" | "cache" {
+  if (focus === "new_from" || focus === "cache") return focus;
+  return "first";
+}
+
 function RunConfigurationDialogContent({
   onClose,
   sessionId,
@@ -472,9 +514,9 @@ function RunConfigurationDialogContent({
   const liveSession = useStoreSelector((snapshot) => snapshot.sessionsById.get(sessionId)) ?? session;
   const panelRef = useRef<HTMLDivElement>(null);
   const [activePane, setActivePane] = useState<"agent" | "tools" | "context">(
-    initialFocus === "new_from" ? "context" : "agent",
+    initialFocus === "new_from" || initialFocus === "cache" ? "context" : "agent",
   );
-  useRunConfigKeyboard(true, panelRef, initialFocus === "new_from" ? "new_from" : "first");
+  useRunConfigKeyboard(true, panelRef, runConfigStart(initialFocus));
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
   );
@@ -584,7 +626,12 @@ function RunConfigurationDialogContent({
           title="Context"
           caption="Where the work goes, and what the next message reads"
         >
-          {liveSession && <SessionContextSettings session={liveSession} inlineLinks />}
+          <RunConfigContextBody
+            sessionId={sessionId}
+            liveSession={liveSession}
+            initialFocus={initialFocus}
+            onNavigateToDefaults={closeConfig}
+          />
         </RunConfigPane>
       <ScrollEdges /></Box>
     </DesktopModal>

@@ -41,8 +41,8 @@ import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
-import { CacheProtectionDisableButton, ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
-import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
+import { CacheProtectionDisableButton, useCacheProtectionStatus } from "./ContextRolloverSettings";
+import { SessionPromptCacheCard } from "./SessionPromptCacheCard";
 
 export function SessionActionConfirmDialog({
   action,
@@ -217,6 +217,24 @@ export function RecommendedRunConfigPresetButton({
 // composer controls behind a single `+` because chip rows wrap awkwardly
 // on iPad portrait (820px) and break entirely on a 390px iPhone, while
 // the bottom-sheet pattern is iOS-native muscle memory.
+function useComposerSheetFocus(
+  open: boolean,
+  focus: SessionSettingsFocus,
+  sessionId: string | undefined,
+): void {
+  useEffect(() => {
+    if (!open || (focus !== "agent" && focus !== "cache")) return undefined;
+    const selector = focus === "cache"
+      ? "[data-prompt-cache-card]"
+      : "[data-session-settings-agent]";
+    const frame = globalThis.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(selector)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [focus, open, sessionId]);
+}
+
 export function ComposerSheet({
   open,
   focus = "session",
@@ -308,14 +326,7 @@ export function ComposerSheet({
       setReloadConfirm(false);
     }
   }, [open, session?.id]);
-  useEffect(() => {
-    if (!open || focus !== "agent") return undefined;
-    const frame = globalThis.requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-session-settings-agent]")
-        ?.scrollIntoView({ block: "start", behavior: "smooth" });
-    });
-    return () => globalThis.cancelAnimationFrame(frame);
-  }, [focus, open, session?.id]);
+  useComposerSheetFocus(open, focus, session?.id);
   const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
     ? session.title.slice(session.provider.length + 3)
@@ -636,6 +647,7 @@ export function ComposerSheet({
             onSessionAction={setCmdConfirm}
             onReload={(): void => setReloadConfirm(true)}
             onProviderUpdate={(): void => setUpdateConfirm(true)}
+            onNavigateToDefaults={onClose}
           />
           <WorkspaceOptionsSection
             session={session}
@@ -734,6 +746,7 @@ export function SessionInfoSection({
   onSessionAction,
   onReload,
   onProviderUpdate,
+  onNavigateToDefaults,
 }: {
   session: SessionMeta;
   title: string;
@@ -750,6 +763,7 @@ export function SessionInfoSection({
   onSessionAction: (action: SessionAction) => void;
   onReload: () => void;
   onProviderUpdate: () => void;
+  onNavigateToDefaults?: () => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -912,63 +926,64 @@ export function SessionInfoSection({
             tokens
           </Typography>
         )}
-        {cacheProtectionVisible &&
-          (cacheProtection || cacheProtectionUnavailable) && (
-          <Stack spacing={0.35} alignItems="flex-start">
-            <Tooltip
-              title={cacheProtection?.state === "protected"
-                ? `${cacheIntervalDetail}. Last verified ${
-                  cacheProtection.last_verified_at_ms
-                    ? new Date(cacheProtection.last_verified_at_ms)
-                      .toLocaleString()
-                    : "recently"
-                }. Next attempt ${
-                  cacheProtection.next_attempt_at_ms
-                    ? new Date(cacheProtection.next_attempt_at_ms)
-                      .toLocaleString()
-                    : "is being scheduled"
-                }. Real agent work always preempts it.`
-                : cacheProtection?.state === "disabled"
-                ? `Automatic ${sessionProviderName} cache protection is disabled for this session. Base interval is ${cacheBaseInterval}.`
-                : cacheProtectionUnavailable
-                ? "The owning Machine could not report cache status. Agent work is unaffected."
-                : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
-            >
-              <Chip
-                size="small"
-                variant="outlined"
-                color={cacheProtection?.state === "protected"
-                  ? "success"
-                  : cacheProtectionUnavailable
-                  ? "warning"
-                  : "default"}
-                label={cacheProtection?.state === "protected"
-                  ? `Cache protected · ${
-                    compactCacheTokens(cacheProtection.protected_tokens)
-                  }`
-                  : cacheProtection?.state === "disabled"
-                  ? `${cacheOptionName} off`
-                  : cacheProtectionUnavailable
-                  ? "Cache status unavailable"
-                  : `${cacheOptionName} learning`}
-                sx={{ alignSelf: "flex-start" }}
-              />
-            </Tooltip>
-            {cacheProtection && !cacheProtectionUnavailable && (
-              <Typography variant="caption" color="text.secondary">
-                {cacheIntervalDetail} · adaptive learning
-              </Typography>
-            )}
-            <CacheProtectionDisableButton sessionId={session.id} status={cacheProtection} onDisabled={(): void => { refreshCacheProtection(); setCacheMetricsNonce((n) => n + 1); }} />
-          </Stack>
-        )}
-        <ContextRolloverSettings
-          sessionId={session.id}
-          onPolicyChange={(): void => setCacheMetricsNonce((n) => n + 1)}
-        />
-        <SessionCacheMetricsSection
+        <SessionPromptCacheCard
           sessionId={session.id}
           refreshKey={cacheMetricsNonce}
+          keepaliveStatus={cacheProtection}
+          keepaliveSlot={cacheProtectionVisible &&
+            (cacheProtection || cacheProtectionUnavailable)
+            ? (
+              <Stack spacing={0.35} alignItems="flex-start">
+                <Tooltip
+                  title={cacheProtection?.state === "protected"
+                    ? `${cacheIntervalDetail}. Last verified ${
+                      cacheProtection.last_verified_at_ms
+                        ? new Date(cacheProtection.last_verified_at_ms)
+                          .toLocaleString()
+                        : "recently"
+                    }. Next attempt ${
+                      cacheProtection.next_attempt_at_ms
+                        ? new Date(cacheProtection.next_attempt_at_ms)
+                          .toLocaleString()
+                        : "is being scheduled"
+                    }. Real agent work always preempts it.`
+                    : cacheProtection?.state === "disabled"
+                    ? `Automatic ${sessionProviderName} cache protection is disabled for this session. Base interval is ${cacheBaseInterval}.`
+                    : cacheProtectionUnavailable
+                    ? "The owning Machine could not report cache status. Agent work is unaffected."
+                    : "This session is large enough for protection; Cowboy is waiting for a verified ≥90% cache hit before scheduling a keepalive."}
+                >
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    color={cacheProtection?.state === "protected"
+                      ? "success"
+                      : cacheProtectionUnavailable
+                      ? "warning"
+                      : "default"}
+                    label={cacheProtection?.state === "protected"
+                      ? `Cache protected · ${
+                        compactCacheTokens(cacheProtection.protected_tokens)
+                      }`
+                      : cacheProtection?.state === "disabled"
+                      ? `${cacheOptionName} off`
+                      : cacheProtectionUnavailable
+                      ? "Cache status unavailable"
+                      : `${cacheOptionName} learning`}
+                    sx={{ alignSelf: "flex-start" }}
+                  />
+                </Tooltip>
+                {cacheProtection && !cacheProtectionUnavailable && (
+                  <Typography variant="caption" color="text.secondary">
+                    {cacheIntervalDetail} · adaptive learning
+                  </Typography>
+                )}
+                <CacheProtectionDisableButton sessionId={session.id} status={cacheProtection} onDisabled={(): void => { refreshCacheProtection(); setCacheMetricsNonce((n) => n + 1); }} />
+              </Stack>
+            )
+            : null}
+          onPolicyChange={(): void => setCacheMetricsNonce((n) => n + 1)}
+          {...(onNavigateToDefaults ? { onNavigateToDefaults } : {})}
         />
         <Box sx={{ pt: 0.5 }}>
           <ButtonBase

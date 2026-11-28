@@ -40,6 +40,12 @@ test("session settings open events keep an explicit focus", () => {
   );
   assertEquals(
     sessionSettingsFocusFromEvent(
+      new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus: "cache" } }),
+    ),
+    "cache",
+  );
+  assertEquals(
+    sessionSettingsFocusFromEvent(
       new CustomEvent(OPEN_SESSION_SETTINGS_EVENT),
     ),
     "session",

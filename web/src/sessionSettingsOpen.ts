@@ -3,7 +3,7 @@ export const CLOSE_SESSION_SETTINGS_EVENT = "cowboy:close-session-settings";
 export const SESSION_NEW_FROM_EVENT = "cowboy:session-new-from";
 export const COMPOSER_FOCUS_EVENT = "cowboy:composer-focus";
 
-export type SessionSettingsFocus = "session" | "agent" | "new_from";
+export type SessionSettingsFocus = "session" | "agent" | "new_from" | "cache";
 
 export interface ForkPointSelection {
   itemKey: string;
@@ -104,5 +104,5 @@ export function sessionSettingsFocusFromEvent(
 ): SessionSettingsFocus {
   if (!(event instanceof CustomEvent)) return "session";
   const focus = event.detail?.focus;
-  return focus === "agent" || focus === "new_from" ? focus : "session";
+  return focus === "agent" || focus === "new_from" || focus === "cache" ? focus : "session";
 }

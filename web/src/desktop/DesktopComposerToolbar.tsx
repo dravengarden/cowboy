@@ -55,6 +55,7 @@ import {
   type DesktopSessionActions,
   useDesktopSessionActions,
 } from "./useDesktopSessionActions";
+import { DesktopCacheGlanceButton } from "../SessionCacheGlanceCue";
 
 export interface DesktopComposerToolbarProps {
   sessionId: string;
@@ -95,7 +96,13 @@ export function DesktopComposerToolbar(
   props: DesktopComposerToolbarProps,
 ): React.JSX.Element {
   const session = useDesktopSessionActions(props.sessionId, props.status);
-  return <DesktopComposerToolbarView {...props} session={session} />;
+  return (
+    <DesktopComposerToolbarView
+      {...props}
+      session={session}
+      cacheCue={<DesktopCacheGlanceButton sessionId={props.sessionId} />}
+    />
+  );
 }
 
 function hasOverlayMutation(records: readonly MutationRecord[]): boolean {
@@ -115,6 +122,7 @@ function hasOverlayMutation(records: readonly MutationRecord[]): boolean {
 export function DesktopComposerToolbarView(
   props: Omit<DesktopComposerToolbarProps, "sessionId" | "status"> & {
     session: DesktopSessionActions;
+    cacheCue?: ReactNode;
   },
 ): React.JSX.Element {
   const { session } = props;
@@ -319,6 +327,7 @@ export function DesktopComposerToolbarView(
               </HintTooltip>
             </Box>
           )}
+          {props.cacheCue}
         </Box>
         {
           /* Stop stays mounted and only disables while idle, so the row does

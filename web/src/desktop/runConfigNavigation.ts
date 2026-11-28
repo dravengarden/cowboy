@@ -431,7 +431,7 @@ export function runConfigKey(
 
 function watchInitialRunConfigCursor(
   panelRef: RefObject<HTMLDivElement | null>,
-  start: "first" | "new_from",
+  start: "first" | "new_from" | "cache",
 ): { settle: () => void; cleanup: () => void } {
   let settled = false;
   let focusFirst = 0;
@@ -470,6 +470,14 @@ function watchInitialRunConfigCursor(
         const stop = modalStops(form)[0];
         if (stop) focusModalStop(stop);
       }
+    } else if (start === "cache") {
+      const card = panel.querySelector<HTMLElement>("[data-prompt-cache-card]");
+      if (card && !card.contains(document.activeElement)) {
+        const stop = modalStops(card)[0];
+        if (stop) focusModalStop(stop);
+        else card.focus();
+        card.scrollIntoView({ block: "nearest" });
+      }
     } else {
       const firstRow = panel.querySelector<HTMLElement>("[data-config-row]");
       if (firstRow && !firstRow.contains(document.activeElement)) {
@@ -481,15 +489,21 @@ function watchInitialRunConfigCursor(
     const panel = panelRef.current;
     const target = event.target;
     if (!settled && panel && target instanceof Node) {
-      const want = panel.querySelector<HTMLElement>(
-        start === "new_from" ? "[data-new-session-editor]" : "[data-config-row]",
-      );
+      const selector = start === "new_from"
+        ? "[data-new-session-editor]"
+        : start === "cache"
+        ? "[data-prompt-cache-card]"
+        : "[data-config-row]";
+      const want = panel.querySelector<HTMLElement>(selector);
       if (want && !want.contains(target)) schedule();
     }
   };
   document.addEventListener("focusin", onFocusTrap, true);
   focusFirst = requestAnimationFrame(placeCursor);
-  const maxWait = setTimeout(stopObserving, start === "new_from" ? 10_000 : 4_000);
+  const maxWait = setTimeout(
+    stopObserving,
+    start === "new_from" ? 10_000 : start === "cache" ? 6_000 : 4_000,
+  );
   const settle = (): void => {
     settled = true;
     stopObserving();
@@ -509,7 +523,7 @@ function watchInitialRunConfigCursor(
 export function useRunConfigKeyboard(
   open: boolean,
   panelRef: RefObject<HTMLDivElement | null>,
-  start: "first" | "new_from" = "first",
+  start: "first" | "new_from" | "cache" = "first",
 ): void {
   useEffect(() => {
     if (!open) return undefined;
