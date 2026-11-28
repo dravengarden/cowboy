@@ -141,15 +141,18 @@ pub struct Persistence {
 /// listener). A component activator runs it for a candidate before stopping
 /// anything, and for its rollback target to learn whether that one could
 /// start. Prints one JSON report: `admissible` (live sessions on retired
-/// default accounts of an admitted dataset are listed as fenced at start),
+/// default accounts of an admitted dataset are listed with `started_despite`),
 /// `refused` (also the error, so the exit status fails) or `unverified` when
 /// the answer cannot be established read-only (a missing database, a schema
 /// older than this binary's migrations, a timeout, an unreadable Service
 /// identity).
 pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
+    let identity = std::fs::symlink_metadata(args.data_dir.join("service-id"))
+        .is_ok()
+        .then(|| crate::service_identity::inspect(&args.data_dir));
     let settlement = admission_settlement(
         crate::provider_service::recorded_admission(&args.data_dir),
-        crate::service_identity::inspect(&args.data_dir),
+        identity,
     );
     let read = async {
         let Some(url) = args.database_url() else {
@@ -174,7 +177,7 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
             "schema": "dravengarden.cowboy.startup-admission-preflight/v1",
             "status": report.status,
             "retired_default_sessions": report.sessions,
-            "fenced_at_start": report.fenced,
+            "started_despite": report.admitted,
             "unverified": report.unverified,
             "not_checked": [
                 "provider_credentials",
@@ -191,35 +194,36 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
 }
 
 /// What startup does with live sessions on retired default accounts
-/// (`retirement::admit_store`): it fences them once the vault's recorded
-/// admission names this Service dataset, and refuses them otherwise.
+/// (`retirement::admit_store`): it starts despite them once the vault's
+/// recorded admission names this Service dataset, and refuses otherwise.
 enum Settlement {
     /// No recorded admission for this dataset: startup refuses them.
     Refused,
-    /// Admitted for this dataset: startup fences them.
-    Fenced,
-    /// The Service identity could not be read.
+    /// Admitted for this dataset: startup logs them and starts.
+    Admitted,
+    /// An existing Service identity could not be read.
     Unknown(String),
 }
 
+/// `identity` is `None` when no Service identity exists yet: startup then
+/// creates a new one, which no recorded admission names.
 fn admission_settlement(
     admitted: Option<crate::provider_service::AdmittedRetirement>,
-    identity: anyhow::Result<String>,
+    identity: Option<anyhow::Result<String>>,
 ) -> Settlement {
-    let Some(admitted) = admitted else {
-        return Settlement::Refused;
-    };
-    match identity {
-        Ok(id) if id == admitted.dataset => Settlement::Fenced,
-        Ok(_) => Settlement::Refused,
-        Err(error) => Settlement::Unknown(format!("reading the Service identity: {error:#}")),
+    match (admitted, identity) {
+        (_, Some(Err(error))) => {
+            Settlement::Unknown(format!("reading the Service identity: {error:#}"))
+        }
+        (Some(admitted), Some(Ok(id))) if id == admitted.dataset => Settlement::Admitted,
+        _ => Settlement::Refused,
     }
 }
 
 struct AdmissionReport {
     status: &'static str,
     sessions: Vec<String>,
-    fenced: bool,
+    admitted: bool,
     unverified: Option<String>,
 }
 
@@ -228,17 +232,17 @@ impl AdmissionReport {
         Self {
             status: "unverified",
             sessions: Vec::new(),
-            fenced: false,
+            admitted: false,
             unverified: Some(reason),
         }
     }
 }
 
 fn admission_report(settlement: &Settlement, live: Vec<String>) -> AdmissionReport {
-    let report = |status, fenced| AdmissionReport {
+    let report = |status, admitted| AdmissionReport {
         status,
         sessions: Vec::new(),
-        fenced,
+        admitted,
         unverified: None,
     };
     if let Settlement::Unknown(reason) = settlement {
@@ -252,7 +256,7 @@ fn admission_report(settlement: &Settlement, live: Vec<String>) -> AdmissionRepo
         return report("admissible", false);
     }
     match settlement {
-        Settlement::Fenced => AdmissionReport {
+        Settlement::Admitted => AdmissionReport {
             sessions: live,
             ..report("admissible", true)
         },
@@ -414,7 +418,8 @@ mod admission_report_tests {
 
     #[test]
     fn settlement_needs_a_recorded_admission_of_this_dataset() {
-        let ok = || anyhow::Ok("svc".to_owned());
+        let ok = || Some(anyhow::Ok("svc".to_owned()));
+        let unreadable = || Some(Err(anyhow::anyhow!("symlinked")));
         assert!(matches!(
             admission_settlement(None, ok()),
             Settlement::Refused
@@ -425,18 +430,26 @@ mod admission_report_tests {
         ));
         assert!(matches!(
             admission_settlement(admitted("svc"), ok()),
-            Settlement::Fenced
+            Settlement::Admitted
         ));
+        // Startup creates a new identity, which no admission names.
         assert!(matches!(
-            admission_settlement(admitted("svc"), Err(anyhow::anyhow!("symlinked"))),
-            Settlement::Unknown(_)
+            admission_settlement(admitted("svc"), None),
+            Settlement::Refused
         ));
+        // Startup cannot read an existing broken identity either.
+        for marker in [admitted("svc"), None] {
+            assert!(matches!(
+                admission_settlement(marker, unreadable()),
+                Settlement::Unknown(_)
+            ));
+        }
     }
 
     #[test]
     fn live_sessions_refuse_only_without_a_recorded_admission() {
         let unknown = Settlement::Unknown("identity".to_owned());
-        for settlement in [&Settlement::Refused, &Settlement::Fenced] {
+        for settlement in [&Settlement::Refused, &Settlement::Admitted] {
             assert_eq!(report(settlement, &[]), ("admissible", vec![]));
         }
         let live = vec!["live".to_owned()];
@@ -445,7 +458,7 @@ mod admission_report_tests {
             ("refused", live.clone())
         );
         assert_eq!(
-            report(&Settlement::Fenced, &["live"]),
+            report(&Settlement::Admitted, &["live"]),
             ("admissible", live.clone())
         );
         // Startup cannot read the identity either.

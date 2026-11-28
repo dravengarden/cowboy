@@ -251,14 +251,16 @@ enrolled-Machine External Intake path had registered before its account gate
 rejected them kept Hawk's Controller down for 85 minutes that way, through
 the rollback and every restart. Instead:
 
-- Live sessions on retired `default` accounts are fenced as `crashed`, and
-  their ids are logged as an error. Every prompt to such a session is
-  refused, as for any session on a retired card. A Machine worker that still
-  runs one is adopted like any reconnecting worker, so its completed turn is
-  not lost. Such a worker can only survive a rollback to a Controller from
-  before the retirement, which the component activator no longer selects: an
-  explicit recovery release must pass `--check-startup-admission`, which
-  every release from before the retirement lacks.
+- Rejected intake registrations, which never launched, are settled. Other
+  live sessions on retired `default` accounts are logged as an error and
+  left as they are, so a reconnecting worker still settles a restored turn
+  and a managed call keeps its result. Every prompt to them is refused and
+  none is revived, as for any session on a retired card. Such a worker can
+  only survive a rollback to a Controller from before the retirement, which
+  the component activator no longer selects (an explicit recovery release
+  must pass `--check-startup-admission`, and once a retirement is admitted
+  an ordinary rollback target must support it), or a Machine revoked before
+  the admission and enrolled again with its workers intact.
 - Changed wipe generations (a repeated sign-out, or a Controller from before
   the retirement wiping a card again) are recorded once every enrolled
   Machine acknowledged them; until then the distribution reconciler keeps
@@ -272,7 +274,7 @@ PostgreSQL read-only transactions with a statement timeout), runs no
 migration, takes no vault or instance lock and binds nothing. Like any
 SQLite reader it shares the live WAL index. It prints one
 `startup-admission-preflight/v1` report: `admissible` (live sessions of an
-admitted dataset are listed with `fenced_at_start`), `refused` (exit status
+admitted dataset are listed with `started_despite`), `refused` (exit status
 non-zero: live sessions and no recorded admission for this Service dataset)
 or `unverified` when it could not read the state (a missing database, a
 schema older than its migrations, a 30 s timeout, an unreadable Service

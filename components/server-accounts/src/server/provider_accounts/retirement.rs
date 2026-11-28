@@ -110,12 +110,14 @@ fn admission(
 /// running Controller delivers one), no previous Controller could act
 /// instead since every release since the retirement carries this gate, and
 /// refusing kept Hawk's Controller down for 85 minutes on 2026-11-28 over
-/// two stale intake registrations. Live sessions on retired `default`
-/// accounts are fenced as crashed instead; every prompt to them is refused.
-/// A worker that still runs one is adopted like any reconnecting worker: one
-/// can only survive a rollback to a Controller from before the retirement,
-/// which the component activator no longer selects (a recovery release must
-/// pass `--check-startup-admission`). Changed wipe generations (a repeated
+/// two stale intake registrations. Rejected intake registrations, which
+/// never launched, are settled. Other live sessions on retired `default`
+/// accounts are logged as an error and left as they are, so a reconnecting
+/// worker still settles a restored turn; every prompt to them is refused and
+/// none is revived. Such a worker can only survive a rollback to a
+/// Controller from before the retirement, which the component activator no
+/// longer selects, or a Machine revoked before the admission and enrolled
+/// again with its workers intact. Changed wipe generations (a repeated
 /// sign-out) are re-admitted once every enrolled Machine acknowledged them;
 /// until then the distribution reconciler keeps delivering them.
 pub async fn admit_store(
@@ -129,11 +131,17 @@ pub async fn admit_store(
         .as_ref()
         .is_some_and(|recorded| recorded.dataset == admitted.dataset)
     {
-        let fenced = store.fence_live_retired_default_sessions().await?;
-        if !fenced.is_empty() {
+        // Registered by the old enrolled-Machine intake path before its
+        // account gate rejected them: provably never launched.
+        let settled = store.settle_retired_intake_registrations().await?;
+        if !settled.is_empty() {
+            tracing::warn!(sessions = ?settled, "settled rejected legacy intake registrations");
+        }
+        let live = store.live_retired_default_sessions().await?;
+        if !live.is_empty() {
             tracing::error!(
-                sessions = ?fenced,
-                "fenced live sessions on retired legacy default accounts; their workers are not adopted and they never resume"
+                sessions = ?live,
+                "live sessions on retired legacy default accounts; every prompt to them is refused, stop their workers"
             );
         }
         if recorded.as_ref() != Some(&admitted) {
@@ -350,49 +358,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_admitted_dataset_fences_live_sessions_instead_of_refusing() {
+    async fn an_admitted_dataset_starts_despite_live_retired_sessions() {
         let root = tempfile::tempdir().unwrap();
         let auth = signed_out_grok(root.path());
         let store = crate::store::Store::connect("sqlite::memory:", root.path().join("artifacts"))
             .await
             .unwrap();
         store.migrate().await.unwrap();
-        let live = |id: &str| {
-            let mut meta = crate::store::fixtures::session(id);
-            meta.provider = "grok".into();
-            meta
-        };
-        store.insert_session(&live("sess-live")).await.unwrap();
+        let mut live = crate::store::fixtures::session("sess-live");
+        live.provider = "grok".into();
+        store.insert_session(&live).await.unwrap();
         // Not admitted yet: the previous Controller is the remedy.
         let refusal = admit_store(&auth, &store, "dataset").await.unwrap_err();
         assert!(format!("{refusal:#}").contains("sess-live"), "{refusal:#}");
         assert!(auth.admitted_retirement().is_none());
         // Admitted (no enrolled Machine to acknowledge the wipe).
         admit(&auth, &admission(&auth, "dataset"), &[], &[]).unwrap();
-        // A stale live row no longer keeps the Service down.
+        // The stale live row no longer keeps the Service down. It is left as
+        // it is, so a reconnecting worker still settles a restored turn.
         admit_store(&auth, &store, "dataset").await.unwrap();
-        assert!(
-            store
-                .live_retired_default_sessions()
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let live = store.live_retired_default_sessions().await.unwrap();
+        assert_eq!(live, ["sess-live"]);
         // Another dataset is not covered by that admission.
-        store.insert_session(&live("sess-other")).await.unwrap();
         assert!(admit_store(&auth, &store, "copied").await.is_err());
-        // A changed wipe generation of the admitted dataset fences too, and
+        // A changed wipe generation of the admitted dataset starts too, and
         // is re-admitted once acknowledged (no enrolled Machine here).
         auth.logout("grok").unwrap();
         let before = auth.admitted_retirement().unwrap();
         admit_store(&auth, &store, "dataset").await.unwrap();
-        assert!(
-            store
-                .live_retired_default_sessions()
-                .await
-                .unwrap()
-                .is_empty()
-        );
         let after = auth.admitted_retirement().unwrap();
         assert_ne!(after, before);
         assert_eq!(after, admission(&auth, "dataset"));
