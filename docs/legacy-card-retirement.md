@@ -235,45 +235,51 @@ them with the previous Controller before installing this release
 ```
 
 The admission is recorded with the Service dataset and each card Provider's
-root wipe generation (`retirement-admitted.json` beside the vault). A later
-start with exactly those (a reboot with a Machine offline) skips the
-Machine wipe check; any change (a rollback signed a card in and out again)
-runs it again. The live-session check runs on every start (an older
-Controller after a rollback could resume a card session without changing any
-wipe). When the recorded admission still matches, startup can settle empty
-system registrations left by the old enrolled-Machine External Intake path.
-That path registered a session before the retired-account launch gate
-rejected it. The live-session check still runs for every other session.
-Delivery acknowledgements are recorded under exactly the enrollment
-key the envelope was sealed to. A reconnecting Machine only wakes the
-reconciler for itself; there is no fleet-wide redelivery on reconnect, and
-failed-session recovery follows each successful root delivery.
+root wipe generation (`retirement-admitted.json` beside the vault). Delivery
+acknowledgements are recorded under exactly the enrollment key the envelope
+was sealed to. A reconnecting Machine only wakes the reconciler for itself;
+there is no fleet-wide redelivery on reconnect, and failed-session recovery
+follows each successful root delivery.
 
-Because the live-session check runs on every start and its refusal is
-fatal, a session row that a serving Controller leaves on a retired
-`default` account stops every later start: the candidate, the rollback
-target (when it carries the same check) and an ordinary reboot. On
-2026-11-28 two such intake registrations kept Hawk's Controller down for
-85 minutes. `cowboy serve --check-startup-admission --data-dir <dir>
---database-url <url>` runs exactly this session check read-only beside the
-serving Controller: it opens the database read-only (`SQLITE_OPEN_READONLY`,
-never created; PostgreSQL read-only transactions with a statement timeout),
-runs no migration, takes no vault or instance lock and binds nothing. Like
-any SQLite reader it shares the live WAL index. It prints one
-`startup-admission-preflight/v1` report: `admissible`, `refused` (exit
-status non-zero) or `unverified` when the answer cannot be established
-read-only. That covers state it could not read (a missing database, a
-schema older than its migrations, a 30 s timeout) and live sessions that
-startup settles only on an admitted dataset: whether it does depends on
-the vault's current wipe generations, which only the serving Controller
-can read. Without a recorded admission for this Service dataset those
-sessions are refused. The component activator runs it for the candidate before
-stopping anything and for the rollback target, so a refused release never
-stops the serving Controller, nor does a release whose rollback could not
-start. It does not check the vault credentials or Machine wipe
-acknowledgements, which need the vault the serving Controller owns, and a
-session the serving Controller registers between the check and its stop is
-not seen.
+Both refusals apply only to the first admission of a Service dataset, where
+the previous Controller is their remedy. Once a dataset was admitted,
+startup never refuses on session or wipe state. A refusal cannot stop a
+Machine's worker or deliver a wipe: only a running Controller does either,
+and every release since the retirement carries this gate, so no previous
+Controller could do it instead. On 2026-11-28 two sessions that the
+enrolled-Machine External Intake path had registered before its account gate
+rejected them kept Hawk's Controller down for 85 minutes that way, through
+the rollback and every restart. Instead:
+
+- Live sessions on retired `default` accounts are fenced as `crashed`, and
+  their ids are logged as an error. Every prompt to such a session is
+  refused, as for any session on a retired card. A Machine worker that still
+  runs one is adopted like any reconnecting worker, so its completed turn is
+  not lost. Such a worker can only survive a rollback to a Controller from
+  before the retirement, which the component activator no longer selects: an
+  explicit recovery release must pass `--check-startup-admission`, which
+  every release from before the retirement lacks.
+- Changed wipe generations (a repeated sign-out, or a Controller from before
+  the retirement wiping a card again) are recorded once every enrolled
+  Machine acknowledged them; until then the distribution reconciler keeps
+  delivering them as Machines connect. Each start logs the Machines still
+  missing as an error; a failure to record is logged, never fatal.
+
+`cowboy serve --check-startup-admission --data-dir <dir> --database-url
+<url>` runs the session check read-only beside the serving Controller: it
+opens the database read-only (`SQLITE_OPEN_READONLY`, never created;
+PostgreSQL read-only transactions with a statement timeout), runs no
+migration, takes no vault or instance lock and binds nothing. Like any
+SQLite reader it shares the live WAL index. It prints one
+`startup-admission-preflight/v1` report: `admissible` (live sessions of an
+admitted dataset are listed with `fenced_at_start`), `refused` (exit status
+non-zero: live sessions and no recorded admission for this Service dataset)
+or `unverified` when it could not read the state (a missing database, a
+schema older than its migrations, a 30 s timeout, an unreadable Service
+identity, which startup cannot read either). The component activator runs
+it for the candidate before stopping anything and for the rollback target.
+It does not check the vault credentials, which need the vault the serving
+Controller owns.
 
 Known gap (follow-up): the envelope is sealed to the enrollment key read
 from the store, but the connection that carries it is not bound to that

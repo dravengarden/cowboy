@@ -17,28 +17,6 @@ use super::super::{StorageBackend, Store};
 use super::Registry;
 use anyhow::{Context as _, Result};
 
-/// The rows `settle_retired_intake_registrations` settles (one retired
-/// Provider bound as `$1`), shared with the read-only startup preflight so
-/// both always agree.
-macro_rules! rejected_intake_registration {
-    ($deleted:literal, $empty_queue:literal) => {
-        concat!(
-            "provider=$1 AND provider_account_id='default' AND ",
-            $deleted,
-            " IS NULL AND status='starting' ",
-            "AND origin='api' AND system=TRUE AND machine_id<>'local' ",
-            "AND owner_user_id IS NULL AND execution_binding IS NULL ",
-            "AND workspace_id IS NULL AND agent_session_id IS NULL ",
-            "AND provider_version='' AND provider_generation_digest='' ",
-            "AND provider_auth_generation IS NULL AND provider_behavior IS NULL ",
-            "AND next_seq=0 AND ",
-            $empty_queue,
-            " AND NOT EXISTS (SELECT 1 FROM events WHERE session_id=sessions.id) ",
-            "AND NOT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id=sessions.id) ",
-        )
-    };
-}
-
 macro_rules! retire_rows {
     ($db:expr) => {{
         let mut tx = $db.pool.begin().await?;
@@ -188,74 +166,42 @@ impl Store {
         Ok(recipients)
     }
 
-    /// Settle rows registered by the old enrolled-Machine intake path before
-    /// the launch gate rejected the retired account. Only use this after the
-    /// same dataset and root wipes have already passed retirement admission.
-    pub async fn settle_retired_intake_registrations(&self) -> Result<Vec<String>> {
-        macro_rules! settle {
-            ($db:expr, $updated:literal, $deleted:literal, $empty_queue:literal) => {{
+    /// Fence every live (starting, running or busy) session on a retired
+    /// card's `default` account as crashed, returning their ids. Only for a
+    /// dataset whose recorded retirement admission still matches every wipe
+    /// generation (`retirement::admit_store`): such a row is stale, never a
+    /// card credential in use. A fenced session refuses every prompt.
+    pub async fn fence_live_retired_default_sessions(&self) -> Result<Vec<String>> {
+        macro_rules! fence {
+            ($db:expr, $updated:literal, $deleted:literal) => {{
                 let mut tx = $db.pool.begin().await?;
-                let mut settled = Vec::new();
+                let mut fenced = Vec::new();
                 for provider in super::legacy_cards::retired_providers() {
-                    let ids = sqlx::query_scalar::<_, String>(concat!(
-                        "UPDATE sessions SET status='crashed', ",
-                        $updated,
-                        " WHERE ",
-                        rejected_intake_registration!($deleted, $empty_queue),
-                        "RETURNING id",
-                    ))
-                    .bind(provider)
-                    .fetch_all(&mut *tx)
-                    .await?;
-                    settled.extend(ids);
-                }
-                tx.commit().await?;
-                settled
-            }};
-        }
-        Ok(match &self.backend {
-            StorageBackend::Postgres(db) => {
-                settle!(db, "updated_at=now()", "deleted_at", "queue='[]'::jsonb")
-            }
-            StorageBackend::Sqlite(db) => settle!(
-                db,
-                "updated_at_ms=CAST(strftime('%s','now') AS INTEGER)*1000",
-                "deleted_at_ms",
-                "json(queue)='[]'"
-            ),
-        })
-    }
-
-    /// Read-only: every live retired-default session with whether
-    /// `settle_retired_intake_registrations` would settle it, each row and
-    /// its eligibility read by one statement. The startup admission
-    /// preflight runs it beside the serving Controller.
-    pub async fn live_retired_default_sessions_settleable(&self) -> Result<Vec<(String, bool)>> {
-        macro_rules! classify {
-            ($db:expr, $deleted:literal, $empty_queue:literal) => {{
-                let mut rows = Vec::new();
-                for provider in super::legacy_cards::retired_providers() {
-                    rows.extend(
-                        sqlx::query_as::<_, (String, bool)>(concat!(
-                            "SELECT id, CASE WHEN ",
-                            rejected_intake_registration!($deleted, $empty_queue),
-                            " THEN TRUE ELSE FALSE END FROM sessions WHERE provider=$1 AND ",
+                    fenced.extend(
+                        sqlx::query_scalar::<_, String>(concat!(
+                            "UPDATE sessions SET status='crashed', ",
+                            $updated,
+                            " WHERE provider=$1 AND provider_account_id='default' AND ",
                             $deleted,
-                            " IS NULL AND provider_account_id='default' ",
-                            "AND status IN ('starting','running','busy')",
+                            " IS NULL AND status IN ('starting','running','busy') RETURNING id",
                         ))
                         .bind(provider)
-                        .fetch_all(&$db.pool)
+                        .fetch_all(&mut *tx)
                         .await?,
                     );
                 }
-                rows.sort();
-                rows
+                tx.commit().await?;
+                fenced.sort();
+                fenced
             }};
         }
         Ok(match &self.backend {
-            StorageBackend::Postgres(db) => classify!(db, "deleted_at", "queue='[]'::jsonb"),
-            StorageBackend::Sqlite(db) => classify!(db, "deleted_at_ms", "json(queue)='[]'"),
+            StorageBackend::Postgres(db) => fence!(db, "updated_at=now()", "deleted_at"),
+            StorageBackend::Sqlite(db) => fence!(
+                db,
+                "updated_at_ms=CAST(strftime('%s','now') AS INTEGER)*1000",
+                "deleted_at_ms"
+            ),
         })
     }
 

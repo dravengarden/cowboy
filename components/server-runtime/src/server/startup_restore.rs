@@ -140,16 +140,13 @@ pub struct Persistence {
 /// beside the serving one (no vault or instance lock, migration, write or
 /// listener). A component activator runs it for a candidate before stopping
 /// anything, and for its rollback target to learn whether that one could
-/// start. Prints one JSON report: `admissible`, `refused` (also the error,
-/// so the exit status fails) or `unverified` when the answer cannot be
-/// established read-only: the state could not be read (a missing database,
-/// a schema older than this binary's migrations, a timeout), or only rows
-/// startup settles on an admitted dataset stand in the way, which needs the
-/// vault's wipe generations.
+/// start. Prints one JSON report: `admissible` (live sessions on retired
+/// default accounts of an admitted dataset are listed as fenced at start),
+/// `refused` (also the error, so the exit status fails) or `unverified` when
+/// the answer cannot be established read-only (a missing database, a schema
+/// older than this binary's migrations, a timeout, an unreadable Service
+/// identity).
 pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
-    // Whether startup may settle rejected intake registrations is decided
-    // before any read: without it only the plain live-session query runs,
-    // which needs no table a pre-retirement schema may lack.
     let settlement = admission_settlement(
         crate::provider_service::recorded_admission(&args.data_dir),
         crate::service_identity::inspect(&args.data_dir),
@@ -161,18 +158,13 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
         let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
             .await
             .context("opening the database read-only")?;
-        let rows = if matches!(settlement, Settlement::Never) {
-            store
-                .live_retired_default_sessions()
-                .await
-                .map(|ids| ids.into_iter().map(|id| (id, false)).collect())
-        } else {
-            store.live_retired_default_sessions_settleable().await
-        };
-        rows.context("reading live sessions on retired legacy default accounts")
+        store
+            .live_retired_default_sessions()
+            .await
+            .context("reading live sessions on retired legacy default accounts")
     };
     let report = match tokio::time::timeout(std::time::Duration::from_secs(30), read).await {
-        Ok(Ok(rows)) => admission_report(&settlement, rows),
+        Ok(Ok(live)) => admission_report(&settlement, live),
         Ok(Err(error)) => AdmissionReport::unverified(format!("{error:#}")),
         Err(_) => AdmissionReport::unverified("timed out after 30s".to_owned()),
     };
@@ -182,6 +174,7 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
             "schema": "dravengarden.cowboy.startup-admission-preflight/v1",
             "status": report.status,
             "retired_default_sessions": report.sessions,
+            "fenced_at_start": report.fenced,
             "unverified": report.unverified,
             "not_checked": [
                 "provider_credentials",
@@ -197,14 +190,16 @@ pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
     }
 }
 
-/// Whether startup settles rejected intake registrations
-/// (`retirement::admit_store`): only when the vault's recorded admission
-/// matches this dataset and its current wipe generations.
+/// What startup does with live sessions on retired default accounts
+/// (`retirement::admit_store`): it fences them once the vault's recorded
+/// admission names this Service dataset, and refuses them otherwise.
 enum Settlement {
-    /// No recorded admission for this dataset: startup settles nothing.
-    Never,
-    /// Recorded for this dataset; the wipe generations need the vault.
-    Unconfirmed(String),
+    /// No recorded admission for this dataset: startup refuses them.
+    Refused,
+    /// Admitted for this dataset: startup fences them.
+    Fenced,
+    /// The Service identity could not be read.
+    Unknown(String),
 }
 
 fn admission_settlement(
@@ -212,20 +207,19 @@ fn admission_settlement(
     identity: anyhow::Result<String>,
 ) -> Settlement {
     let Some(admitted) = admitted else {
-        return Settlement::Never;
+        return Settlement::Refused;
     };
     match identity {
-        Ok(id) if id != admitted.dataset => Settlement::Never,
-        Ok(_) => Settlement::Unconfirmed(
-            "startup settles these only if the vault's wipe generations still match its recorded admission".to_owned(),
-        ),
-        Err(error) => Settlement::Unconfirmed(format!("reading the Service identity: {error:#}")),
+        Ok(id) if id == admitted.dataset => Settlement::Fenced,
+        Ok(_) => Settlement::Refused,
+        Err(error) => Settlement::Unknown(format!("reading the Service identity: {error:#}")),
     }
 }
 
 struct AdmissionReport {
     status: &'static str,
     sessions: Vec<String>,
+    fenced: bool,
     unverified: Option<String>,
 }
 
@@ -234,37 +228,39 @@ impl AdmissionReport {
         Self {
             status: "unverified",
             sessions: Vec::new(),
+            fenced: false,
             unverified: Some(reason),
         }
     }
 }
 
-/// `rows`: each live retired-default session with whether startup's
-/// settlement would take it. A session it would not take refuses startup
-/// in every case; only settleable ones leave the answer unconfirmed.
-fn admission_report(settlement: &Settlement, rows: Vec<(String, bool)>) -> AdmissionReport {
-    let always: Vec<String> = rows
-        .iter()
-        .filter(|(_, settleable)| !settleable || matches!(settlement, Settlement::Never))
-        .map(|(id, _)| id.clone())
-        .collect();
-    if !always.is_empty() {
+fn admission_report(settlement: &Settlement, live: Vec<String>) -> AdmissionReport {
+    let report = |status, fenced| AdmissionReport {
+        status,
+        sessions: Vec::new(),
+        fenced,
+        unverified: None,
+    };
+    if let Settlement::Unknown(reason) = settlement {
+        // Startup itself cannot read the identity either.
         return AdmissionReport {
-            status: "refused",
-            sessions: always,
-            unverified: None,
+            sessions: live,
+            ..AdmissionReport::unverified(reason.clone())
         };
     }
-    match (rows.is_empty(), settlement) {
-        (true, _) | (_, Settlement::Never) => AdmissionReport {
-            status: "admissible",
-            sessions: Vec::new(),
-            unverified: None,
+    if live.is_empty() {
+        return report("admissible", false);
+    }
+    match settlement {
+        Settlement::Fenced => AdmissionReport {
+            sessions: live,
+            ..report("admissible", true)
         },
-        (false, Settlement::Unconfirmed(reason)) => AdmissionReport {
-            sessions: rows.into_iter().map(|(id, _)| id).collect(),
-            ..AdmissionReport::unverified(reason.clone())
+        Settlement::Refused => AdmissionReport {
+            sessions: live,
+            ..report("refused", false)
         },
+        Settlement::Unknown(_) => unreachable!("handled above"),
     }
 }
 
@@ -410,12 +406,9 @@ mod admission_report_tests {
         })
     }
 
-    fn report(settlement: &Settlement, rows: &[(&str, bool)]) -> (&'static str, Vec<String>) {
-        let rows = rows
-            .iter()
-            .map(|(id, settleable)| ((*id).to_owned(), *settleable))
-            .collect();
-        let report = admission_report(settlement, rows);
+    fn report(settlement: &Settlement, live: &[&str]) -> (&'static str, Vec<String>) {
+        let live = live.iter().map(|id| (*id).to_owned()).collect();
+        let report = admission_report(settlement, live);
         (report.status, report.sessions)
     }
 
@@ -424,39 +417,39 @@ mod admission_report_tests {
         let ok = || anyhow::Ok("svc".to_owned());
         assert!(matches!(
             admission_settlement(None, ok()),
-            Settlement::Never
+            Settlement::Refused
         ));
         assert!(matches!(
             admission_settlement(admitted("other"), ok()),
-            Settlement::Never
+            Settlement::Refused
         ));
         assert!(matches!(
             admission_settlement(admitted("svc"), ok()),
-            Settlement::Unconfirmed(_)
+            Settlement::Fenced
         ));
         assert!(matches!(
             admission_settlement(admitted("svc"), Err(anyhow::anyhow!("symlinked"))),
-            Settlement::Unconfirmed(_)
+            Settlement::Unknown(_)
         ));
     }
 
     #[test]
-    fn only_settlement_independent_answers_are_definitive() {
-        let never = Settlement::Never;
-        let unconfirmed = Settlement::Unconfirmed("wipes".to_owned());
-        assert_eq!(report(&unconfirmed, &[]), ("admissible", vec![]));
+    fn live_sessions_refuse_only_without_a_recorded_admission() {
+        let unknown = Settlement::Unknown("identity".to_owned());
+        for settlement in [&Settlement::Refused, &Settlement::Fenced] {
+            assert_eq!(report(settlement, &[]), ("admissible", vec![]));
+        }
+        let live = vec!["live".to_owned()];
         assert_eq!(
-            report(&unconfirmed, &[("intake", true), ("live", false)]),
-            ("refused", vec!["live".to_owned()])
+            report(&Settlement::Refused, &["live"]),
+            ("refused", live.clone())
         );
         assert_eq!(
-            report(&unconfirmed, &[("intake", true)]),
-            ("unverified", vec!["intake".to_owned()])
+            report(&Settlement::Fenced, &["live"]),
+            ("admissible", live.clone())
         );
-        assert_eq!(
-            report(&never, &[("intake", true)]),
-            ("refused", vec!["intake".to_owned()])
-        );
-        assert_eq!(report(&never, &[]), ("admissible", vec![]));
+        // Startup cannot read the identity either.
+        assert_eq!(report(&unknown, &[]), ("unverified", vec![]));
+        assert_eq!(report(&unknown, &["live"]), ("unverified", live));
     }
 }

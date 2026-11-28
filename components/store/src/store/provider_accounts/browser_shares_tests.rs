@@ -1655,77 +1655,67 @@ async fn only_live_sessions_on_a_retired_card_default_block_admission() {
 }
 
 #[tokio::test]
-async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
+async fn retirement_fences_every_live_retired_default_session() {
     let dir = tempfile::tempdir().unwrap();
     let store = sqlite_store(&dir).await;
     let StorageBackend::Sqlite(db) = &store.backend else {
         panic!("sqlite")
     };
-    for (id, origin, system, status, next_seq) in [
-        ("intake", "api", true, "starting", 0),
-        ("ordinary", "api", false, "starting", 0),
-        ("web", "web", true, "starting", 0),
-        ("ran", "api", true, "running", 0),
-        ("logged", "api", true, "starting", 1),
-        ("dispatched", "api", true, "starting", 0),
+    for (id, provider, account, status) in [
+        ("intake", "codex", "default", "starting"),
+        ("ran", "codex", "default", "running"),
+        ("busy", "codex", "default", "busy"),
+        ("ended", "codex", "default", "exited"),
+        ("named", "codex", "acct-1", "running"),
+        ("portable", "portable-fixture", "default", "running"),
     ] {
         sqlx::query(
-            "INSERT INTO sessions(id,provider,machine_id,cwd,title,origin,system,status,next_seq) \
-             VALUES ($1,'codex','hawk','/tmp',$1,$2,$3,$4,$5)",
+            "INSERT INTO sessions(id,provider,provider_account_id,machine_id,cwd,title,origin,system,status,next_seq) \
+             VALUES ($1,$2,$3,'hawk','/tmp',$1,'api',TRUE,$4,0)",
         )
         .bind(id)
-        .bind(origin)
-        .bind(system)
+        .bind(provider)
+        .bind(account)
         .bind(status)
-        .bind(next_seq)
         .execute(&db.pool)
         .await
         .unwrap();
     }
-    sqlx::query(
-        "INSERT INTO prompt_dispatches(session_id,cmid,origin,trigger_origin,dispatched_at_ms) \
-         VALUES ('dispatched','cmid','api','api',0)",
-    )
-    .execute(&db.pool)
-    .await
-    .unwrap();
-    // The read-only preflight predicts exactly what startup still refuses
-    // after settling, and settles nothing itself.
-    let refusing = ["dispatched", "logged", "ordinary", "ran", "web"];
-    let classified = |settled: &[&str]| {
-        ["dispatched", "intake", "logged", "ordinary", "ran", "web"]
-            .into_iter()
-            .map(|id| (id.to_owned(), id == "intake" && !settled.contains(&id)))
-            .filter(|(id, _)| !settled.contains(&id.as_str()))
-            .collect::<Vec<_>>()
-    };
+    let live = ["busy", "intake", "ran"];
+    assert_eq!(store.live_retired_default_sessions().await.unwrap(), live);
     assert_eq!(
-        store
-            .live_retired_default_sessions_settleable()
-            .await
-            .unwrap(),
-        classified(&[])
-    );
-    assert_eq!(
-        store.settle_retired_intake_registrations().await.unwrap(),
-        ["intake"]
+        store.fence_live_retired_default_sessions().await.unwrap(),
+        live
     );
     assert!(
         store
-            .settle_retired_intake_registrations()
+            .live_retired_default_sessions()
             .await
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        store.live_retired_default_sessions().await.unwrap(),
-        refusing
-    );
-    assert_eq!(
+    assert!(
         store
-            .live_retired_default_sessions_settleable()
+            .fence_live_retired_default_sessions()
             .await
-            .unwrap(),
-        classified(&["intake"])
+            .unwrap()
+            .is_empty()
+    );
+    let statuses: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, status FROM sessions ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        statuses,
+        [
+            ("busy", "crashed"),
+            ("ended", "exited"),
+            ("intake", "crashed"),
+            ("named", "running"),
+            ("portable", "running"),
+            ("ran", "crashed"),
+        ]
+        .map(|(id, status)| (id.to_owned(), status.to_owned()))
     );
 }

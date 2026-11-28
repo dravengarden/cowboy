@@ -87,7 +87,7 @@ mod tests {
             .unwrap();
         assert!(
             reader
-                .live_retired_default_sessions_settleable()
+                .live_retired_default_sessions()
                 .await
                 .unwrap()
                 .is_empty()
