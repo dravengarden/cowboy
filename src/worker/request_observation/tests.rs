@@ -190,7 +190,12 @@ async fn antigravity_collector_attaches_without_opening_listener_or_mutating_env
 fn launch_prefix_fingerprint_is_deterministic_and_sensitive_to_matrix_and_structural_changes() {
     let (mut a, prep_a) = fixture_input("codex");
     let mut b = a.clone();
-    let mut spec_b = prep_a.spec.clone();
+    let mut spec_a = prep_a.spec;
+    // Exercise legacy memory detection independently of the test runner's session.
+    spec_a
+        .remove_env
+        .extend(["COWBOY_SESSION_EXTENSIONS", "COWBOY_MATRIX_CONFIG"]);
+    let mut spec_b = spec_a.clone();
     a.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
         schema: 1,
         command: "/bin/cowboy".into(),
@@ -219,7 +224,7 @@ fn launch_prefix_fingerprint_is_deterministic_and_sensitive_to_matrix_and_struct
             },
         ],
     }));
-    let fp_a = metadata::compute_launch_prefix_fingerprint(&a, &prep_a.spec);
+    let fp_a = metadata::compute_launch_prefix_fingerprint(&a, &spec_a);
     let fp_b = metadata::compute_launch_prefix_fingerprint(&b, &spec_b);
     assert_eq!(fp_a.len(), 16);
     assert!(fp_a.bytes().all(|ch| ch.is_ascii_hexdigit()));
