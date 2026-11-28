@@ -153,16 +153,30 @@ export function triggerOutcomeMeta(session: SessionMeta): TriggerOutcomePresenta
   }
 }
 
-function triggerRank(session: SessionMeta): number {
-  if (
-    session.status === "busy" ||
-    session.status === "starting" ||
-    session.trigger?.outcome === "running"
-  ) {
-    return 0;
+/**
+ * Replace only the Trigger slots in `allDisplayed` with `reorderedTriggerIds`
+ * so dragging inside Triggers persists order without disturbing ordinary
+ * workspace sessions.
+ */
+export function mergeReorderedTriggers(
+  allDisplayed: readonly SessionMeta[],
+  reorderedTriggerIds: readonly string[],
+): string[] {
+  const triggerSet = new Set(reorderedTriggerIds);
+  const queue = [...reorderedTriggerIds];
+  let cursor = 0;
+  const merged = allDisplayed.map((session) => {
+    if (!triggerSet.has(session.id)) return session.id;
+    const next = queue[cursor];
+    cursor += 1;
+    return next ?? session.id;
+  });
+  while (cursor < queue.length) {
+    const rest = queue[cursor];
+    if (rest !== undefined) merged.push(rest);
+    cursor += 1;
   }
-  if (isAttentionTrigger(session)) return 1;
-  return 2;
+  return merged;
 }
 
 export interface TriggerSummary {
@@ -173,7 +187,6 @@ export interface TriggerSummary {
 
 export function summarizeTriggers(sessions: readonly SessionMeta[]): TriggerSummary {
   const list = sessions.filter(isTriggerSession);
-  list.sort((a, b) => triggerRank(a) - triggerRank(b));
   let working = 0;
   let attention = 0;
   let live = 0;

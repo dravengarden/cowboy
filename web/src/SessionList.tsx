@@ -2236,7 +2236,7 @@ export function SessionList({
                 })}
                 {loaded && !movePicking && (
                     <>
-                        <TriggerSessionsSection sessions={sessions} accounts={accounts} activeId={activeId} onPick={onPick} onRequestDelete={onRequestDelete} onRequestInfo={onRequestInfo} rowSx={trashRowSx} now={trashNow} />
+                        <TriggerSessionsSection sessions={displayedSessions} accounts={accounts} activeId={activeId} onPick={onPick} onRequestDelete={onRequestDelete} onRequestInfo={onRequestInfo} rowSx={trashRowSx} now={trashNow} />
                         <SessionTrashSection tree={trashTree} expanded={trashExpanded} onToggle={(key): void => toggleTrash(key)} retentionDays={trashRetention.days} now={trashNow} desktop={desktop} rowSx={trashRowSx} onOpenRow={setTrashRow} onOpenMenu={(): void => setTrashMenu(true)} />
                     </>
                 )}

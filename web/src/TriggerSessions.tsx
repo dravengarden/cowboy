@@ -7,6 +7,7 @@ import {
   BoltOutlined,
   ChevronRight,
   DeleteOutline,
+  DragIndicator,
   DriveFileMoveOutlined,
   ExpandMore,
   InfoOutlined,
@@ -27,12 +28,14 @@ import { SessionMachineBadge } from "./SessionMachineBadge";
 import { SessionRowTitle } from "./SessionRowTitle";
 import { ConfirmSheet } from "./Sheet";
 import { sessionListProjectLabel } from "./sessionProject";
-import { placeSessions, trashItems } from "./store";
+import { displayedSessionOrder } from "./sessionTree";
+import { placeSessions, reorderSessions, trashItems } from "./store";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { desktopSize } from "./surface/desktopSize";
 import { formatTrashRemaining } from "./trashModel";
 import {
   formatTriggerAge,
+  mergeReorderedTriggers,
   summarizeTriggers,
   TRIGGERS_ROOT_KEY,
   type TriggerOutcomePresentation,
@@ -41,6 +44,7 @@ import {
   triggerOutcomeMeta,
   triggerTimestampMs,
 } from "./triggerModel";
+import { type Sortable, useSortable } from "./useSortable";
 
 const EXPANDED_KEY = "cowboy:sessions-triggers:expanded";
 const SELECTED_ROW_FILL = 0.12;
@@ -185,6 +189,7 @@ function TriggerRow({
   session,
   accounts,
   selected,
+  sortable,
   onPick,
   onOpenMenu,
   onRequestInfo,
@@ -194,6 +199,7 @@ function TriggerRow({
   readonly session: SessionMeta;
   readonly accounts: SubscriptionSnapshot | undefined;
   readonly selected: boolean;
+  readonly sortable: Sortable;
   readonly onPick: (id: string) => void;
   readonly onOpenMenu: (session: SessionMeta) => void;
   readonly onRequestInfo: (session: SessionMeta) => void;
@@ -209,12 +215,15 @@ function TriggerRow({
   const ts = triggerTimestampMs(session);
   const ageLabel = ts !== null ? formatTriggerAge(now - ts) : null;
   const sourceChip = display.source && display.source !== display.title ? display.source : null;
+  const dragging = sortable.draggingId === session.id;
 
   return (
     <ReliableListItemButton
       selected={selected}
       data-desktop-item={session.id}
       data-trigger-session-row={session.id}
+      ref={sortable.registerItem(session.id)}
+      style={sortable.itemStyle(session.id)}
       onActivate={(): void => onPick(session.id)}
       sx={[
         rowSx(1) as object,
@@ -229,18 +238,36 @@ function TriggerRow({
               },
             }
           : {},
+        dragging
+          ? {
+              bgcolor: "background.paper",
+              boxShadow: (t: Theme) =>
+                `0 8px 24px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
+              "&::before": { display: "none" },
+            }
+          : {},
       ]}
     >
       <Box
         className="cowboy-session-grip-slot"
-        aria-hidden
         sx={{
           position: "relative",
           width: desktopSize(44),
           height: desktopSize(44),
           flexShrink: 0,
+          display: "grid",
+          placeItems: "center",
         }}
-      />
+      >
+        <IconButton
+          className="cowboy-session-grip"
+          {...sortable.handleProps(session.id)}
+          aria-label="Drag to reorder"
+          sx={{ width: desktopSize(44), height: desktopSize(44), color: "text.disabled" }}
+        >
+          <DragIndicator sx={{ fontSize: "1.25rem" }} />
+        </IconButton>
+      </Box>
       <ListItemText
         sx={{ my: 0.25, minWidth: 0 }}
         primary={
@@ -509,6 +536,26 @@ export function TriggerSessionsSection({
   const [selectedRow, setSelectedRow] = useState<SessionMeta | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const summary = useMemo(() => summarizeTriggers(sessions), [sessions]);
+  const triggerById = useMemo(
+    () => new Map(summary.sessions.map((session) => [session.id, session])),
+    [summary.sessions],
+  );
+  const triggerIds = useMemo(() => summary.sessions.map((session) => session.id), [summary.sessions]);
+  const onReorderTriggers = useCallback(
+    (nextIds: string[]): void => {
+      const merged = mergeReorderedTriggers(sessions, nextIds);
+      reorderSessions(displayedSessionOrder(merged));
+    },
+    [sessions],
+  );
+  // Scoped strictly to rows inside Triggers: rows reorder within Triggers only
+  // and cannot be dragged out into Global/folders, nor can the Triggers header
+  // itself be dragged.
+  const sortable = useSortable({
+    ids: triggerIds,
+    onReorder: onReorderTriggers,
+    optimisticReorder: true,
+  });
 
   useEffect(() => {
     try {
@@ -574,19 +621,24 @@ export function TriggerSessionsSection({
       />
 
       {open &&
-        summary.sessions.map((session) => (
-          <TriggerRow
-            key={session.id}
-            session={session}
-            accounts={accounts}
-            selected={activeId === session.id}
-            onPick={onPick}
-            onOpenMenu={setSelectedRow}
-            onRequestInfo={onRequestInfo}
-            rowSx={rowSx}
-            now={now}
-          />
-        ))}
+        sortable.order.map((id) => {
+          const session = triggerById.get(id);
+          if (!session) return null;
+          return (
+            <TriggerRow
+              key={session.id}
+              session={session}
+              accounts={accounts}
+              selected={activeId === session.id}
+              sortable={sortable}
+              onPick={onPick}
+              onOpenMenu={setSelectedRow}
+              onRequestInfo={onRequestInfo}
+              rowSx={rowSx}
+              now={now}
+            />
+          );
+        })}
 
       <TriggerSheets
         menuOpen={menuOpen}

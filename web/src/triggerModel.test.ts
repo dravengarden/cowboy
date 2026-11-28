@@ -6,6 +6,7 @@ import {
   isAttentionTrigger,
   isSettledTrigger,
   isTriggerSession,
+  mergeReorderedTriggers,
   summarizeTriggers,
   triggerContextPercent,
   triggerDisplayMeta,
@@ -50,7 +51,7 @@ test("classifies structured and legacy trigger sessions separately from ordinary
   assert.equal(isTriggerSession(trashed), false);
 });
 
-test("orders running and escalated triggers first and tracks settled bulk-cleanable ids", () => {
+test("preserves trigger display order for drag-reorder and tracks activity + settled ids", () => {
   const settled = mk({
     id: "s-resolved",
     origin: "api",
@@ -69,16 +70,22 @@ test("orders running and escalated triggers first and tracks settled bulk-cleana
     status: "busy",
     trigger: { kind: "k", source: "src", outcome: "running" },
   });
-  const summary = summarizeTriggers([settled, escalated, running]);
+  const normal = mk({ id: "w-1", origin: "web" });
+  const summary = summarizeTriggers([normal, settled, escalated, running]);
   assert.deepEqual(
     summary.sessions.map((s) => s.id),
-    ["s-run", "s-esc", "s-resolved"],
+    ["s-resolved", "s-esc", "s-run"],
   );
   assert.deepEqual(summary.activity, { working: 1, attention: 1, live: 0 });
   assert.deepEqual(summary.settledIds, ["s-resolved"]);
   assert.equal(isAttentionTrigger(escalated), true);
   assert.equal(isSettledTrigger(settled), true);
   assert.equal(triggerOutcomeMeta(escalated).label, "Escalated");
+
+  assert.deepEqual(
+    mergeReorderedTriggers([normal, settled, escalated, running], ["s-run", "s-resolved", "s-esc"]),
+    ["w-1", "s-run", "s-resolved", "s-esc"],
+  );
 });
 
 test("extracts clean trigger display titles, context percentage, and relative age", () => {
