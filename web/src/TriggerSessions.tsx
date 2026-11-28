@@ -1,7 +1,7 @@
 // Pinned collapsible Triggers section above Trash in the Sessions sidebar.
 // Keeps externally triggered runs isolated from ordinary human workspaces while
-// exposing live status, outcome badges, bulk cleanup, Move to Trash, and
-// one-click Take Over (promotion to ordinary workspace session).
+// exposing live status, placement, account, outcome, context usage, bulk
+// cleanup, Session Info, Move to Trash, and one-click Take Over.
 
 import {
   BoltOutlined,
@@ -9,22 +9,41 @@ import {
   DeleteOutline,
   DriveFileMoveOutlined,
   ExpandMore,
+  InfoOutlined,
   MoreVert,
 } from "@mui/icons-material";
 import { Box, Chip, IconButton, ListItemText, MenuItem, Stack, Typography } from "@mui/material";
-import type { SxProps, Theme } from "@mui/material";
+import { alpha, type SxProps, type Theme } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AccountBadge } from "./AccountBadge";
+import { sessionAccountIdentity } from "./accountIdentity";
+import { documentNotice } from "./documents/DocumentNotifications";
 import type { SessionMeta } from "./protocol";
 import { ReliableListItemButton } from "./ReliableListItemButton";
+import { SessionActionBadge } from "./SessionAttention";
+import { SessionNextMessageBadge } from "./SessionContextCue";
 import { InAppRoot } from "./SessionFolderUi";
+import { SessionMachineBadge } from "./SessionMachineBadge";
+import { SessionRowTitle } from "./SessionRowTitle";
 import { ConfirmSheet } from "./Sheet";
-import { documentNotice } from "./documents/DocumentNotifications";
+import { sessionListProjectLabel } from "./sessionProject";
 import { placeSessions, trashItems } from "./store";
+import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { desktopSize } from "./surface/desktopSize";
 import { formatTrashRemaining } from "./trashModel";
-import { summarizeTriggers, TRIGGERS_ROOT_KEY, triggerOutcomeMeta } from "./triggerModel";
+import {
+  formatTriggerAge,
+  summarizeTriggers,
+  TRIGGERS_ROOT_KEY,
+  type TriggerOutcomePresentation,
+  triggerContextPercent,
+  triggerDisplayMeta,
+  triggerOutcomeMeta,
+  triggerTimestampMs,
+} from "./triggerModel";
 
 const EXPANDED_KEY = "cowboy:sessions-triggers:expanded";
+const SELECTED_ROW_FILL = 0.12;
 
 function readExpanded(): boolean {
   try {
@@ -34,90 +53,237 @@ function readExpanded(): boolean {
   }
 }
 
+function outcomeChipSx(color: TriggerOutcomePresentation["color"]): SxProps<Theme> {
+  return {
+    height: "1.25rem",
+    flexShrink: 0,
+    fontSize: "0.6875rem",
+    fontWeight: 500,
+    border: "1px solid transparent",
+    boxShadow: "none",
+    "& .MuiChip-label": { px: "0.5rem" },
+    color: (t: Theme) => {
+      switch (color) {
+        case "info":
+          return t.palette.info.main;
+        case "success":
+          return t.palette.success.main;
+        case "warning":
+          return t.palette.warning.main;
+        case "error":
+          return t.palette.error.main;
+        default:
+          return t.palette.text.secondary;
+      }
+    },
+    bgcolor: (t: Theme) => {
+      const opacity = t.palette.mode === "dark" ? 0.22 : 0.14;
+      switch (color) {
+        case "info":
+          return alpha(t.palette.info.main, opacity);
+        case "success":
+          return alpha(t.palette.success.main, opacity);
+        case "warning":
+          return alpha(t.palette.warning.main, opacity);
+        case "error":
+          return alpha(t.palette.error.main, opacity);
+        default:
+          return alpha(t.palette.text.secondary, opacity);
+      }
+    },
+  };
+}
+
 export interface TriggerSessionsSectionProps {
   readonly sessions: readonly SessionMeta[];
+  readonly accounts: SubscriptionSnapshot | undefined;
   readonly activeId: string | null;
   readonly onPick: (id: string) => void;
   readonly onRequestDelete: (session: SessionMeta) => void;
+  readonly onRequestInfo: (session: SessionMeta) => void;
   readonly rowSx: (depth: number) => SxProps<Theme>;
   readonly now: number;
 }
 
-function TriggerRow({
+function TriggerRowSecondary({
   session,
-  selected,
-  onPick,
-  onOpenMenu,
-  rowSx,
+  accounts,
+  outcome,
+  sourceChip,
+  onRequestInfo,
   now,
 }: {
   readonly session: SessionMeta;
-  readonly selected: boolean;
-  readonly onPick: (id: string) => void;
-  readonly onOpenMenu: (session: SessionMeta) => void;
-  readonly rowSx: (depth: number) => SxProps<Theme>;
+  readonly accounts: SubscriptionSnapshot | undefined;
+  readonly outcome: TriggerOutcomePresentation;
+  readonly sourceChip: string | null;
+  readonly onRequestInfo: (session: SessionMeta) => void;
   readonly now: number;
 }): React.JSX.Element {
-  const outcome = triggerOutcomeMeta(session);
+  const ctxPct = triggerContextPercent(session);
   const autoTrashLeft =
     session.trigger?.auto_trash_at_ms !== undefined
       ? Math.max(0, session.trigger.auto_trash_at_ms - now)
       : null;
+
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      sx={{ minWidth: 0, maxWidth: "100%", flexWrap: "wrap", columnGap: 0.5, rowGap: 0.25 }}
+    >
+      <Chip size="small" label={outcome.label} sx={outcomeChipSx(outcome.color)} />
+      <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0 }}>
+        {sessionListProjectLabel(session)}
+      </Typography>
+      <SessionMachineBadge session={session} onInfo={(): void => onRequestInfo(session)} compact />
+      <AccountBadge account={sessionAccountIdentity(accounts, session)} />
+      {sourceChip && (
+        <Chip
+          size="small"
+          label={sourceChip}
+          sx={{
+            height: "1.25rem",
+            flexShrink: 0,
+            maxWidth: "10rem",
+            fontSize: "0.6875rem",
+            border: "1px solid transparent",
+            boxShadow: "none",
+            color: "text.secondary",
+            bgcolor: (t) => alpha(t.palette.text.secondary, t.palette.mode === "dark" ? 0.16 : 0.1),
+            "& .MuiChip-label": { px: "0.45rem", overflow: "hidden", textOverflow: "ellipsis" },
+          }}
+        />
+      )}
+      <SessionActionBadge session={session} />
+      <SessionNextMessageBadge sessionId={session.id} />
+      {ctxPct !== null && (
+        <Typography
+          variant="caption"
+          color="text.disabled"
+          sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+          title="Context window usage"
+        >
+          {ctxPct}% ctx
+        </Typography>
+      )}
+      {autoTrashLeft !== null && (
+        <Typography
+          variant="caption"
+          color="text.disabled"
+          sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+          title="Moves to Trash automatically when this timer expires"
+        >
+          · Trash {formatTrashRemaining(autoTrashLeft)}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+function TriggerRow({
+  session,
+  accounts,
+  selected,
+  onPick,
+  onOpenMenu,
+  onRequestInfo,
+  rowSx,
+  now,
+}: {
+  readonly session: SessionMeta;
+  readonly accounts: SubscriptionSnapshot | undefined;
+  readonly selected: boolean;
+  readonly onPick: (id: string) => void;
+  readonly onOpenMenu: (session: SessionMeta) => void;
+  readonly onRequestInfo: (session: SessionMeta) => void;
+  readonly rowSx: (depth: number) => SxProps<Theme>;
+  readonly now: number;
+}): React.JSX.Element {
+  const outcome = triggerOutcomeMeta(session);
+  const display = triggerDisplayMeta(session);
+  const displaySession = useMemo(
+    () => (display.title === session.title ? session : { ...session, title: display.title }),
+    [display.title, session],
+  );
+  const ts = triggerTimestampMs(session);
+  const ageLabel = ts !== null ? formatTriggerAge(now - ts) : null;
+  const sourceChip = display.source && display.source !== display.title ? display.source : null;
+
   return (
     <ReliableListItemButton
       selected={selected}
       data-desktop-item={session.id}
       data-trigger-session-row={session.id}
       onActivate={(): void => onPick(session.id)}
-      sx={[rowSx(1) as object]}
+      sx={[
+        rowSx(1) as object,
+        selected
+          ? {
+              "&&.Mui-selected, &&[data-desktop-current='true']": {
+                bgcolor: (t: Theme) => alpha(t.palette.primary.main, SELECTED_ROW_FILL),
+                boxShadow: "none",
+              },
+              "&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {
+                bgcolor: (t: Theme) => alpha(t.palette.primary.main, SELECTED_ROW_FILL + 0.04),
+              },
+            }
+          : {},
+      ]}
     >
+      <Box
+        className="cowboy-session-grip-slot"
+        aria-hidden
+        sx={{
+          position: "relative",
+          width: desktopSize(44),
+          height: desktopSize(44),
+          flexShrink: 0,
+        }}
+      />
       <ListItemText
+        sx={{ my: 0.25, minWidth: 0 }}
         primary={
-          <Typography variant="body2" noWrap sx={{ fontWeight: selected ? 600 : 400 }}>
-            {session.title || session.id}
-          </Typography>
-        }
-        secondary={
-          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.25, minWidth: 0 }}>
-            <Chip
-              size="small"
-              color={outcome.color}
-              label={outcome.label}
-              sx={{
-                height: "1.2rem",
-                fontSize: "0.6875rem",
-                "& .MuiChip-label": { px: "0.45rem" },
-              }}
-            />
-            {session.workspace_name && (
-              <Typography variant="caption" color="text.secondary" noWrap>
-                {session.workspace_name}
-              </Typography>
-            )}
-            {autoTrashLeft !== null && (
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <SessionRowTitle session={displaySession} active={selected} />
+            </Box>
+            {ageLabel && (
               <Typography
                 variant="caption"
                 color="text.disabled"
                 sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
-                title="Moves to Trash automatically when this timer expires"
               >
-                · {formatTrashRemaining(autoTrashLeft)}
+                {ageLabel}
               </Typography>
             )}
           </Stack>
         }
-        slotProps={{ primary: { component: "div" }, secondary: { component: "div" } }}
+        secondary={
+          <TriggerRowSecondary
+            session={session}
+            accounts={accounts}
+            outcome={outcome}
+            sourceChip={sourceChip}
+            onRequestInfo={onRequestInfo}
+            now={now}
+          />
+        }
+        slotProps={{
+          primary: { component: "div" },
+          secondary: { component: "div", noWrap: true, variant: "caption" },
+        }}
       />
       <IconButton
         className="cowboy-session-actions"
-        aria-label={`Trigger actions for ${session.title || session.id}`}
+        aria-label={`Trigger actions for ${display.title}`}
         onClick={(event): void => {
           event.stopPropagation();
           onOpenMenu(session);
         }}
         sx={{ ml: 0.5, width: desktopSize(44), height: desktopSize(44), flexShrink: 0 }}
       >
-        <MoreVert sx={{ fontSize: "1.35rem" }} />
+        <MoreVert sx={{ fontSize: "1.5rem" }} />
       </IconButton>
     </ReliableListItemButton>
   );
@@ -131,8 +297,10 @@ function TriggerSheets({
   onTrashSettled,
   selectedRow,
   onCloseRow,
+  onInspectRow,
   onTakeOver,
   onTrashRow,
+  now,
 }: {
   readonly menuOpen: boolean;
   readonly onCloseMenu: () => void;
@@ -141,43 +309,91 @@ function TriggerSheets({
   readonly onTrashSettled: () => void;
   readonly selectedRow: SessionMeta | null;
   readonly onCloseRow: () => void;
+  readonly onInspectRow: (session: SessionMeta) => void;
   readonly onTakeOver: (session: SessionMeta) => void;
   readonly onTrashRow: (session: SessionMeta) => void;
+  readonly now: number;
 }): React.JSX.Element {
+  const rowMeta = selectedRow ? triggerDisplayMeta(selectedRow) : null;
+  const rowOutcome = selectedRow ? triggerOutcomeMeta(selectedRow) : null;
+  const autoTrashLeft =
+    selectedRow?.trigger?.auto_trash_at_ms !== undefined
+      ? Math.max(0, selectedRow.trigger.auto_trash_at_ms - now)
+      : null;
+
   return (
     <InAppRoot>
       <ConfirmSheet open={menuOpen} onClose={onCloseMenu} title="Triggers">
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Externally triggered runs stay isolated here, auto-hibernate after settling, and move to
-          Trash automatically unless promoted to your workspace.
-        </Typography>
-        <MenuItem disabled={settledCount === 0 || cleaning} onClick={onTrashSettled}>
+        <MenuItem
+          disabled={settledCount === 0 || cleaning}
+          onClick={(): void => {
+            onTrashSettled();
+          }}
+        >
           <DeleteOutline fontSize="small" sx={{ mr: 1.25, color: "text.secondary" }} />
           <ListItemText
             primary={`Move settled runs to Trash (${String(settledCount)})`}
-            secondary="Leaves active and escalated runs untouched"
+            secondary={
+              settledCount > 0
+                ? "Running and escalated runs stay active"
+                : "No settled runs to clean up"
+            }
           />
         </MenuItem>
       </ConfirmSheet>
+
       <ConfirmSheet
         open={selectedRow !== null}
         onClose={onCloseRow}
-        title={selectedRow?.title || "Trigger run"}
+        title={rowMeta?.title ?? "Trigger run"}
       >
-        {selectedRow && (
+        {selectedRow && rowMeta && rowOutcome && (
           <>
+            <Stack
+              direction="row"
+              alignItems="center"
+              sx={{ px: 2, pb: 1, flexWrap: "wrap", columnGap: 0.75, rowGap: 0.5 }}
+            >
+              <Chip size="small" label={rowOutcome.label} sx={outcomeChipSx(rowOutcome.color)} />
+              {rowMeta.source && (
+                <Typography variant="caption" color="text.secondary">
+                  source: {rowMeta.source}
+                </Typography>
+              )}
+              {rowMeta.correlationKey && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ fontFamily: "monospace" }}
+                >
+                  key: {rowMeta.correlationKey}
+                </Typography>
+              )}
+              {autoTrashLeft !== null && (
+                <Typography variant="caption" color="text.disabled">
+                  auto-trash in {formatTrashRemaining(autoTrashLeft)}
+                </Typography>
+              )}
+            </Stack>
+            <MenuItem onClick={(): void => onInspectRow(selectedRow)}>
+              <InfoOutlined fontSize="small" sx={{ mr: 1.25, color: "text.secondary" }} />
+              <ListItemText
+                primary="Info"
+                secondary="Placement, account, context usage, and logs"
+              />
+            </MenuItem>
             <MenuItem onClick={(): void => onTakeOver(selectedRow)}>
               <DriveFileMoveOutlined fontSize="small" sx={{ mr: 1.25, color: "text.secondary" }} />
               <ListItemText
                 primary="Take over to workspace"
-                secondary="Move out of Triggers and disable auto-cleanup"
+                secondary="Promote to a regular session and disable auto-trash"
               />
             </MenuItem>
             <MenuItem onClick={(): void => onTrashRow(selectedRow)}>
               <DeleteOutline fontSize="small" sx={{ mr: 1.25, color: "error.main" }} />
               <ListItemText
                 primary="Move to Trash"
-                slotProps={{ primary: { color: "error.main" } }}
+                secondary="Hibernate worker and keep transcript in Trash"
               />
             </MenuItem>
           </>
@@ -192,6 +408,7 @@ function TriggerHeader({
   count,
   working,
   attention,
+  live,
   onToggle,
   onOpenMenu,
   rowSx,
@@ -200,6 +417,7 @@ function TriggerHeader({
   readonly count: number;
   readonly working: number;
   readonly attention: number;
+  readonly live: number;
   readonly onToggle: () => void;
   readonly onOpenMenu: () => void;
   readonly rowSx: (depth: number) => SxProps<Theme>;
@@ -248,31 +466,16 @@ function TriggerHeader({
         }
         slotProps={{ primary: { component: "div" } }}
       />
-      {!open && (working > 0 || attention > 0) && (
+      {!open && (working > 0 || attention > 0 || live > 0) && (
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0, mr: 0.5 }}>
           {working > 0 && (
-            <Chip
-              size="small"
-              color="info"
-              label={`${String(working)} live`}
-              sx={{
-                height: "1.25rem",
-                fontSize: "0.6875rem",
-                "& .MuiChip-label": { px: "0.45rem" },
-              }}
-            />
+            <Chip size="small" label={`${String(working)} live`} sx={outcomeChipSx("info")} />
           )}
           {attention > 0 && (
-            <Chip
-              size="small"
-              color="warning"
-              label={`${String(attention)} attn`}
-              sx={{
-                height: "1.25rem",
-                fontSize: "0.6875rem",
-                "& .MuiChip-label": { px: "0.45rem" },
-              }}
-            />
+            <Chip size="small" label={`${String(attention)} attn`} sx={outcomeChipSx("warning")} />
+          )}
+          {working === 0 && attention === 0 && live > 0 && (
+            <Chip size="small" label={`${String(live)} awake`} sx={outcomeChipSx("success")} />
           )}
         </Stack>
       )}
@@ -293,9 +496,11 @@ function TriggerHeader({
 
 export function TriggerSessionsSection({
   sessions,
+  accounts,
   activeId,
   onPick,
   onRequestDelete,
+  onRequestInfo,
   rowSx,
   now,
 }: TriggerSessionsSectionProps): React.JSX.Element | null {
@@ -331,10 +536,18 @@ export function TriggerSessionsSection({
     }
   }, [cleaning, summary.settledIds]);
 
+  const inspectRow = useCallback(
+    (session: SessionMeta): void => {
+      setSelectedRow(null);
+      onRequestInfo(session);
+    },
+    [onRequestInfo],
+  );
+
   const takeOver = useCallback((session: SessionMeta): void => {
     placeSessions([session.id], null);
     setSelectedRow(null);
-    documentNotice(`Promoted “${session.title || "Session"}” to your workspace.`);
+    documentNotice(`Promoted “${triggerDisplayMeta(session).title}” to your workspace.`);
   }, []);
 
   const trashRow = useCallback(
@@ -354,6 +567,7 @@ export function TriggerSessionsSection({
         count={summary.sessions.length}
         working={summary.activity.working}
         attention={summary.activity.attention}
+        live={summary.activity.live}
         onToggle={toggle}
         onOpenMenu={(): void => setMenuOpen(true)}
         rowSx={rowSx}
@@ -364,9 +578,11 @@ export function TriggerSessionsSection({
           <TriggerRow
             key={session.id}
             session={session}
+            accounts={accounts}
             selected={activeId === session.id}
             onPick={onPick}
             onOpenMenu={setSelectedRow}
+            onRequestInfo={onRequestInfo}
             rowSx={rowSx}
             now={now}
           />
@@ -382,8 +598,10 @@ export function TriggerSessionsSection({
         }}
         selectedRow={selectedRow}
         onCloseRow={(): void => setSelectedRow(null)}
+        onInspectRow={inspectRow}
         onTakeOver={takeOver}
         onTrashRow={trashRow}
+        now={now}
       />
     </>
   );

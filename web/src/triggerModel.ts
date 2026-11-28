@@ -49,6 +49,87 @@ export interface TriggerOutcomePresentation {
   readonly color: "default" | "info" | "success" | "warning" | "error";
 }
 
+export interface TriggerDisplayMeta {
+  readonly title: string;
+  readonly source: string | null;
+  readonly kind: string | null;
+  readonly correlationKey: string | null;
+}
+
+const LEGACY_INTAKE_RE = /^\[External Intake:\s*([^\]]+)\]\s*(.*)$/;
+
+/** Clean display title and source metadata for structured and legacy trigger runs. */
+export function triggerDisplayMeta(session: SessionMeta): TriggerDisplayMeta {
+  const rawTitle = (session.title || session.id).trim();
+  const structuredSource = session.trigger?.source.trim() || null;
+  const structuredKind = session.trigger?.kind.trim() || null;
+  const correlationKey = session.trigger?.correlation_key?.trim() || null;
+
+  if (structuredSource) {
+    const prefix = `[${structuredSource}] `;
+    const stripped = rawTitle.startsWith(prefix) ? rawTitle.slice(prefix.length).trim() : rawTitle;
+    return {
+      title: stripped || rawTitle,
+      source: structuredSource,
+      kind: structuredKind,
+      correlationKey,
+    };
+  }
+
+  const legacy = LEGACY_INTAKE_RE.exec(rawTitle);
+  if (legacy) {
+    const label = legacy[1]?.trim() || null;
+    const rest = legacy[2]?.trim() || "";
+    return {
+      title: rest || label || rawTitle,
+      source: label,
+      kind: structuredKind ?? label,
+      correlationKey,
+    };
+  }
+
+  return {
+    title: rawTitle,
+    source: structuredKind,
+    kind: structuredKind,
+    correlationKey,
+  };
+}
+
+/** Context window fill percentage (0..100), or null when unavailable/stale. */
+export function triggerContextPercent(session: SessionMeta): number | null {
+  if (session.usage && !session.usage.compacted_at_ms && session.usage.size > 0) {
+    return Math.min(100, Math.round((session.usage.used / session.usage.size) * 100));
+  }
+  if (
+    session.context_used !== undefined &&
+    session.context_size !== undefined &&
+    session.context_size > 0
+  ) {
+    return Math.min(100, Math.round((session.context_used / session.context_size) * 100));
+  }
+  return null;
+}
+
+/** Most recent observable timestamp for a trigger session, when present. */
+export function triggerTimestampMs(session: SessionMeta): number | null {
+  const settled = session.trigger?.settled_at_ms;
+  const observed = session.usage?.observed_at_ms;
+  if (settled !== undefined && observed !== undefined) {
+    return Math.max(settled, observed);
+  }
+  return settled ?? observed ?? null;
+}
+
+export function formatTriggerAge(deltaMs: number): string {
+  const mins = Math.floor(Math.max(0, deltaMs) / 60_000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${String(mins)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${String(hours)}h`;
+  return `${String(Math.floor(hours / 24))}d`;
+}
+
 export function triggerOutcomeMeta(session: SessionMeta): TriggerOutcomePresentation {
   if (session.status === "busy" || session.status === "starting") {
     return { label: "Running", color: "info" };
