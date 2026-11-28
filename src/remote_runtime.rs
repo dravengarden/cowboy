@@ -1951,7 +1951,13 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
         match native_admission::send(shared, writer, Some((&key, version)), command.clone()).await?
         {
             native_admission::SendOutcome::Sent => {
-                shared.sent.lock().insert(key);
+                // Only mark `key` sent if `pending` still holds the exact
+                // version we wrote so a newer queued Ensure is never skipped
+                // by an older write finishing (R25-M2).
+                let pending = shared.pending.lock();
+                if pending.version(&key) == Some(version) {
+                    shared.sent.lock().insert(key);
+                }
             }
             native_admission::SendOutcome::Skipped => {}
             native_admission::SendOutcome::Denied => {
@@ -4340,9 +4346,20 @@ mod tests {
                     worker: Box::new(worker),
                 }
             } else {
+                let ensure_id = runtime
+                    .pending_for_test()
+                    .into_iter()
+                    .find_map(|command| match command {
+                        CoreCommand::EnsureSession {
+                            session,
+                            command_id,
+                        } if session.session_id == "s" => command_id,
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "ensure:s".to_owned());
                 Frame::CommandAck {
                     session_id: "s".to_owned(),
-                    command_id: "ensure:s".to_owned(),
+                    command_id: ensure_id,
                     accepted: false,
                     reason: Some("Session deletion reader unavailable".to_owned()),
                 }

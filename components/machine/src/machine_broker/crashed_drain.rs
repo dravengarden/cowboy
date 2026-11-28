@@ -727,7 +727,10 @@ impl Broker {
         {
             return None;
         }
-        replacing.insert(session_id.to_owned(), snapshot.generation.clone());
+        replacing.insert(
+            session_id.to_owned(),
+            (snapshot.generation.clone(), worker.epoch.clone()),
+        );
         if self.args.spawn_mode == SpawnMode::Direct {
             worker
                 .peer_pid
@@ -1255,9 +1258,9 @@ impl Broker {
         if has_live || (unsettled.is_none() && unconfirmed.is_none()) {
             return Ok(());
         }
-        if let Some((pid, epoch_for_launch, launch)) = unsettled {
+        if let Some((pid, ref epoch_for_launch, launch)) = unsettled {
             let launch = self
-                .resolve_or_refresh_retired_launch(session_id, &epoch_for_launch, launch)
+                .resolve_or_refresh_retired_launch(session_id, epoch_for_launch, launch)
                 .await;
             if !self.confirm_mid_drain_worker_exited(session_id, pid).await {
                 return Err("crashed worker drain is still settling; retry".into());
@@ -1282,64 +1285,13 @@ impl Broker {
                 return Err("previous crashed worker teardown is still unconfirmed; retry".into());
             }
         }
-        let (orphaned, emit_epoch, queued_rejections, session_for_cache) = {
-            let sessions = self.sessions.lock();
-            let workers = self.workers.lock();
-            let mut session_states = self.session_states.lock();
-            let mut pending_cmds = self.pending_commands.lock();
-            let mut dispatched = self.dispatched_prompts.lock();
-            let mut state = self.crashed_drains.inner.lock();
-            if workers.contains_key(session_id) {
-                return Err("crashed worker reconnected during drain; retry".into());
-            }
-            let confirmed_active_epoch = state
-                .active
-                .remove(session_id)
-                .filter(|active| active.confirmed)
-                .map(|active| active.epoch);
-            let orphaned = drain_pending_for_session(&mut state.pending, session_id);
-            let emit = unconfirmed
-                .as_ref()
-                .filter(|entry| {
-                    state
-                        .unconfirmed_teardown
-                        .get(session_id)
-                        .is_some_and(|recorded| recorded.epoch == entry.epoch)
-                })
-                .map(|entry| entry.epoch.clone())
-                .or(confirmed_active_epoch);
-            let (rejections, session_for_cache) = if let Some(ref epoch) = emit {
-                state.unconfirmed_teardown.remove(session_id);
-                state.trusted_epoch_pids.remove(session_id);
-                session_states.insert(session_id.to_owned(), WorkerState::Crashed);
-                teardown::record_recently_drained_locked(&mut state, session_id, epoch, true);
-                (
-                    classify_and_drain_queued_commands(
-                        &mut pending_cmds,
-                        &mut dispatched,
-                        session_id,
-                    ),
-                    sessions.get(session_id).cloned(),
-                )
-            } else {
-                (Vec::new(), None)
-            };
-            (orphaned, emit, rejections, session_for_cache)
-        };
-        for (sid, cid) in orphaned {
-            self.command_rejected(&sid, cid, "crashed worker exited during drain".into());
-        }
-        for (cid, reason) in queued_rejections {
-            self.command_rejected(session_id, cid, reason);
-        }
-        if let Some(session) = session_for_cache {
-            self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
-        }
-        if let Some(epoch) = emit_epoch {
-            self.emit_crashed_worker_drained_frame(session_id, &epoch);
-        }
-        self.crashed_drains.settled.notify_waiters();
-        Ok(())
+        let probed_active_epoch = unsettled.as_ref().map(|(_, epoch, _)| epoch.as_str());
+        let probed_unconfirmed_epoch = unconfirmed.as_ref().map(|entry| entry.epoch.as_str());
+        self.commit_gate_ensure_crashed_drain(
+            session_id,
+            probed_active_epoch,
+            probed_unconfirmed_epoch,
+        )
     }
 
     pub(super) fn clear_crashed_drain(
@@ -3297,5 +3249,155 @@ mod tests {
             broker.session_states.lock().get("s-r24-m4").copied(),
             Some(WorkerState::Exited)
         );
+    }
+
+    #[tokio::test]
+    async fn r25_replay_of_same_ensure_attempt_id_does_not_reject_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r25-m5",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1"
+        }))
+        .unwrap();
+        broker
+            .sessions
+            .lock()
+            .insert("s-r25-m5".into(), start.clone());
+        broker.launching.lock().insert("s-r25-m5".into());
+        broker
+            .active_ensure_attempts
+            .lock()
+            .insert("s-r25-m5".into(), "ensure:s-r25-m5:1".into());
+
+        // Exact-ID replay of active launch coalesces without queueing or rejecting.
+        assert!(matches!(
+            broker
+                .claim_ensure_slot(&start, "ensure:s-r25-m5:1", false, "gen-1")
+                .await,
+            Err(None)
+        ));
+        assert!(broker.pending_ensure_retries.lock().is_empty());
+        assert!(rx.try_recv().is_err());
+
+        // New retry ID queues, and replaying that same retry ID twice must NOT self-reject (R25-M5).
+        assert!(matches!(
+            broker
+                .claim_ensure_slot(&start, "ensure:s-r25-m5:2", false, "gen-1")
+                .await,
+            Err(None)
+        ));
+        assert!(matches!(
+            broker
+                .claim_ensure_slot(&start, "ensure:s-r25-m5:2", false, "gen-1")
+                .await,
+            Err(None)
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "exact-ID retry replay must not emit superseded ACK"
+        );
+
+        // A genuinely different retry ID displaces and rejects only the older ID.
+        assert!(matches!(
+            broker
+                .claim_ensure_slot(&start, "ensure:s-r25-m5:3", false, "gen-1")
+                .await,
+            Err(None)
+        ));
+        let displaced = rx
+            .try_recv()
+            .expect("displaced older retry must be rejected");
+        assert!(matches!(
+            displaced,
+            Frame::CommandAck {
+                ref command_id,
+                accepted: false,
+                ..
+            } if command_id == "ensure:s-r25-m5:2"
+        ));
+    }
+
+    #[tokio::test]
+    async fn r25_rehabilitation_preserves_session_specific_failure_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r25-m10",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1",
+            "fallback_for": "gen-2"
+        }))
+        .unwrap();
+        broker.sessions.lock().insert("s-r25-m10".into(), start);
+
+        // Install a genuine session-specific failure pin (fallback_from_quarantine = false).
+        assert!(broker.try_pin_fallback_for_slot("s-r25-m10", "gen-1", "gen-2", "codex", false));
+        assert!(
+            broker
+                .session_failure_fallback_pins
+                .lock()
+                .contains("s-r25-m10")
+        );
+
+        // Healthy canary rehabilitation must NOT remove the session-specific pin (R25-M10).
+        let released = broker.rehabilitate_generation("gen-2", "codex");
+        assert!(released.is_empty());
+        assert_eq!(
+            broker
+                .fallback_pins
+                .lock()
+                .get("s-r25-m10")
+                .map(String::as_str),
+            Some("gen-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn r25_superseded_ensure_failure_suppresses_crashed_snapshot_before_retry_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let start: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-r25-m3",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1"
+        }))
+        .unwrap();
+        broker
+            .sessions
+            .lock()
+            .insert("s-r25-m3".into(), start.clone());
+        broker.launching.lock().insert("s-r25-m3".into());
+        broker
+            .pending_ensure_retries
+            .lock()
+            .insert("s-r25-m3".into(), (start, "ensure:s-r25-m3:2".into()));
+
+        broker.finish_ensure_launch(
+            "s-r25-m3",
+            "ensure:s-r25-m3:1",
+            Err(anyhow::anyhow!("launch attempt 1 failed")),
+        );
+
+        // Must emit correlated CommandAck for attempt 1 WITHOUT publishing an
+        // uncorrelated Crashed snapshot that could park attempt 2's prompts (R25-M3).
+        let first = rx.try_recv().expect("attempt 1 rejection");
+        assert!(matches!(
+            first,
+            Frame::CommandAck {
+                ref command_id,
+                accepted: false,
+                ..
+            } if command_id == "ensure:s-r25-m3:1"
+        ));
+        assert!(broker.startup_failures.lock().get("s-r25-m3").is_none());
     }
 }

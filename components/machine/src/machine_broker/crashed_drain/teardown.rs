@@ -244,19 +244,31 @@ impl Broker {
                     if !adopt_only {
                         let mut launching = self.launching.lock();
                         if !launching.insert(session_id.to_owned()) {
-                            // Queue this retry under `launching` so a retry arriving
-                            // while the previous attempt is running or finalizing is
-                            // never silently dropped (R24-M2).
-                            displaced_retry = self
-                                .pending_ensure_retries
+                            // Coalesce exact-ID replays against both the active
+                            // launch and any already-queued retry; only reject a
+                            // different ID that was actually displaced (R24-M2, R25-M5).
+                            let is_active_replay = self
+                                .active_ensure_attempts
                                 .lock()
-                                .insert(
+                                .get(session_id)
+                                .is_some_and(|active_id| active_id == attempt_id);
+                            if !is_active_replay {
+                                let mut retries = self.pending_ensure_retries.lock();
+                                let replaced = retries.insert(
                                     session_id.to_owned(),
                                     (session.clone(), attempt_id.to_owned()),
-                                )
-                                .map(|(_, old_attempt_id)| old_attempt_id);
+                                );
+                                if let Some((_, old_attempt_id)) = replaced
+                                    && old_attempt_id != attempt_id
+                                {
+                                    displaced_retry = Some(old_attempt_id);
+                                }
+                            }
                             Err(None)
                         } else {
+                            self.active_ensure_attempts
+                                .lock()
+                                .insert(session_id.to_owned(), attempt_id.to_owned());
                             self.crashed_drains
                                 .inner
                                 .lock()
@@ -1382,4 +1394,102 @@ pub(super) fn record_recently_drained_locked(
         session_id.to_owned(),
         (worker_epoch.to_owned(), confirmed_receipt, now),
     );
+}
+
+impl Broker {
+    pub(super) fn commit_gate_ensure_crashed_drain(
+        &self,
+        session_id: &str,
+        probed_active_epoch: Option<&str>,
+        probed_unconfirmed_epoch: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let (orphaned, emit_epoch, queued_rejections, session_for_cache) = {
+            let sessions = self.sessions.lock();
+            let workers = self.workers.lock();
+            let mut session_states = self.session_states.lock();
+            let spawned = self.spawned_launches.lock();
+            let mut pending_cmds = self.pending_commands.lock();
+            let mut dispatched = self.dispatched_prompts.lock();
+            let mut state = self.crashed_drains.inner.lock();
+            if workers.contains_key(session_id) || spawned.contains(session_id) {
+                return Err(
+                    "crashed worker reconnected or replacement started during drain; retry".into(),
+                );
+            }
+            if let Some(expected) = probed_active_epoch
+                && state
+                    .active
+                    .get(session_id)
+                    .is_some_and(|active| active.epoch != expected)
+            {
+                return Err("crashed worker drain epoch changed during probe; retry".into());
+            }
+            if let Some(expected) = probed_unconfirmed_epoch
+                && state
+                    .unconfirmed_teardown
+                    .get(session_id)
+                    .is_some_and(|recorded| recorded.epoch != expected)
+            {
+                return Err("crashed worker teardown epoch changed during probe; retry".into());
+            }
+            let confirmed_active_epoch = probed_active_epoch.and_then(|expected| {
+                state
+                    .active
+                    .get(session_id)
+                    .is_some_and(|active| active.epoch == expected)
+                    .then(|| {
+                        state
+                            .active
+                            .remove(session_id)
+                            .filter(|active| active.confirmed)
+                            .map(|active| active.epoch)
+                    })
+                    .flatten()
+            });
+            let confirmed_unconfirmed_epoch = probed_unconfirmed_epoch.and_then(|expected| {
+                state
+                    .unconfirmed_teardown
+                    .get(session_id)
+                    .is_some_and(|recorded| recorded.epoch == expected)
+                    .then(|| {
+                        state.unconfirmed_teardown.remove(session_id);
+                        expected.to_owned()
+                    })
+            });
+            let orphaned = probed_active_epoch
+                .map(|expected| drain_pending_for_epoch(&mut state.pending, session_id, expected))
+                .unwrap_or_default();
+            let emit = confirmed_unconfirmed_epoch.or(confirmed_active_epoch);
+            let (rejections, session_for_cache) = if let Some(ref epoch) = emit {
+                state.trusted_epoch_pids.remove(session_id);
+                session_states.insert(session_id.to_owned(), WorkerState::Crashed);
+                record_recently_drained_locked(&mut state, session_id, epoch, true);
+                (
+                    classify_and_drain_queued_commands(
+                        &mut pending_cmds,
+                        &mut dispatched,
+                        session_id,
+                    ),
+                    sessions.get(session_id).cloned(),
+                )
+            } else {
+                (Vec::new(), None)
+            };
+            (orphaned, emit, rejections, session_for_cache)
+        };
+        for (sid, cid) in orphaned {
+            self.command_rejected(&sid, cid, "crashed worker exited during drain".into());
+        }
+        for (cid, reason) in queued_rejections {
+            self.command_rejected(session_id, cid, reason);
+        }
+        if let Some(session) = session_for_cache {
+            self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
+        }
+        if let Some(epoch) = emit_epoch {
+            self.emit_crashed_worker_drained_frame(session_id, &epoch);
+        }
+        self.crashed_drains.settled.notify_waiters();
+        Ok(())
+    }
 }

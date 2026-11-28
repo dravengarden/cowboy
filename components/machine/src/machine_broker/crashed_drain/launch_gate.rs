@@ -9,10 +9,12 @@ const RETURNING_DRAIN_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 const SYSTEMCTL_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const WATCHDOG_RECONCILE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const WATCHDOG_INSPECT_RETRIES: usize = 3;
+const WATCHDOG_MAX_RESCHEDULES: usize = 6;
+const WATCHDOG_RESCHEDULE_DELAY: Duration = Duration::from_secs(5);
 
 /// Session-local deferral returned when replacement launch must wait for or
-/// yield to a returning crashed-worker drain; must never quarantine a worker
-/// generation (R21-M6, R22-M6).
+/// yield to a returning crashed-worker drain or inconclusive host systemd
+/// probe; must never quarantine a worker generation (R21-M6, R22-M6, R25-M8).
 #[derive(Debug)]
 pub(in crate::machine_broker) struct DrainContentionError(pub(in crate::machine_broker) String);
 
@@ -66,15 +68,15 @@ impl Drop for SpawnedLaunchGuard<'_> {
     }
 }
 
-/// Exclusive reservation preventing worker registration AND replacement spawn
-/// admission while an orphan-unit check, stop, or terminal publication is in
-/// flight (R22-H1, R23-H1, R23-M1).
-pub(in crate::machine_broker) struct OrphanStopGuard<'a> {
-    broker: &'a Broker,
+/// Owned exclusive reservation preventing worker registration AND replacement
+/// spawn admission while an orphan-unit check, stop, or background stop-job
+/// reconciliation is in flight (R22-H1, R23-H1, R25-H2).
+pub(in crate::machine_broker) struct OrphanStopGuard {
+    broker: Arc<Broker>,
     session_id: String,
 }
 
-impl Drop for OrphanStopGuard<'_> {
+impl Drop for OrphanStopGuard {
     fn drop(&mut self) {
         self.broker
             .orphan_stopping_sessions
@@ -94,15 +96,20 @@ struct TransientUnitStatus {
 }
 
 impl TransientUnitStatus {
+    /// Strict check matching `systemd_exit.rs`: unloaded transient unit with
+    /// terminal active state and explicit empty `Job` (R25-M7).
     fn is_collected(&self) -> bool {
-        transient_unit_collected(&self.load_state) && self.job.is_empty()
+        transient_unit_collected(&self.load_state)
+            && matches!(self.active_state.as_str(), "inactive" | "failed")
+            && self.job.is_empty()
     }
 
-    /// Affirmative terminal observation with no pending systemd job (R24-M5).
+    /// Affirmative terminal observation with consistent load/active state and
+    /// explicit empty systemd `Job` (R24-M5, R25-M7).
     fn is_affirmatively_stopped(&self) -> bool {
         self.job.is_empty()
-            && (transient_unit_collected(&self.load_state)
-                || matches!(self.active_state.as_str(), "inactive" | "failed"))
+            && matches!(self.active_state.as_str(), "inactive" | "failed")
+            && matches!(self.load_state.as_str(), "not-found" | "loaded" | "masked")
     }
 
     fn is_active_or_activating(&self) -> bool {
@@ -150,8 +157,6 @@ async fn run_systemctl_bounded(args: &[&str], timeout: Duration) -> Result<std::
     match tokio::time::timeout(timeout, run).await {
         Ok(result) => result.with_context(|| format!("waiting for systemctl {}", args.join(" "))),
         Err(_) => {
-            // Explicitly kill and reap before returning so the reservation
-            // cannot drop while a delayed `systemctl` child is still alive.
             let _ = child.start_kill();
             let _ = child.wait().await;
             anyhow::bail!("systemctl {} timed out after {timeout:?}", args.join(" "))
@@ -166,9 +171,11 @@ fn parse_transient_unit_status(fields: &str) -> Result<TransientUnitStatus> {
     let active_state = systemd_show_value(fields, "ActiveState")
         .filter(|value| !value.is_empty())
         .context("systemctl show returned missing ActiveState")?;
+    // Require explicit `Job=` property line so truncated output cannot pass as
+    // job-free (R25-M7).
+    let job = systemd_show_value(fields, "Job").context("systemctl show returned missing Job")?;
     let sub_state = systemd_show_value(fields, "SubState").unwrap_or_default();
     let invocation_id = systemd_show_value(fields, "InvocationID").unwrap_or_default();
-    let job = systemd_show_value(fields, "Job").unwrap_or_default();
     Ok(TransientUnitStatus {
         load_state,
         active_state,
@@ -207,7 +214,7 @@ async fn inspect_transient_unit(unit: &str) -> Result<TransientUnitStatus> {
 }
 
 pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
-    broker: Option<(&Broker, &str)>,
+    broker: Option<(&Arc<Broker>, &str)>,
     unit: &str,
 ) -> Result<()> {
     let mut started = tokio::time::Instant::now();
@@ -222,7 +229,21 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
             deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
             continue;
         }
-        let status = inspect_transient_unit(unit).await?;
+        // Retry inconclusive systemd `show` probes until deadline and return a
+        // typed `DrainContentionError` deferral if they stay inconclusive so a
+        // user-bus hiccup never quarantines a worker generation (R25-M8).
+        let status = match inspect_transient_unit(unit).await {
+            Ok(status) => status,
+            Err(error) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(anyhow::Error::new(DrainContentionError(format!(
+                        "transient worker unit {unit} inspection remained inconclusive: {error}"
+                    ))));
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
         if status.is_collected() {
             return Ok(());
         }
@@ -231,7 +252,7 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
             && !status.invocation_id.is_empty()
             && started.elapsed() >= ORPHAN_EXIT_GRACE
         {
-            let _stop_guard = if let Some((broker, session_id)) = broker {
+            let stop_guard = if let Some((broker, session_id)) = broker {
                 let Some(guard) = broker.try_reserve_orphan_stop(session_id, true) else {
                     broker.wait_for_returning_crashed_drain(session_id).await?;
                     started = tokio::time::Instant::now();
@@ -244,7 +265,18 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
             };
             // Re-inspect while holding the exclusive orphan-stop reservation and
             // require a non-empty matching InvocationID before stopping (R22-H1, R23-H1).
-            let current = inspect_transient_unit(unit).await?;
+            let current = match inspect_transient_unit(unit).await {
+                Ok(current) => current,
+                Err(error) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(anyhow::Error::new(DrainContentionError(format!(
+                            "transient worker unit {unit} re-inspection failed: {error}"
+                        ))));
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            };
             if current.is_collected() {
                 return Ok(());
             }
@@ -262,20 +294,29 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
                 invocation_id = %current.invocation_id,
                 "recycling orphaned transient worker unit"
             );
-            let stop_output =
-                run_systemctl_bounded(&["--user", "stop", unit], SYSTEMCTL_CALL_TIMEOUT)
+            let stop_res =
+                run_systemctl_bounded(&["--user", "stop", unit], SYSTEMCTL_CALL_TIMEOUT).await;
+            let stop_ok = stop_res.as_ref().is_ok_and(|out| out.status.success());
+            let confirmed_stopped = if stop_ok {
+                reconcile_unit_stopped_bounded(unit, TRANSIENT_UNIT_COLLECT_TIMEOUT).await
+            } else {
+                inspect_transient_unit(unit)
                     .await
-                    .with_context(|| format!("stopping orphaned transient worker unit {unit}"))?;
-            if !stop_output.status.success() {
-                let recheck = inspect_transient_unit(unit).await?;
-                if recheck.is_collected() {
-                    return Ok(());
+                    .is_ok_and(|recheck| recheck.is_affirmatively_stopped())
+            };
+            if !confirmed_stopped {
+                // Keep `OrphanStopGuard` held in a background reconciler until
+                // systemd confirms the submitted stop job has cleared (R25-H2).
+                if let Some(guard) = stop_guard {
+                    spawn_orphan_stop_reconciler(guard, unit.to_owned(), None);
                 }
-                anyhow::bail!(
-                    "systemctl stop {unit} exited {} (LoadState={})",
-                    stop_output.status,
-                    recheck.load_state
-                );
+                let detail = match stop_res {
+                    Ok(out) => format!("systemctl stop {unit} exited {}", out.status),
+                    Err(err) => format!("{err}"),
+                };
+                return Err(anyhow::Error::new(DrainContentionError(format!(
+                    "orphaned transient unit {unit} stop is still reconciling ({detail}); retry"
+                ))));
             }
             stopped_orphan = true;
             continue;
@@ -293,9 +334,67 @@ pub(in crate::machine_broker) async fn prepare_transient_unit_with_owner_check(
     }
 }
 
+async fn reconcile_unit_stopped_bounded(unit: &str, budget: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        if inspect_transient_unit(unit)
+            .await
+            .is_ok_and(|status| status.is_affirmatively_stopped())
+        {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(WATCHDOG_RECONCILE_POLL_INTERVAL).await;
+    }
+}
+
+/// Hold `OrphanStopGuard` across backoff polling until systemd affirmatively
+/// confirms the stopped unit is terminal and job-free (or the session is
+/// permanently deleted), preventing any returning worker or replacement launch
+/// from racing an unconfirmed systemd stop job (R25-H2).
+fn spawn_orphan_stop_reconciler(
+    stop_guard: OrphanStopGuard,
+    unit: String,
+    watchdog_token: Option<u64>,
+) {
+    tokio::spawn(async move {
+        let mut attempt: u32 = 0;
+        loop {
+            let delay = Duration::from_millis((200_u64 << attempt.min(5)).min(5_000));
+            attempt = attempt.saturating_add(1);
+            tokio::time::sleep(delay).await;
+            if stop_guard
+                .broker
+                .permanently_deleted_sessions
+                .lock()
+                .contains(&stop_guard.session_id)
+            {
+                return;
+            }
+            if inspect_transient_unit(&unit)
+                .await
+                .is_ok_and(|status| status.is_affirmatively_stopped())
+            {
+                if let Some(token) = watchdog_token {
+                    let gate = stop_guard
+                        .broker
+                        .session_lifecycle_gate(&stop_guard.session_id);
+                    let _lifecycle_guard = gate.lock().await;
+                    let _ = stop_guard
+                        .broker
+                        .publish_watchdog_crashed_if_token_valid(&stop_guard.session_id, token);
+                }
+                return;
+            }
+        }
+    });
+}
+
 impl Broker {
     pub(in crate::machine_broker) async fn prepare_session_transient_unit(
-        &self,
+        self: &Arc<Self>,
         session_id: &str,
     ) -> Result<String> {
         let unit = worker_unit_name(&self.args.socket, session_id);
@@ -304,10 +403,10 @@ impl Broker {
     }
 
     pub(in crate::machine_broker) fn try_reserve_orphan_stop(
-        &self,
+        self: &Arc<Self>,
         session_id: &str,
         allow_during_launching: bool,
-    ) -> Option<OrphanStopGuard<'_>> {
+    ) -> Option<OrphanStopGuard> {
         let workers = self.workers.lock();
         if workers.contains_key(session_id)
             || (!allow_during_launching && self.launching.lock().contains(session_id))
@@ -324,7 +423,7 @@ impl Broker {
             return None;
         }
         Some(OrphanStopGuard {
-            broker: self,
+            broker: Arc::clone(self),
             session_id: session_id.to_owned(),
         })
     }
@@ -342,9 +441,6 @@ impl Broker {
     }
 
     fn publish_watchdog_crashed_if_token_valid(&self, session_id: &str, token: u64) -> bool {
-        // Revalidate token and lifecycle declarations immediately before
-        // publishing `Crashed` while holding `session_lifecycle_gate` and
-        // `OrphanStopGuard` (R24-M4).
         if !self.reconnect_token_still_valid(session_id, token)
             || self.workers.lock().contains_key(session_id)
         {
@@ -361,16 +457,48 @@ impl Broker {
         true
     }
 
-    /// Reconnect watchdog helper: takes `session_lifecycle_gate`, validates the
-    /// per-arm reconnect token, reserves `OrphanStopGuard`, requires affirmative
-    /// systemd unit state (never treating bus errors or transitional states as
-    /// worker absence), kills & reaps any timed-out `systemctl stop`, reconciles
-    /// pending stop jobs before dropping the reservation, and revalidates the
-    /// token through `Crashed` publication (R22-H1, R23-H1, R24-H1, R24-M4, R24-M5).
-    pub(in crate::machine_broker) async fn reap_unreconnected_worker_unit(
-        &self,
+    fn reschedule_watchdog_after_inconclusive(
+        self: &Arc<Self>,
         session_id: &str,
         token: u64,
+        reschedules_left: usize,
+    ) {
+        if reschedules_left == 0 {
+            let mut waiting = self.awaiting_reconnect.lock();
+            if waiting.get(session_id).copied() == Some(token) {
+                waiting.remove(session_id);
+            }
+            return;
+        }
+        if !self.reconnect_token_still_valid(session_id, token) {
+            return;
+        }
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(WATCHDOG_RESCHEDULE_DELAY).await;
+            broker
+                .reap_unreconnected_worker_unit_inner(&session_id, token, reschedules_left - 1)
+                .await;
+        });
+    }
+
+    /// Reconnect watchdog entry point (R22-H1, R23-H1, R24-H1, R24-M4, R24-M5,
+    /// R25-H2, R25-M6, R25-M7).
+    pub(in crate::machine_broker) async fn reap_unreconnected_worker_unit(
+        self: &Arc<Self>,
+        session_id: &str,
+        token: u64,
+    ) {
+        self.reap_unreconnected_worker_unit_inner(session_id, token, WATCHDOG_MAX_RESCHEDULES)
+            .await;
+    }
+
+    async fn reap_unreconnected_worker_unit_inner(
+        self: &Arc<Self>,
+        session_id: &str,
+        token: u64,
+        reschedules_left: usize,
     ) {
         if self.awaiting_reconnect.lock().get(session_id).copied() != Some(token) {
             return;
@@ -380,7 +508,7 @@ impl Broker {
         if !self.reconnect_token_still_valid(session_id, token) {
             return;
         }
-        let Some(_stop_guard) = self.try_reserve_orphan_stop(session_id, false) else {
+        let Some(stop_guard) = self.try_reserve_orphan_stop(session_id, false) else {
             return;
         };
         let unit = worker_unit_name(&self.args.socket, session_id);
@@ -405,6 +533,9 @@ impl Broker {
             }
         }
         let Some(status) = initial else {
+            drop(stop_guard);
+            drop(_lifecycle_guard);
+            self.reschedule_watchdog_after_inconclusive(session_id, token, reschedules_left);
             return;
         };
         if status.is_affirmatively_stopped() {
@@ -418,20 +549,19 @@ impl Broker {
             return;
         }
         if !status.is_active_or_activating() || status.invocation_id.is_empty() {
-            // Transitional state (e.g. `deactivating` or pending Job): wait
-            // boundedly for affirmative terminal state without issuing a stop
-            // or publishing false `Crashed` (R24-M5).
-            if self
-                .reconcile_unit_stopped(&unit, None, TRANSIENT_UNIT_COLLECT_TIMEOUT)
-                .await
-            {
+            if reconcile_unit_stopped_bounded(&unit, TRANSIENT_UNIT_COLLECT_TIMEOUT).await {
                 let _ = self.publish_watchdog_crashed_if_token_valid(session_id, token);
+            } else {
+                drop(stop_guard);
+                drop(_lifecycle_guard);
+                self.reschedule_watchdog_after_inconclusive(session_id, token, reschedules_left);
             }
             return;
         }
-        // Re-inspect under the held reservation and require the exact inspected
-        // InvocationID before issuing `systemctl stop` (R23-H1).
         let Ok(current) = inspect_transient_unit(&unit).await else {
+            drop(stop_guard);
+            drop(_lifecycle_guard);
+            self.reschedule_watchdog_after_inconclusive(session_id, token, reschedules_left);
             return;
         };
         if current.is_affirmatively_stopped() {
@@ -439,6 +569,9 @@ impl Broker {
             return;
         }
         if !current.is_active_or_activating() || current.invocation_id != status.invocation_id {
+            drop(stop_guard);
+            drop(_lifecycle_guard);
+            self.reschedule_watchdog_after_inconclusive(session_id, token, reschedules_left);
             return;
         }
         tracing::error!(
@@ -463,45 +596,13 @@ impl Broker {
                 );
             }
         }
-        // Reconcile any stop job already submitted to systemd while still
-        // holding `OrphanStopGuard` and `session_lifecycle_gate`, and publish
-        // `Crashed` only after affirmative stopped observation (R24-H1, R24-M5).
-        if self
-            .reconcile_unit_stopped(
-                &unit,
-                Some(current.invocation_id.as_str()),
-                TRANSIENT_UNIT_COLLECT_TIMEOUT,
-            )
-            .await
-        {
+        if reconcile_unit_stopped_bounded(&unit, TRANSIENT_UNIT_COLLECT_TIMEOUT).await {
             let _ = self.publish_watchdog_crashed_if_token_valid(session_id, token);
-        }
-    }
-
-    async fn reconcile_unit_stopped(
-        &self,
-        unit: &str,
-        expected_invocation: Option<&str>,
-        budget: Duration,
-    ) -> bool {
-        let deadline = tokio::time::Instant::now() + budget;
-        loop {
-            match inspect_transient_unit(unit).await {
-                Ok(status) if status.is_affirmatively_stopped() => return true,
-                Ok(status) => {
-                    if let Some(expected) = expected_invocation
-                        && !status.invocation_id.is_empty()
-                        && status.invocation_id != expected
-                    {
-                        return false;
-                    }
-                }
-                Err(_) => {}
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return false;
-            }
-            tokio::time::sleep(WATCHDOG_RECONCILE_POLL_INTERVAL).await;
+        } else {
+            // Keep `OrphanStopGuard` held across background reconciliation until
+            // the submitted stop job is affirmatively cleared (R25-H2).
+            drop(_lifecycle_guard);
+            spawn_orphan_stop_reconciler(stop_guard, unit, Some(token));
         }
     }
 
@@ -567,11 +668,6 @@ impl Broker {
                     "worker for session {session_id} is already attached"
                 ))));
             }
-            // Coordinate quarantine-based fallback with `rehabilitate_generation`
-            // BEFORE claiming the spawn slot or installing a pin: if a canary
-            // rehabilitated the desired generation while we waited behind a
-            // drain, retry the desired generation instead of pinning a stale
-            // fallback (R24-M7).
             if let Some(failed_generation) = session.fallback_for.as_deref()
                 && !self.try_pin_fallback_for_slot(
                     session_id,
@@ -584,9 +680,6 @@ impl Broker {
                 drop(workers);
                 return Err(anyhow::Error::new(RehabilitatedGenerationError));
             }
-            // Canonical lock order: workers -> session_states -> spawned_launches -> orphan_stopping_sessions -> crashed_drains.
-            // Initialize Starting only once the actual spawn slot is acquired so
-            // contention never leaks state (R21-M1, R22-M1, R23-H1, R23-M5).
             let mut session_states = self.session_states.lock();
             self.spawned_launches.lock().insert(session_id.to_owned());
             self.crashed_drains
@@ -605,10 +698,6 @@ impl Broker {
         }
     }
 
-    /// Atomically move a dormant session to `WorkerState::Exited` and
-    /// invalidate any cached drain receipt under `session_states -> crashed_drains`
-    /// (matching handover lock order) so handover can never observe a torn
-    /// state/receipt pair (R21-M5).
     pub(in crate::machine_broker) fn mark_dormant_exited_and_invalidate_drain(
         &self,
         session_id: &str,
@@ -634,33 +723,40 @@ impl Broker {
             .remove(session_id);
     }
 
-    /// Release `launching` or atomically hand it to a queued `EnsureSession`
-    /// retry that arrived while the previous launch was running or finalizing
-    /// (R24-M2). Canonical lock order: cancelled_sessions ->
-    /// permanently_deleted_sessions -> workers -> launching ->
-    /// pending_ensure_retries.
-    fn release_launch_or_handoff_retry(self: &Arc<Self>, session_id: &str, previous_failed: bool) {
-        let queued_retry = {
-            let cancelled = self.cancelled_sessions.lock();
-            let deleted = self.permanently_deleted_sessions.lock();
-            let workers = self.workers.lock();
-            let mut launching = self.launching.lock();
-            let retry = self.pending_ensure_retries.lock().remove(session_id);
-            let eligible = previous_failed
-                && !workers.contains_key(session_id)
-                && !cancelled.contains(session_id)
-                && !deleted.contains(session_id)
-                && !self.account_quiesced_sessions.lock().contains(session_id)
-                && !self.resetting_sessions.lock().contains_key(session_id);
-            if eligible && retry.is_some() {
-                // Keep `launching` owned for the queued retry.
-                retry
-            } else {
-                launching.remove(session_id);
-                None
-            }
-        };
-        if let Some((retry_session, retry_attempt_id)) = queued_retry {
+    /// Atomically inspect whether a queued `EnsureSession` retry is eligible to
+    /// take over `launching` without releasing the slot yet.
+    fn take_eligible_queued_retry(
+        &self,
+        session_id: &str,
+        previous_failed: bool,
+    ) -> Option<(StartSession, String)> {
+        let cancelled = self.cancelled_sessions.lock();
+        let deleted = self.permanently_deleted_sessions.lock();
+        let workers = self.workers.lock();
+        let mut launching = self.launching.lock();
+        let retry = self.pending_ensure_retries.lock().remove(session_id);
+        let eligible = previous_failed
+            && !workers.contains_key(session_id)
+            && !cancelled.contains(session_id)
+            && !deleted.contains(session_id)
+            && !self.account_quiesced_sessions.lock().contains(session_id)
+            && !self.resetting_sessions.lock().contains_key(session_id);
+        if eligible && let Some((retry_session, retry_attempt_id)) = retry {
+            // Keep `launching` owned and record the handed-off attempt ID so
+            // replays of the handed-off attempt coalesce cleanly (R25-M5).
+            self.active_ensure_attempts
+                .lock()
+                .insert(session_id.to_owned(), retry_attempt_id.clone());
+            Some((retry_session, retry_attempt_id))
+        } else {
+            self.active_ensure_attempts.lock().remove(session_id);
+            launching.remove(session_id);
+            None
+        }
+    }
+
+    fn spawn_handed_off_retry(self: &Arc<Self>, retry: Option<(StartSession, String)>) {
+        if let Some((retry_session, retry_attempt_id)) = retry {
             let broker = Arc::clone(self);
             tokio::spawn(async move {
                 broker
@@ -680,16 +776,18 @@ impl Broker {
             );
             return;
         }
-        if let Some(worker) = self
+        // Clone snapshot and drop `workers` guard BEFORE `send_controller` or
+        // `take_eligible_queued_retry` so `workers` is never re-locked (R25-H1).
+        let existing_snapshot = self
             .workers
             .lock()
             .get(&session_id)
-            .map(|peer| peer.snapshot.clone())
-        {
+            .map(|peer| peer.snapshot.clone());
+        if let Some(worker) = existing_snapshot {
             self.send_controller(Frame::Snapshot {
                 worker: Box::new(worker),
             });
-            self.release_launch_or_handoff_retry(&session_id, false);
+            let _ = self.take_eligible_queued_retry(&session_id, false);
             return;
         }
         let result = self.spawn_with_fallback(session, None).await;
@@ -702,122 +800,369 @@ impl Broker {
         attempt_id: &str,
         result: Result<()>,
     ) {
-        let failed = result.is_err();
-        if let Err(error) = result {
-            if error.downcast_ref::<DrainContentionError>().is_some() {
-                // Keep `launching` owned through negative ACK publication so a
-                // retry arriving in this window queues cleanly into
-                // `pending_ensure_retries` instead of being dropped (R23-M2, R24-M2).
-                self.command_rejected(session_id, attempt_id.to_owned(), error.to_string());
-                self.release_launch_or_handoff_retry(session_id, true);
-                return;
-            }
-            // Keep `launching` owned through failure publication so a
-            // concurrent retry cannot acquire the slot and read this
-            // attempt's Crashed state (R22-M1).
-            let cancelled = self.cancelled_sessions.lock();
-            if cancelled.contains(session_id) {
-                drop(cancelled);
-                self.release_launch_or_handoff_retry(session_id, false);
-                tracing::debug!(session = %session_id, %error, "deleted session launch stopped");
-                return;
-            }
-            if self.resetting_sessions.lock().contains_key(session_id) {
-                drop(cancelled);
-                self.release_launch_or_handoff_retry(session_id, false);
-                tracing::debug!(
-                    session = %session_id,
-                    %error,
-                    "superseded worker launch stopped for context reset"
-                );
-                return;
-            }
-            tracing::error!(
+        let Err(error) = result else {
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        };
+        if error.downcast_ref::<DrainContentionError>().is_some() {
+            self.command_rejected(session_id, attempt_id.to_owned(), error.to_string());
+            let retry = self.take_eligible_queued_retry(session_id, true);
+            self.spawn_handed_off_retry(retry);
+            return;
+        }
+        let cancelled_or_resetting = self.cancelled_sessions.lock().contains(session_id)
+            || self.resetting_sessions.lock().contains_key(session_id);
+        if cancelled_or_resetting {
+            tracing::debug!(
                 session = %session_id,
+                %error,
+                "deleted or resetting session launch stopped"
+            );
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        }
+        // Check for a queued retry BEFORE emitting an uncorrelated `Crashed`
+        // snapshot: if a newer retry is already taking over `launching`, emit
+        // only this superseded attempt's correlated rejection ACK and suppress
+        // terminal `Crashed` publication so the retry's waiting prompts stay
+        // intact (R25-M3).
+        let has_queued_retry = self.pending_ensure_retries.lock().contains_key(session_id);
+        if has_queued_retry {
+            tracing::warn!(
+                session = %session_id,
+                %attempt_id,
                 reason = crate::logs::failure_reason(&error),
                 error = %error,
-                "worker launch failed"
+                "superseded worker launch failed; handing off to queued retry without Crashed snapshot"
             );
-            self.startup_failures
-                .lock()
-                .insert(session_id.to_owned(), error.to_string());
-            self.publish_session_state(session_id, WorkerState::Crashed);
             self.command_rejected(session_id, attempt_id.to_owned(), error.to_string());
-            drop(cancelled);
+            let retry = self.take_eligible_queued_retry(session_id, true);
+            self.spawn_handed_off_retry(retry);
+            return;
         }
-        self.release_launch_or_handoff_retry(session_id, failed);
+        let cancelled = self.cancelled_sessions.lock();
+        if cancelled.contains(session_id) || self.resetting_sessions.lock().contains_key(session_id)
+        {
+            drop(cancelled);
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        }
+        tracing::error!(
+            session = %session_id,
+            reason = crate::logs::failure_reason(&error),
+            error = %error,
+            "worker launch failed"
+        );
+        self.startup_failures
+            .lock()
+            .insert(session_id.to_owned(), error.to_string());
+        self.publish_session_state(session_id, WorkerState::Crashed);
+        self.command_rejected(session_id, attempt_id.to_owned(), error.to_string());
+        drop(cancelled);
+        let retry = self.take_eligible_queued_retry(session_id, true);
+        self.spawn_handed_off_retry(retry);
     }
 
-    /// Finalize a rollout cutover launch while keeping `launching` held through
-    /// failure publication, deferring `DrainContentionError` without writing
-    /// terminal `Crashed`, and handing off any queued Ensure retry (R24-M1, R24-M2).
     pub(in crate::machine_broker) fn finish_rollout_launch(
         self: &Arc<Self>,
         session_id: &str,
         old_generation: &str,
         result: Result<()>,
     ) {
-        let failed = result.is_err();
-        match result {
-            Ok(()) => {
-                tracing::info!(
-                    session = %session_id,
-                    %old_generation,
-                    "worker generation cutover launched"
-                );
-            }
-            Err(error) => {
-                if error.downcast_ref::<DrainContentionError>().is_some() {
-                    tracing::info!(
-                        session = %session_id,
-                        %old_generation,
-                        %error,
-                        "worker generation cutover deferred by active drain contention"
-                    );
-                    self.command_rejected(
-                        session_id,
-                        format!("rollout:{session_id}"),
-                        error.to_string(),
-                    );
-                    self.release_launch_or_handoff_retry(session_id, true);
-                    return;
-                }
-                let cancelled = self.cancelled_sessions.lock();
-                if cancelled.contains(session_id) {
-                    drop(cancelled);
-                    self.release_launch_or_handoff_retry(session_id, false);
-                    tracing::debug!(session = %session_id, %error, "deleted session rollout stopped");
-                    return;
-                }
-                if self.resetting_sessions.lock().contains_key(session_id) {
-                    drop(cancelled);
-                    self.release_launch_or_handoff_retry(session_id, false);
-                    tracing::debug!(
-                        session = %session_id,
-                        %error,
-                        "superseded worker rollout stopped for context reset"
-                    );
-                    return;
-                }
-                tracing::error!(
-                    session = %session_id,
-                    %old_generation,
-                    error = %format!("{error:#}"),
-                    "worker cutover and fallback failed"
-                );
-                self.startup_failures
+        let Err(error) = result else {
+            tracing::info!(
+                session = %session_id,
+                %old_generation,
+                "worker generation cutover launched"
+            );
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        };
+        if error.downcast_ref::<DrainContentionError>().is_some() {
+            tracing::info!(
+                session = %session_id,
+                %old_generation,
+                %error,
+                "worker generation cutover deferred by active drain contention"
+            );
+            self.command_rejected(
+                session_id,
+                format!("rollout:{session_id}"),
+                error.to_string(),
+            );
+            let retry = self.take_eligible_queued_retry(session_id, true);
+            self.spawn_handed_off_retry(retry);
+            return;
+        }
+        let cancelled_or_resetting = self.cancelled_sessions.lock().contains(session_id)
+            || self.resetting_sessions.lock().contains_key(session_id);
+        if cancelled_or_resetting {
+            tracing::debug!(
+                session = %session_id,
+                %error,
+                "deleted or resetting session rollout stopped"
+            );
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        }
+        if self.pending_ensure_retries.lock().contains_key(session_id) {
+            tracing::warn!(
+                session = %session_id,
+                %old_generation,
+                error = %format!("{error:#}"),
+                "superseded rollout launch failed; handing off to queued ensure retry"
+            );
+            self.command_rejected(
+                session_id,
+                format!("rollout:{session_id}"),
+                error.to_string(),
+            );
+            let retry = self.take_eligible_queued_retry(session_id, true);
+            self.spawn_handed_off_retry(retry);
+            return;
+        }
+        let cancelled = self.cancelled_sessions.lock();
+        if cancelled.contains(session_id) || self.resetting_sessions.lock().contains_key(session_id)
+        {
+            drop(cancelled);
+            let _ = self.take_eligible_queued_retry(session_id, false);
+            return;
+        }
+        tracing::error!(
+            session = %session_id,
+            %old_generation,
+            error = %format!("{error:#}"),
+            "worker cutover and fallback failed"
+        );
+        self.startup_failures
+            .lock()
+            .insert(session_id.to_owned(), error.to_string());
+        self.publish_session_state(session_id, WorkerState::Crashed);
+        self.command_rejected(
+            session_id,
+            format!("rollout:{session_id}"),
+            error.to_string(),
+        );
+        drop(cancelled);
+        let retry = self.take_eligible_queued_retry(session_id, true);
+        self.spawn_handed_off_retry(retry);
+    }
+}
+
+impl Broker {
+    pub(in crate::machine_broker) fn pin_session_failure_fallback(
+        &self,
+        session_id: &str,
+        worker_generation: &str,
+        failed_generation: &str,
+    ) {
+        self.fallback_pins
+            .lock()
+            .insert(session_id.to_owned(), worker_generation.to_owned());
+        self.fallback_targets
+            .lock()
+            .insert(session_id.to_owned(), failed_generation.to_owned());
+        self.session_failure_fallback_pins
+            .lock()
+            .insert(session_id.to_owned());
+    }
+
+    pub(in crate::machine_broker) fn try_pin_fallback_for_slot(
+        &self,
+        session_id: &str,
+        worker_generation: &str,
+        failed_generation: &str,
+        provider: &str,
+        fallback_from_quarantine: bool,
+    ) -> bool {
+        let generation_key = (failed_generation.to_owned(), provider.to_owned());
+        let healthy_generations = self.healthy_generations.lock();
+        if fallback_from_quarantine && healthy_generations.contains(&generation_key) {
+            return false;
+        }
+        self.fallback_pins
+            .lock()
+            .insert(session_id.to_owned(), worker_generation.to_owned());
+        self.fallback_targets
+            .lock()
+            .insert(session_id.to_owned(), failed_generation.to_owned());
+        if fallback_from_quarantine {
+            self.session_failure_fallback_pins.lock().remove(session_id);
+        } else {
+            self.session_failure_fallback_pins
+                .lock()
+                .insert(session_id.to_owned());
+        }
+        drop(healthy_generations);
+        true
+    }
+
+    pub(in crate::machine_broker) fn pin_registered_fallback_if_eligible(
+        &self,
+        session_id: &str,
+        generation: &str,
+        desired: &str,
+        fallback_for: Option<&str>,
+        fallback_provider: Option<&str>,
+    ) {
+        let Some(failed) = fallback_for.filter(|failed| desired.is_empty() || *failed == desired)
+        else {
+            return;
+        };
+        let pinned_now = match fallback_provider {
+            Some(provider) => {
+                let keep_session_pin = self
+                    .session_failure_fallback_pins
                     .lock()
-                    .insert(session_id.to_owned(), error.to_string());
-                self.publish_session_state(session_id, WorkerState::Crashed);
-                self.command_rejected(
+                    .contains(session_id);
+                self.try_pin_fallback_for_slot(
                     session_id,
-                    format!("rollout:{session_id}"),
-                    error.to_string(),
-                );
-                drop(cancelled);
+                    generation,
+                    failed,
+                    provider,
+                    !keep_session_pin,
+                )
+            }
+            None => {
+                self.pin_fallback(session_id, generation, failed);
+                true
+            }
+        };
+        if pinned_now {
+            *self.previous_generation.lock() = Some(generation.to_owned());
+        }
+    }
+
+    pub(in crate::machine_broker) async fn run_session_failure_fallback(
+        self: &Arc<Self>,
+        selected: &StartSession,
+        failed_generation: &str,
+        first_error: anyhow::Error,
+    ) -> Result<()> {
+        match self.spawn_and_wait_ready(selected, false).await {
+            Ok(()) => Ok(()),
+            Err(fallback_error)
+                if fallback_error
+                    .downcast_ref::<DrainContentionError>()
+                    .is_some() =>
+            {
+                Err(fallback_error)
+            }
+            Err(fallback_error) => {
+                if !self
+                    .cancelled_sessions
+                    .lock()
+                    .contains(&selected.session_id)
+                {
+                    self.pin_session_failure_fallback(
+                        &selected.session_id,
+                        &selected.generation,
+                        failed_generation,
+                    );
+                }
+                Err(fallback_error).with_context(|| {
+                    format!("fallback after generation launch failed: {first_error}")
+                })
             }
         }
-        self.release_launch_or_handoff_retry(session_id, failed);
+    }
+
+    pub(in crate::machine_broker) fn reserve_or_queue_ensure_launch(
+        &self,
+        session: &StartSession,
+        attempt_id: &str,
+    ) -> bool {
+        let displaced_retry = {
+            let mut launching = self.launching.lock();
+            if !launching.insert(session.session_id.clone()) {
+                let is_active_replay = self
+                    .active_ensure_attempts
+                    .lock()
+                    .get(&session.session_id)
+                    .is_some_and(|active_id| active_id == attempt_id);
+                if is_active_replay {
+                    Some(None)
+                } else {
+                    Some(
+                        self.pending_ensure_retries
+                            .lock()
+                            .insert(
+                                session.session_id.clone(),
+                                (session.clone(), attempt_id.to_owned()),
+                            )
+                            .map(|(_, old_id)| old_id)
+                            .filter(|old_id| old_id != attempt_id),
+                    )
+                }
+            } else {
+                self.active_ensure_attempts
+                    .lock()
+                    .insert(session.session_id.clone(), attempt_id.to_owned());
+                None
+            }
+        };
+        if let Some(old_id) = displaced_retry {
+            if let Some(old_attempt_id) = old_id {
+                self.command_rejected(
+                    &session.session_id,
+                    old_attempt_id,
+                    "superseded by newer ensure retry".into(),
+                );
+            }
+            return false;
+        }
+        true
+    }
+
+    pub(in crate::machine_broker) async fn spawn_rollout_after_disconnect(
+        self: &Arc<Self>,
+        session_id: String,
+        old_generation: String,
+        resumable_agent_session_id: Option<String>,
+    ) {
+        // Revalidate under `session_lifecycle_gate` before reserving
+        // `launching` or updating `sessions`/`session_states` so a delayed
+        // rollout disconnect can never overwrite a concurrent reset or
+        // deletion (R25-M1).
+        let session = {
+            let gate = self.session_lifecycle_gate(&session_id);
+            let _guard = gate.lock().await;
+            if self.cancelled_sessions.lock().contains(&session_id)
+                || self
+                    .permanently_deleted_sessions
+                    .lock()
+                    .contains(&session_id)
+                || self.account_session_stopped(&session_id)
+                || self.resetting_sessions.lock().contains_key(&session_id)
+                || self.workers.lock().contains_key(&session_id)
+            {
+                return;
+            }
+            let Some(mut session) = self.sessions.lock().get(&session_id).cloned() else {
+                return;
+            };
+            if !self.launching.lock().insert(session_id.clone()) {
+                return;
+            }
+            session.agent_session_id = resumable_agent_session_id;
+            session.generation = self.desired_generation.lock().clone();
+            session.fallback_for = None;
+            self.session_states
+                .lock()
+                .insert(session_id.clone(), WorkerState::Starting);
+            self.sessions
+                .lock()
+                .insert(session_id.clone(), session.clone());
+            session
+        };
+        let broker = Arc::clone(self);
+        tokio::spawn(async move {
+            let _permit = broker.cutover_permit(&session_id).await;
+            let result = broker
+                .spawn_with_fallback(session, Some(old_generation.clone()))
+                .await;
+            broker.finish_rollout_launch(&session_id, &old_generation, result);
+        });
     }
 }
 
@@ -828,14 +1173,25 @@ mod tests {
     #[test]
     fn parse_transient_unit_status_rejects_empty_or_missing_properties() {
         assert!(parse_transient_unit_status("").is_err());
-        assert!(parse_transient_unit_status("LoadState=\nActiveState=\n").is_err());
-        assert!(parse_transient_unit_status("LoadState=not-found\n").is_err());
+        assert!(parse_transient_unit_status("LoadState=\nActiveState=\nJob=\n").is_err());
+        assert!(
+            parse_transient_unit_status("LoadState=not-found\nActiveState=inactive\n").is_err()
+        );
+
         let stopped = parse_transient_unit_status(
             "LoadState=not-found\nActiveState=inactive\nSubState=dead\nInvocationID=\nJob=\n",
         )
         .unwrap();
         assert!(stopped.is_collected());
         assert!(stopped.is_affirmatively_stopped());
+
+        // not-found alongside transitional ActiveState must NOT count as stopped (R25-M7).
+        let transitional_not_found = parse_transient_unit_status(
+            "LoadState=not-found\nActiveState=deactivating\nSubState=stop-sigterm\nInvocationID=\nJob=\n",
+        )
+        .unwrap();
+        assert!(!transitional_not_found.is_collected());
+        assert!(!transitional_not_found.is_affirmatively_stopped());
 
         let pending_job = parse_transient_unit_status(
             "LoadState=loaded\nActiveState=inactive\nSubState=dead\nInvocationID=\nJob=42\n",

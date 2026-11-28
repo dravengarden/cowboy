@@ -100,9 +100,13 @@ pub(super) fn take_acked_command(
                 let matches = if command_id.starts_with(&ensure_attempt_prefix) {
                     expected.as_deref() == Some(command_id)
                 } else {
+                    // Bare `ensure:<session>` is only valid when the queued
+                    // command carries no attempt ID, or for a negotiated legacy
+                    // broker with an unambiguous outstanding send (R25-M4).
                     expected.is_none()
-                        || sent.contains(&ensure_key)
-                        || !shared.attempted_sends.lock().contains(&ensure_key)
+                        || (shared.protocol.load(std::sync::atomic::Ordering::Acquire)
+                            < crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+                            && sent.contains(&ensure_key))
                 };
                 if !matches {
                     tracing::debug!(

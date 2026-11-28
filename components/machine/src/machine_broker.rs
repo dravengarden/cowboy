@@ -421,6 +421,7 @@ struct Broker {
     /// between deferral ACK enqueue and slot release) so retries are never
     /// silently dropped (R24-M2). Lock order: `workers -> launching -> pending_ensure_retries`.
     pending_ensure_retries: Mutex<HashMap<String, (StartSession, String)>>,
+    active_ensure_attempts: Mutex<HashMap<String, String>>,
     /// Sessions whose replacement worker process has actually been spawned
     /// (past `prepare_transient_unit` and past waiting for any returning
     /// draining worker). Before this bit is set, a returning crashed-drain
@@ -466,11 +467,15 @@ struct Broker {
     departing_cleanup: Arc<Mutex<HashMap<String, wrap_up::DepartingCleanup>>>,
     post_edit: Arc<post_edit::PostEditState>,
     crashed_drains: crashed_drain::State,
-    replacing: Mutex<HashMap<String, String>>,
+    /// Rollout cutover records bound to `(old_generation, expected_worker_epoch)` (R25-M1).
+    replacing: Mutex<HashMap<String, (String, String)>>,
     /// Session-local rollback pins. A healthy fallback must remain available
     /// even though the global desired generation is still marked unhealthy.
     fallback_pins: Mutex<HashMap<String, String>>,
     fallback_targets: Mutex<HashMap<String, String>>,
+    /// Sessions whose fallback pin came from a genuine session-specific failure
+    /// (never cleared by canary `rehabilitate_generation`, R25-M10).
+    session_failure_fallback_pins: Mutex<HashSet<String>>,
     /// Sessions whose candidate launch marked a provider generation unhealthy.
     /// Tracking the source lets deletion retract only its own failure.
     unhealthy_generations: Mutex<HashMap<(String, String), HashSet<String>>>,
@@ -514,6 +519,7 @@ impl Broker {
             startup_failures: Mutex::new(HashMap::new()),
             launching: Mutex::new(HashSet::new()),
             pending_ensure_retries: Mutex::new(HashMap::new()),
+            active_ensure_attempts: Mutex::new(HashMap::new()),
             spawned_launches: Mutex::new(HashSet::new()),
             orphan_stopping_sessions: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashMap::new()),
@@ -538,6 +544,7 @@ impl Broker {
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
+            session_failure_fallback_pins: Mutex::new(HashSet::new()),
             unhealthy_generations: Mutex::new(HashMap::new()),
             healthy_generations: Mutex::new(HashSet::new()),
             direct_worker_pids: Arc::new(Mutex::new(HashMap::new())),
@@ -703,6 +710,7 @@ impl Broker {
     fn unpin_fallback(&self, session_id: &str) {
         self.fallback_pins.lock().remove(session_id);
         self.fallback_targets.lock().remove(session_id);
+        self.session_failure_fallback_pins.lock().remove(session_id);
     }
 
     fn clear_generation_failures_for_session(&self, session_id: &str) {
@@ -731,39 +739,12 @@ impl Broker {
         drop(healthy_generations);
     }
 
-    /// Coordinate fallback pinning at spawn-slot acquisition with
-    /// `rehabilitate_generation` under `healthy_generations -> fallback_pins ->
-    /// fallback_targets`. Returns `false` when a quarantine-selected fallback
-    /// was superseded by rehabilitation while waiting behind a drain (R24-M7).
-    pub(super) fn try_pin_fallback_for_slot(
-        &self,
-        session_id: &str,
-        worker_generation: &str,
-        failed_generation: &str,
-        provider: &str,
-        fallback_from_quarantine: bool,
-    ) -> bool {
-        let generation_key = (failed_generation.to_owned(), provider.to_owned());
-        let healthy_generations = self.healthy_generations.lock();
-        if fallback_from_quarantine && healthy_generations.contains(&generation_key) {
-            return false;
-        }
-        self.fallback_pins
-            .lock()
-            .insert(session_id.to_owned(), worker_generation.to_owned());
-        self.fallback_targets
-            .lock()
-            .insert(session_id.to_owned(), failed_generation.to_owned());
-        drop(healthy_generations);
-        true
-    }
-
     fn rehabilitate_generation(&self, generation: &str, provider: &str) -> Vec<String> {
         let generation_key = (generation.to_owned(), provider.to_owned());
         // Hold `healthy_generations` across unpinning in canonical lock order
         // `sessions -> healthy_generations -> unhealthy_generations ->
-        // fallback_pins -> fallback_targets` so a delayed spawn slot cannot
-        // install a stale quarantine fallback pin after rehabilitation (R24-M7).
+        // fallback_pins -> fallback_targets -> session_failure_fallback_pins`
+        // and preserve pins installed after genuine session-specific failures (R24-M7, R25-M10).
         let sessions = self.sessions.lock();
         let mut healthy_generations = self.healthy_generations.lock();
         let mut unhealthy_generations = self.unhealthy_generations.lock();
@@ -771,10 +752,12 @@ impl Broker {
         unhealthy_generations.remove(&generation_key);
         let mut fallback_pins = self.fallback_pins.lock();
         let mut fallback_targets = self.fallback_targets.lock();
+        let session_failures = self.session_failure_fallback_pins.lock();
         let rehabilitated: Vec<String> = fallback_targets
             .iter()
             .filter(|(session_id, failed_generation)| {
                 *failed_generation == generation
+                    && !session_failures.contains(*session_id)
                     && sessions
                         .get(*session_id)
                         .is_some_and(|session| session.provider == provider)
@@ -785,6 +768,7 @@ impl Broker {
             fallback_pins.remove(session_id);
             fallback_targets.remove(session_id);
         }
+        drop(session_failures);
         drop(fallback_targets);
         drop(fallback_pins);
         drop(unhealthy_generations);
@@ -1280,48 +1264,12 @@ impl Broker {
             // handshake as malformed and retry a permanently deleted session.
             anyhow::bail!("session {session_id} was deleted");
         }
-        self.awaiting_reconnect.lock().remove(&session_id);
         let desired = self.desired_generation.lock().clone();
         let fallback_provider = self
             .sessions
             .lock()
             .get(&session_id)
             .map(|session| session.provider.clone());
-        let fallback_is_healthy = fallback_for.as_ref().is_some_and(|failed| {
-            fallback_provider.as_ref().is_some_and(|provider| {
-                self.healthy_generations
-                    .lock()
-                    .contains(&(failed.clone(), provider.clone()))
-            })
-        });
-        if fallback_for
-            .as_ref()
-            .is_some_and(|failed| desired.is_empty() || failed == &desired)
-            && !fallback_is_healthy
-        {
-            self.pin_fallback(
-                &session_id,
-                &generation,
-                fallback_for.as_deref().expect("checked above"),
-            );
-            *self.previous_generation.lock() = Some(generation.clone());
-        }
-        if let Some(executable) = executable.as_ref() {
-            let mut commands = self.generation_commands.lock();
-            if generation != desired || !commands.contains_key(&generation) {
-                commands.insert(generation.clone(), PathBuf::from(executable));
-            }
-        }
-        let pinned = self
-            .fallback_pins
-            .lock()
-            .get(&session_id)
-            .is_some_and(|pinned| pinned == &generation);
-        if !desired.is_empty() && generation != desired && !pinned {
-            self.previous_generation
-                .lock()
-                .get_or_insert_with(|| generation.clone());
-        }
         let mut workers = self.workers.lock();
         if resumed_drain.is_some() && self.spawned_launches.lock().contains(&session_id) {
             anyhow::bail!("session {session_id} launch is already in progress");
@@ -1340,6 +1288,32 @@ impl Broker {
                 "session {session_id} already has worker epoch {}",
                 existing.epoch
             );
+        }
+        // Only consume the reconnect watchdog token after admission passes
+        // `orphan_stopping_sessions` and epoch ownership checks (R25-M6).
+        self.awaiting_reconnect.lock().remove(&session_id);
+        self.pin_registered_fallback_if_eligible(
+            &session_id,
+            &generation,
+            &desired,
+            fallback_for.as_deref(),
+            fallback_provider.as_deref(),
+        );
+        if let Some(executable) = executable.as_ref() {
+            let mut commands = self.generation_commands.lock();
+            if generation != desired || !commands.contains_key(&generation) {
+                commands.insert(generation.clone(), PathBuf::from(executable));
+            }
+        }
+        let pinned = self
+            .fallback_pins
+            .lock()
+            .get(&session_id)
+            .is_some_and(|pinned| pinned == &generation);
+        if !desired.is_empty() && generation != desired && !pinned {
+            self.previous_generation
+                .lock()
+                .get_or_insert_with(|| generation.clone());
         }
         let drain_requested = !desired.is_empty() && generation != desired && !pinned;
         let replaced = workers.insert(
@@ -2050,7 +2024,7 @@ impl Broker {
         if self.mcp_launch_adoption_changed(&session) {
             self.command_rejected(
                 &session.session_id,
-                format!("ensure:{}", session.session_id),
+                attempt_id,
                 "execution placement cannot change through worker adoption".into(),
             );
             return;
@@ -2147,33 +2121,8 @@ impl Broker {
             return;
         }
         self.awaiting_reconnect.lock().remove(&session.session_id);
-        if !launch_reserved {
-            let displaced_retry = {
-                let mut launching = self.launching.lock();
-                if !launching.insert(session.session_id.clone()) {
-                    Some(
-                        self.pending_ensure_retries
-                            .lock()
-                            .insert(
-                                session.session_id.clone(),
-                                (session.clone(), attempt_id.clone()),
-                            )
-                            .map(|(_, old_id)| old_id),
-                    )
-                } else {
-                    None
-                }
-            };
-            if let Some(old_id) = displaced_retry {
-                if let Some(old_attempt_id) = old_id {
-                    self.command_rejected(
-                        &session.session_id,
-                        old_attempt_id,
-                        "superseded by newer ensure retry".into(),
-                    );
-                }
-                return;
-            }
+        if !launch_reserved && !self.reserve_or_queue_ensure_launch(&session, &attempt_id) {
+            return;
         }
         let broker = Arc::clone(self);
         tokio::spawn(async move {
@@ -2592,7 +2541,7 @@ impl Broker {
     }
 
     async fn spawn_with_fallback(
-        &self,
+        self: &Arc<Self>,
         session: StartSession,
         session_fallback: Option<String>,
     ) -> Result<()> {
@@ -2634,11 +2583,23 @@ impl Broker {
             Err(error)
                 if fallback_from_quarantine
                     && error
+                        .downcast_ref::<crashed_drain::DrainContentionError>()
+                        .is_none()
+                    && !self
+                        .cancelled_sessions
+                        .lock()
+                        .contains(&selected.session_id)
+                    && (error
                         .downcast_ref::<crashed_drain::RehabilitatedGenerationError>()
-                        .is_some() =>
+                        .is_some()
+                        || self
+                            .healthy_generations
+                            .lock()
+                            .contains(&(session.generation.clone(), session.provider.clone()))) =>
             {
-                // A canary rehabilitated the desired generation while this
-                // launch waited behind a drain; retry desired directly (R24-M7).
+                // Desired generation recovered while waiting or during pre-slot
+                // fallback preparation; retry the recovered desired generation
+                // instead of failing or pinning a stale fallback (R24-M7, R25-M12).
                 selected = session.clone();
                 fallback_from_quarantine = false;
                 self.spawn_and_wait_ready(&selected, false).await
@@ -2701,32 +2662,8 @@ impl Broker {
                     );
                     selected.generation = previous;
                     selected.fallback_for = Some(session.generation.clone());
-                    match self.spawn_and_wait_ready(&selected, false).await {
-                        Ok(()) => Ok(()),
-                        Err(fallback_error)
-                            if fallback_error
-                                .downcast_ref::<crashed_drain::DrainContentionError>()
-                                .is_some() =>
-                        {
-                            Err(fallback_error)
-                        }
-                        Err(fallback_error) => {
-                            if !self
-                                .cancelled_sessions
-                                .lock()
-                                .contains(&selected.session_id)
-                            {
-                                self.pin_fallback(
-                                    &selected.session_id,
-                                    &selected.generation,
-                                    &session.generation,
-                                );
-                            }
-                            Err(fallback_error).with_context(|| {
-                                format!("fallback after generation launch failed: {error}")
-                            })
-                        }
-                    }
+                    self.run_session_failure_fallback(&selected, &session.generation, error)
+                        .await
                 } else {
                     Err(error)
                 }
@@ -2789,7 +2726,7 @@ impl Broker {
     }
 
     async fn spawn_and_wait_ready(
-        &self,
+        self: &Arc<Self>,
         session: &StartSession,
         fallback_from_quarantine: bool,
     ) -> Result<()> {
@@ -3061,6 +2998,9 @@ impl Broker {
             self.fallback_pins
                 .lock()
                 .retain(|session_id, _| retained.contains(session_id));
+            self.session_failure_fallback_pins
+                .lock()
+                .retain(|session_id| retained.contains(session_id));
         }
         if let Some(previous) = previous {
             tracing::info!(%previous, desired = %generation, "worker generation rollout started");
@@ -3324,7 +3264,19 @@ impl Broker {
         {
             return;
         }
-        let old_generation = self.replacing.lock().remove(&session_id);
+        let old_generation = {
+            let mut replacing = self.replacing.lock();
+            if replacing
+                .get(&session_id)
+                .is_some_and(|(_, expected_epoch)| expected_epoch == &peer.epoch)
+            {
+                replacing
+                    .remove(&session_id)
+                    .map(|(generation, _)| generation)
+            } else {
+                None
+            }
+        };
         let Some(old_generation) = old_generation else {
             let mut snapshot = peer.snapshot;
             snapshot.state = WorkerState::Crashed;
@@ -3339,31 +3291,12 @@ impl Broker {
             });
             return;
         };
-        let Some(mut session) = self.sessions.lock().get(&session_id).cloned() else {
-            return;
-        };
-        // A thread that never received a prompt has no Provider transcript;
-        // the replacement opens a fresh one instead of a strict resume.
-        session.agent_session_id = peer.snapshot.resumable_agent_session_id();
-        session.generation = self.desired_generation.lock().clone();
-        session.fallback_for = None;
-        if !self.launching.lock().insert(session_id.clone()) {
-            return;
-        }
-        self.session_states
-            .lock()
-            .insert(session_id.clone(), WorkerState::Starting);
-        self.sessions
-            .lock()
-            .insert(session_id.clone(), session.clone());
-        let broker = Arc::clone(self);
-        tokio::spawn(async move {
-            let _permit = broker.cutover_permit(&session_id).await;
-            let result = broker
-                .spawn_with_fallback(session, Some(old_generation.clone()))
-                .await;
-            broker.finish_rollout_launch(&session_id, &old_generation, result);
-        });
+        self.spawn_rollout_after_disconnect(
+            session_id,
+            old_generation,
+            peer.snapshot.resumable_agent_session_id(),
+        )
+        .await;
     }
 
     /// Wait for a rollout launch slot. A session someone is waiting on (a
@@ -3401,7 +3334,7 @@ impl Broker {
     }
 
     async fn spawn_worker(
-        &self,
+        self: &Arc<Self>,
         session: &StartSession,
         fallback_from_quarantine: bool,
     ) -> Result<(
@@ -5584,6 +5517,7 @@ mod tests {
             native_fork: None,
         };
 
+        let broker = Arc::new(broker);
         let error = tokio::time::timeout(
             Duration::from_secs(1),
             broker.spawn_and_wait_ready(&session, false),
@@ -5696,7 +5630,11 @@ mod tests {
             })
         ));
         assert_eq!(
-            broker.replacing.lock().get("sess-1").map(String::as_str),
+            broker
+                .replacing
+                .lock()
+                .get("sess-1")
+                .map(|(generation, _)| generation.as_str()),
             Some("gen-1")
         );
     }
@@ -5800,7 +5738,11 @@ mod tests {
             })
         ));
         assert_eq!(
-            broker.replacing.lock().get("sess-1").map(String::as_str),
+            broker
+                .replacing
+                .lock()
+                .get("sess-1")
+                .map(|(generation, _)| generation.as_str()),
             Some("gen-1")
         );
     }
@@ -6559,6 +6501,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn failed_start_cleanup_fences_fallback_until_explicit_reconciliation() {
         let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
         broker
             .direct_worker_pids
             .lock()
@@ -8917,10 +8860,10 @@ mod tests {
             "sess-terminal".to_owned(),
             "stale terminal failure".to_owned(),
         );
-        broker
-            .replacing
-            .lock()
-            .insert("sess-terminal".to_owned(), "gen-retired".to_owned());
+        broker.replacing.lock().insert(
+            "sess-terminal".to_owned(),
+            ("gen-retired".to_owned(), "epoch-retired".to_owned()),
+        );
 
         broker
             .ensure_session(StartSession {
@@ -9827,6 +9770,7 @@ mod tests {
             native_fork: None,
         };
 
+        let broker = Arc::new(broker);
         let (replacement_exit, _spawned_launch_guard) = broker
             .spawn_worker(&session, false)
             .await
@@ -10502,7 +10446,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_launch_does_not_quarantine_the_worker_generation() {
-        let broker = Broker::new(MachineBrokerArgs {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
@@ -10513,7 +10457,7 @@ mod tests {
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
             memory_relay: None,
-        });
+        }));
         broker
             .cancelled_sessions
             .lock()
@@ -10557,7 +10501,7 @@ mod tests {
     #[tokio::test]
     async fn named_cutover_falls_back_only_to_its_own_retired_generation() {
         let temp = tempfile::tempdir().unwrap();
-        let broker = Broker::new(MachineBrokerArgs {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
@@ -10575,7 +10519,7 @@ mod tests {
             worker_ready_timeout: Duration::from_millis(10),
             call_context_root: None,
             memory_relay: None,
-        });
+        }));
         *broker.previous_generation.lock() = Some("gen-machine".to_owned());
         let named = StartSession {
             session_id: "sess-named".to_owned(),
