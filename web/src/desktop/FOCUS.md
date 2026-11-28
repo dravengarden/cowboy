@@ -1106,7 +1106,7 @@ Every Desktop workspace region (`sessions.list`, `sessions.rail`,
 `conversation.questions`, `review.navigator`, `review.document`,
 `review.inspector`, `tasks.roster`, and `tasks.reader`) uses the single
 paint-only perimeter focus primitive from `desktopFocusPrimitives.ts` (`::after`
-`inset: 0; pointer-events: none` with a 1.5px primary-mixed edge and soft inner
+`inset: 0; box-sizing: border-box; pointer-events: none` with a hardware-snapped 1px restrained primary-mixed border and subtle feathered inner
 halo). Focus never alters layout geometry, never tints the main reading or
 writing canvases, and stays pinned to non-scrolling region hosts while inner
 content scrolls. Pane switching and header clicks always resolve to a visible

@@ -1640,6 +1640,16 @@ export async function runDraftDocumentsBrowserConformance(
             `Prompt and Conversation pane headers align pixel-for-pixel (${promptBottom.toFixed(2)} vs ${convBottom.toFixed(2)})`,
           );
         }
+        const promptPaneEl = container.querySelector<HTMLElement>('[data-desktop-pane="prompt"]');
+        const composerEl = container.querySelector<HTMLElement>('[data-desktop-region="prompt.composer"]');
+        if (promptPaneEl && composerEl) {
+          const paneBottom = promptPaneEl.getBoundingClientRect().bottom;
+          const compBottom = composerEl.getBoundingClientRect().bottom;
+          check(
+            Math.abs(paneBottom - compBottom) <= 0.5,
+            `Prompt composer sits flush to the bottom hairline with no dead gap (pane=${paneBottom.toFixed(2)} vs composer=${compBottom.toFixed(2)})`,
+          );
+        }
         const assertFocusInvariant = async (targetRegion: (typeof regions)[number]) => {
           const targetEl = container.querySelector<HTMLElement>(`[data-desktop-region="${targetRegion}"]`)!;
           targetEl.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0 }));
@@ -1654,15 +1664,28 @@ export async function runDraftDocumentsBrowserConformance(
             `strict single-focus invariant on ${targetRegion} (count=${String(focusedAll.length)})`,
           );
           const after = getComputedStyle(targetEl, "::after");
+          const sameBorderWidths =
+            after.borderTopWidth === "1px" &&
+            after.borderRightWidth === "1px" &&
+            after.borderBottomWidth === "1px" &&
+            after.borderLeftWidth === "1px";
+          const sameBorderColors =
+            after.borderLeftColor === after.borderRightColor &&
+            after.borderTopColor === after.borderBottomColor &&
+            after.borderLeftColor === after.borderTopColor &&
+            after.borderLeftColor !== "rgba(0, 0, 0, 0)";
           check(
-            after.boxShadow !== "none" && after.boxShadow.includes("inset") && after.pointerEvents === "none",
-            `${targetRegion} paints the paint-only ::after perimeter frame (${after.boxShadow})`,
+            sameBorderWidths && sameBorderColors && after.boxShadow !== "none" && after.boxShadow.includes("inset") && after.pointerEvents === "none",
+            `${targetRegion} paints a symmetrical 1px ::after perimeter border + soft inset glow (widths=${after.borderTopWidth}/${after.borderRightWidth}/${after.borderBottomWidth}/${after.borderLeftWidth}, color=${after.borderLeftColor}, shadow=${after.boxShadow})`,
           );
           for (const other of regions) {
             if (other === targetRegion) continue;
             const otherEl = container.querySelector<HTMLElement>(`[data-desktop-region="${other}"]`)!;
             await until(
-              () => getComputedStyle(otherEl, "::after").boxShadow === "none",
+              () => {
+                const cs = getComputedStyle(otherEl, "::after");
+                return cs.boxShadow === "none" && cs.borderLeftColor === "rgba(0, 0, 0, 0)";
+              },
               `unfocused ${other} clears its perimeter frame when ${targetRegion} owns focus`,
             );
           }

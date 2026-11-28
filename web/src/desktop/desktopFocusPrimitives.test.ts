@@ -21,9 +21,11 @@ test("desktopFocusPrimitives applies one paint-only perimeter frame to every Des
   const dark = createTheme({ palette: { mode: "dark", primary: { main: "#b99af3" } } });
 
   expect(desktopFocusEdgeColor(light)).toContain("color-mix(in srgb");
+  expect(desktopFocusEdgeColor(light)).toContain("38%");
   expect(desktopFocusEdgeColor(dark)).toContain("color-mix(in srgb");
-  expect(desktopRegionFocusBoxShadow(light)).toContain("inset 0 0 0 1.5px");
-  expect(desktopRegionFocusBoxShadow(dark)).toContain("inset 0 0 0 4px");
+  expect(desktopFocusEdgeColor(dark)).toContain("44%");
+  expect(desktopRegionFocusBoxShadow(light)).toContain("inset 0 0 6px 0");
+  expect(desktopRegionFocusBoxShadow(dark)).toContain("inset 0 0 6px 0");
   expect(desktopFocusHaloColor(light)).toContain("rgba");
   expect(desktopAuxRegionFocusBg(dark)).toContain("rgba");
   expect(desktopControlFocusRing(light)).toContain("0 0 0 2px");
@@ -35,13 +37,18 @@ test("desktopFocusPrimitives applies one paint-only perimeter frame to every Des
   expect(root["& [data-desktop-region]"]).toBeDefined();
   expect(root["& [data-desktop-region][data-desktop-focused='true']::after"]).toBeDefined();
 
-  // Base `::after` overlay must be strictly paint-only (zero layout shift)
+  // Base `::after` overlay must be strictly paint-only with hardware-snapped 1px border (zero layout shift)
   const regionRule = root["& [data-desktop-region]"] as Record<string, unknown>;
   const afterRule = regionRule["&::after"] as Record<string, unknown>;
   expect(afterRule.position).toBe("absolute");
   expect(afterRule.inset).toBe(0);
+  expect(afterRule.boxSizing).toBe("border-box");
+  expect(afterRule.border).toBe("1px solid transparent");
   expect(afterRule.pointerEvents).toBe("none");
   expect(afterRule.borderRadius).toBe("inherit");
+  const focusedAfter = root["& [data-desktop-region][data-desktop-focused='true']::after"] as Record<string, unknown>;
+  expect(focusedAfter.borderColor).toBe(desktopFocusEdgeColor);
+  expect(focusedAfter.boxShadow).toBe(desktopRegionFocusBoxShadow);
 });
 
 test("all Desktop workspaces mount desktopFocusRootSx, avoid duplicate DraftEditor regions, and keep scrollable regions wrapped cleanly", async () => {

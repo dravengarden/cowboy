@@ -13,32 +13,32 @@
 //   3. Scroll stability: every `[data-desktop-region]` is a non-scrolling
 //      frame host so its `::after` perimeter stays pinned to the region
 //      viewport while inner lists, transcripts, or editors scroll.
-//   4. Layered hierarchy: outer 1.5px perimeter frame (region) + calm pane
-//      header indicator (pane) + inner tonal/bar cursor (focused item).
+//   4. Layered hierarchy: hardware-snapped 1px perimeter frame + whisper-soft
+//      feathered inner bloom (region) + calm pane header indicator (pane) +
+//      inner tonal/bar cursor (focused item).
 
 import { alpha, type Theme } from "@mui/material";
-import { desktopFocusFill } from "../theme";
+import { desktopFocusBoundary, desktopFocusFill } from "../theme";
 
-/** Opaque primary-mixed accent edge so the perimeter reads with identical
- *  contrast over white canvases, shaded headers, companion rails, and dark
- *  editor backgrounds. */
+/** Opaque restrained primary-mixed accent edge so the perimeter stays calm and
+ *  understated while remaining immediately discernible over white canvases,
+ *  shaded headers, companion rails, and dark editor backgrounds. */
 export function desktopFocusEdgeColor(theme: Theme): string {
-  const weight = theme.palette.mode === "dark" ? 68 : 56;
-  return `color-mix(in srgb, ${theme.palette.primary.main} ${String(weight)}%, ${theme.palette.background.default})`;
+  return desktopFocusBoundary(theme);
 }
 
-/** Soft inner halo paired with the crisp 1.5px perimeter edge so peripheral
- *  vision locates the active region immediately on wide displays. */
+/** Whisper-soft inner bloom tint paired with the pixel-snapped 1px perimeter
+ *  border so active focus reads calmly without a harsh solid band. */
 export function desktopFocusHaloColor(theme: Theme): string {
   return alpha(
     theme.palette.primary.main,
-    theme.palette.mode === "dark" ? 0.14 : 0.085,
+    theme.palette.mode === "dark" ? 0.11 : 0.065,
   );
 }
 
-/** Paint-only inset perimeter frame for the single focused Desktop region. */
+/** Paint-only feathered inset glow paired with the 1px ::after border. */
 export function desktopRegionFocusBoxShadow(theme: Theme): string {
-  return `inset 0 0 0 1.5px ${desktopFocusEdgeColor(theme)}, inset 0 0 0 4px ${desktopFocusHaloColor(theme)}`;
+  return `inset 0 0 6px 0 ${desktopFocusHaloColor(theme)}`;
 }
 
 /** Subtle surface lift for bounded auxiliary cards (Plan, Queue, Drafts,
@@ -74,14 +74,17 @@ export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknow
         content: '""',
         position: "absolute",
         inset: 0,
+        boxSizing: "border-box",
+        border: "1px solid transparent",
         borderRadius: "inherit",
         pointerEvents: "none",
         zIndex: 3,
         boxShadow: "none",
-        transition: "box-shadow 140ms ease",
+        transition: "border-color 140ms ease, box-shadow 140ms ease",
       },
     },
     "& [data-desktop-region][data-desktop-focused='true']::after": {
+      borderColor: desktopFocusEdgeColor,
       boxShadow: desktopRegionFocusBoxShadow,
       "@media (forced-colors: active)": {
         boxShadow: "none",

@@ -1127,11 +1127,13 @@ export function ComposerWorkspace({
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
-        pb: navbarAtBottom
+        pb: desktop && column
+          ? 0
+          : navbarAtBottom
           ? `${mobileComposerKeyboardGap}px`
           : { xs: "max(env(safe-area-inset-bottom), 10px)", sm: 1.5 },
-        pl: `max(env(safe-area-inset-left), ${padding}px)`,
-        pr: `max(env(safe-area-inset-right), ${padding}px)`,
+        pl: desktop && column ? 0 : `max(env(safe-area-inset-left), ${padding}px)`,
+        pr: desktop && column ? 0 : `max(env(safe-area-inset-right), ${padding}px)`,
         borderColor: "divider",
         // TRANSPARENT in BOTH modes. The composer floats over ONE frosted slab
         // rendered behind it in App.tsx (the bottom slab); it therefore adds no own
