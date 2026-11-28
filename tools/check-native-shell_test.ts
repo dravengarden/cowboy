@@ -79,6 +79,20 @@ for (const [name, path, before, after, message] of [
     "iOS needs a static single-scene",
   ],
   [
+    "missing iOS custom URL scheme",
+    "tauri/Info.ios.plist",
+    "<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>top.thundersparrow.cowboy</string>",
+    "<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>other.scheme</string>",
+    "iOS Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy",
+  ],
+  [
+    "missing macOS custom URL scheme",
+    "tauri/Info.plist",
+    "<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>top.thundersparrow.cowboy</string>",
+    "<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>other.scheme</string>",
+    "macOS Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy",
+  ],
+  [
     "empty Scene configurations",
     "tauri/Info.ios.plist",
     "<key>UIWindowSceneSessionRoleApplication</key>",

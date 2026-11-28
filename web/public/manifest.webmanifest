@@ -11,6 +11,13 @@
   "orientation": "any",
   "background_color": "#211B34",
   "theme_color": "#211B34",
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
+  },
+  "handle_links": "preferred",
   "icons": [
     {
       "src": "/app-icons/v10/curlseal-026/icon-180.png",

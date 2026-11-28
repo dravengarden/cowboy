@@ -58,6 +58,21 @@
 		<string>localhost</string>
 		<string>stormbird.xyz</string>
 	</array>
+	<!-- Reverse-DNS custom URL scheme for bare app activation from trusted
+	     launchers such as Cardea (`top.thundersparrow.cowboy://`). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>top.thundersparrow.cowboy</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>top.thundersparrow.cowboy</string>
+			</array>
+		</dict>
+	</array>
 	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

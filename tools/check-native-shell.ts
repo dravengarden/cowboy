@@ -84,6 +84,18 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "iOS scene lifecycle requires Tao 0.37.1 or newer",
   );
   const iosInfo = await read("tauri/Info.ios.plist");
+  const macInfo = await read("tauri/Info.plist");
+  for (const [label, plist] of [
+    ["iOS", iosInfo],
+    ["macOS", macInfo],
+  ] as const) {
+    requireValue(
+      /<key>CFBundleURLTypes<\/key>[\s\S]*?<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>top\.thundersparrow\.cowboy<\/string>\s*<\/array>/.test(
+        plist,
+      ),
+      `${label} Info.plist must declare reverse-DNS URL scheme top.thundersparrow.cowboy`,
+    );
+  }
   const conformanceInfo = await read("apple/Conformance/Info.plist");
   const conformanceMain = await read("apple/Conformance/main.mm");
   requireValue(
@@ -176,6 +188,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "tauri/src/lib.rs",
     "tauri/src/main.rs",
     "tauri/Info.ios.plist",
+    "tauri/Info.plist",
     "apple/project.yml",
     "apple/ExportOptions.plist",
     "apple/LaunchScreen.storyboard",
