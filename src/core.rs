@@ -1567,10 +1567,6 @@ struct HubInner {
     /// enqueueing the accumulated string on every token.
     history_reducer: Mutex<EventReducer>,
     runtime_projection: parking_lot::RwLock<()>,
-    /// Highest processed runtime event sequence per `(session_id, worker_epoch)`
-    /// preserved across Machine tunnel replacements so retrying one session's
-    /// admission cannot re-project already-handled events for other sessions (R18-H3).
-    runtime_event_highwaters: Mutex<HashMap<(String, String), u64>>,
     /// Latest subagent observations per session (docs/background-tasks.md):
     /// the bootstrap `subagent_state` and lookups read it beside the store.
     /// Never held with `sessions`.
@@ -1834,7 +1830,6 @@ impl Hub {
                 lost_execution: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 runtime_projection: parking_lot::RwLock::new(()),
-                runtime_event_highwaters: Mutex::new(HashMap::new()),
                 background: Mutex::new(HashMap::new()),
                 boot_epoch: {
                     let mut bytes = [0u8; 8];
@@ -3933,6 +3928,62 @@ impl Hub {
         true
     }
 
+    /// I4: decide whether a subagent snapshot is a new observation, and
+    /// atomically record its terminal occurrence identity. `None` drops it.
+    fn accept_subagent_snapshot(
+        &self,
+        session_id: &str,
+        child: &str,
+        update: &serde_json::Value,
+        seq: u64,
+    ) -> Option<SubagentEnding> {
+        use crate::transcript_anchors::{METRICS, SnapshotVerdict, judge_snapshot, mark_of};
+        let mut mark = mark_of(update);
+        let mut background = self.inner.background.lock();
+        let ledger = background.entry(session_id.to_owned()).or_default();
+        let previous = ledger.marks.get(child);
+        let ending = match (mark.terminal, previous) {
+            (false, previous) => {
+                mark.terminal_seq = None;
+                SubagentEnding::Working {
+                    first_snapshot: previous.is_none(),
+                    after_idle: previous.is_some_and(|previous| {
+                        previous.terminal
+                            && mark.incarnation.is_some()
+                            && previous.incarnation == mark.incarnation
+                    }),
+                }
+            }
+            (true, Some(previous)) if previous.terminal => {
+                mark.terminal_seq = previous.terminal_seq;
+                SubagentEnding::AlreadyEnded(previous.terminal_seq)
+            }
+            (true, _) => {
+                mark.terminal_seq = Some(seq);
+                SubagentEnding::Ended(seq)
+            }
+        };
+        match judge_snapshot(previous, &mark) {
+            SnapshotVerdict::Duplicate => {
+                METRICS.duplicates.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            SnapshotVerdict::Stale => {
+                METRICS.revision_stale.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(session = %session_id, child, "dropping an older subagent revision");
+                return None;
+            }
+            SnapshotVerdict::Conflict => {
+                METRICS.revision_conflicts.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(session = %session_id, child, revision = mark.revision,
+                    "subagent revision conflict: equal revision, different payload");
+            }
+            SnapshotVerdict::Accept => {}
+        }
+        ledger.marks.insert(child.to_owned(), mark);
+        Some(ending)
+    }
+
     fn record_subagent_observation(
         &self,
         session_id: &str,
@@ -3976,16 +4027,6 @@ impl Hub {
                 .fetch_add(1, Ordering::Relaxed);
         }
         ledger.incarnation = Some(incarnation.to_owned());
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn worker_incarnation_for_test(&self, session_id: &str) -> Option<String> {
-        self.inner
-            .background
-            .lock()
-            .get(session_id)
-            .and_then(|ledger| ledger.incarnation.clone())
     }
 
     /// This Controller process's bootstrap epoch.

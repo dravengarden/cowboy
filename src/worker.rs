@@ -1626,6 +1626,7 @@ mod tests {
             Some("session is waiting for a permission decision")
         );
         shared.snapshot.lock().pending_permissions.clear();
+        shared.outbox.lock().clear();
 
         let Frame::CommandAck { accepted, .. } = handle_command(
             &shared,
@@ -1686,7 +1687,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_crashed_waits_for_unacknowledged_outbox_events_before_exiting() {
+    async fn drain_crashed_refuses_unacknowledged_outbox_and_accepts_once_acked() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("broker.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -1764,17 +1765,14 @@ mod tests {
             panic!("drain ack");
         };
         assert_eq!(command_id, "dc-outbox");
-        assert!(accepted);
-        assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
-        shared.emit(RuntimeEvent::Status {
-            state: WorkerState::Exited,
-            detail: None,
-        });
-        done_tx.send(()).await.unwrap();
+        assert!(
+            !accepted,
+            "DrainCrashed must refuse while outbox still has unacknowledged events"
+        );
+        assert!(cmd_rx.try_recv().is_err());
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!worker_task.is_finished());
-
+        // Once the Controller ACKs the buffered event via normal replay, a new
+        // DrainCrashed command is accepted and completes cleanly.
         write_frame(
             &mut writer,
             &Frame::Ack {
@@ -1785,6 +1783,37 @@ mod tests {
         )
         .await
         .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        write_frame(
+            &mut writer,
+            &Frame::WorkerCommand {
+                session_id: shared.session_id.clone(),
+                command: WorkerCommand::DrainCrashed {
+                    command_id: "dc-outbox-2".into(),
+                    worker_epoch: epoch.clone(),
+                    acknowledged_uncertain_sequence: 0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::CommandAck {
+            command_id,
+            accepted,
+            ..
+        }) = read_non_heartbeat(&mut reader).await
+        else {
+            panic!("second drain ack");
+        };
+        assert_eq!(command_id, "dc-outbox-2");
+        assert!(accepted);
+        assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Exited,
+            detail: None,
+        });
+        done_tx.send(()).await.unwrap();
+
         let frame = read_non_heartbeat(&mut reader).await;
         let Some(Frame::CrashedDrainCompleted {
             session_id: done_session,
@@ -1796,7 +1825,7 @@ mod tests {
         };
         assert_eq!(done_session, shared.session_id);
         assert_eq!(done_epoch, epoch);
-        assert_eq!(done_cmd.as_deref(), Some("dc-outbox"));
+        assert_eq!(done_cmd.as_deref(), Some("dc-outbox-2"));
         let outcome = tokio::time::timeout(Duration::from_secs(5), worker_task)
             .await
             .expect("worker drained")
@@ -1971,6 +2000,18 @@ mod tests {
             };
             write_frame(
                 &mut writer,
+                &Frame::Ack {
+                    session_id: shared.session_id.clone(),
+                    worker_epoch: epoch.clone(),
+                    runtime_seq: unacked_seq,
+                },
+            )
+            .await
+            .unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let pub_guard = shared.crashed_drain.enter_event_publisher(&shared);
+            write_frame(
+                &mut writer,
                 &Frame::WorkerCommand {
                     session_id: shared.session_id.clone(),
                     command: WorkerCommand::DrainCrashed {
@@ -1998,12 +2039,12 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             assert_eq!(shared.crashed_drain.agent_settled(), Some(true));
-        }
+            drop(reader);
+            drop(writer);
 
-        // Connection 2: broker replays DrainCrashed (simulating lost ACK), worker
-        // replays accepted=true, broker ACKs outbox, and worker MUST still emit
-        // CrashedDrainCompleted instead of misreading closed done_rx as a panic!
-        {
+            // Connection 2: broker replays DrainCrashed (simulating lost ACK), worker
+            // replays accepted=true, settlement publisher finishes, and worker MUST
+            // still emit CrashedDrainCompleted instead of misreading closed done_rx!
             let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
                 .await
                 .expect("worker reconnected")
@@ -2025,12 +2066,6 @@ mod tests {
             let Some(Frame::Snapshot { .. }) = read_non_heartbeat(&mut reader).await else {
                 panic!("snapshot 2");
             };
-            let Some(Frame::WorkerEvent { runtime_seq, .. }) =
-                read_non_heartbeat(&mut reader).await
-            else {
-                panic!("replayed event 2");
-            };
-            assert_eq!(runtime_seq, unacked_seq);
 
             write_frame(
                 &mut writer,
@@ -2057,17 +2092,7 @@ mod tests {
             assert_eq!(command_id, "dc-reconnect");
             assert!(accepted);
             assert_eq!(reason, None);
-
-            write_frame(
-                &mut writer,
-                &Frame::Ack {
-                    session_id: shared.session_id.clone(),
-                    worker_epoch: epoch.clone(),
-                    runtime_seq: unacked_seq,
-                },
-            )
-            .await
-            .unwrap();
+            drop(pub_guard);
             let frame = read_non_heartbeat(&mut reader).await;
             assert!(
                 matches!(

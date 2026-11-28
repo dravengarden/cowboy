@@ -309,7 +309,7 @@ pub(super) fn handle_drain_crashed(
         );
     }
     let refusal = {
-        let _outbox = shared.outbox.lock();
+        let outbox = shared.outbox.lock();
         let snapshot = shared.snapshot.lock();
         if snapshot.worker_epoch != worker_epoch {
             Some("crashed worker epoch changed")
@@ -337,6 +337,10 @@ pub(super) fn handle_drain_crashed(
             acknowledged_uncertain_sequence,
         ) {
             Some("crashed worker has unacknowledged uncertain effect")
+        } else if !outbox.is_empty() {
+            // Require all buffered worker events to be acknowledged via normal
+            // ordered replay before accepting a cooperative crashed drain.
+            Some("crashed worker has unacknowledged events")
         } else {
             // Do not latch `snapshot.drain_requested = true` on crashed drain:
             // the broker projects `drain_requested = true` on wire snapshots

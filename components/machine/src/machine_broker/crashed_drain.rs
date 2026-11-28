@@ -544,6 +544,16 @@ impl Broker {
         {
             state.trusted_epoch_pids.remove(session_id);
         }
+        // Invalidate any prior epoch's confirmed drain receipt once a successor
+        // takes ownership so the old retirement can never suppress the
+        // successor's dormant handover snapshot (R19-M2).
+        if state
+            .recently_drained
+            .get(session_id)
+            .is_some_and(|(drained_epoch, _, _)| drained_epoch != epoch)
+        {
+            state.recently_drained.remove(session_id);
+        }
         // Retain the session-scoped highest unpersisted `uncertain_effect`
         // across worker replacement and reset until the owner explicitly
         // acknowledges it or deletes the session (R9-H3).
@@ -2752,6 +2762,38 @@ mod tests {
         assert!(
             saw_drained,
             "confirmed retirement must replay on handover even after worker exited before Welcome (R18-M1)"
+        );
+
+        // R19-M2: once a successor worker registers for `s-gone`, the prior
+        // epoch's confirmed receipt MUST be invalidated so it can never
+        // suppress the successor's dormant handover snapshot.
+        let (succ_tx, _succ_rx) = mpsc::unbounded_channel();
+        let mut successor = account_unit::new_registered_peer(
+            "s-gone",
+            "100-successor",
+            "gen-1",
+            None,
+            99,
+            succ_tx,
+            true,
+            false,
+        );
+        let _ = broker.rebind_crashed_drain_on_reconnect(
+            "s-gone",
+            "100-successor",
+            99,
+            None,
+            None,
+            &mut successor,
+        );
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .recently_drained
+                .contains_key("s-gone"),
+            "successor registration must invalidate prior epoch's recently_drained receipt (R19-M2)"
         );
     }
 }

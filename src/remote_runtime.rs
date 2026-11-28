@@ -12,7 +12,7 @@ use declarations::{resend_declaration, update_declaration};
 #[cfg(test)]
 use snapshot::apply_snapshot;
 pub use snapshot::{CrashedWorkerObservation, CrashedWorkerSighting};
-use snapshot::{project_snapshot, project_snapshot_with_protocol};
+use snapshot::{begin_reset, project_snapshot, project_snapshot_with_protocol, queue_permission};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -151,14 +151,9 @@ pub struct Shared {
     declaration_repairs: Mutex<HashMap<String, String>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
-    /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
+    /// Verified draining crashed epochs (for cleanup-only execution requests
+    /// and duplicate drain suppression).
     draining_crashed_epochs: Mutex<HashMap<String, snapshot::DrainingCrashedEpoch>>,
-    draining_replay_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
-    /// Untrusted snapshots whose admission was transiently deferred (e.g.
-    /// store outage on reconnect) so subsequent replayed events retry full
-    /// admission instead of failing `PermanentlyDenied` and losing events (R18-H1).
-    deferred_admission_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
-    blocked_draining_epochs: Mutex<HashSet<(String, String)>>,
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
@@ -317,9 +312,6 @@ impl RemoteRuntime {
                 workers: Mutex::new(HashMap::new()),
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(HashMap::new()),
-                draining_replay_snapshots: Mutex::new(HashMap::new()),
-                deferred_admission_snapshots: Mutex::new(HashMap::new()),
-                blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
@@ -403,11 +395,6 @@ impl RemoteRuntime {
                 draining_crashed_epochs: Mutex::new(snapshot::seed_draining_crashed_epochs(
                     &bootstrap.workers,
                 )),
-                draining_replay_snapshots: Mutex::new(snapshot::seed_draining_replay_snapshots(
-                    &bootstrap.workers,
-                )),
-                deferred_admission_snapshots: Mutex::new(HashMap::new()),
-                blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(
@@ -974,8 +961,7 @@ impl RemoteRuntime {
         let admitted = native_admission::event(&self.shared, &worker.session_id, epoch, || {
             projected.store(true, Ordering::Release);
         })
-        .await
-        .is_admitted();
+        .await;
         assert_eq!(admitted, projected.load(Ordering::Acquire));
         admitted
     }
@@ -1360,12 +1346,12 @@ impl RemoteRuntime {
     }
 
     pub fn stop(&self, session_id: &str) {
+        snapshot::discard_pending_crashed_drain(&self.shared, session_id, true);
         fail_config_startup(
             &self.shared,
             session_id,
             "session stopped before configuration completed",
         );
-        snapshot::discard_pending_crashed_drain(&self.shared, session_id, true);
         self.shared.declarations.lock().remove(session_id);
         self.shared.config_sync_epochs.lock().remove(session_id);
         let command_id = self.next_id("stop");
@@ -1395,6 +1381,7 @@ impl RemoteRuntime {
             .pending
             .lock()
             .cancel_pending_hibernation(&session_id);
+        snapshot::discard_pending_crashed_drain(&self.shared, &session_id, false);
         let same_provider_release =
             self.shared
                 .workers
@@ -1406,7 +1393,6 @@ impl RemoteRuntime {
                             && previous.provider_version == session.provider_version
                     })
                 });
-        snapshot::discard_pending_crashed_drain(&self.shared, &session_id, false);
         begin_reset(&self.shared, &session_id);
         self.shared
             .config_startups
@@ -1675,45 +1661,8 @@ async fn connect_once_stream(
 /// process startup. Until this settles, `Shared.workers` intentionally keeps its
 /// last snapshot so a Machine broker restart cannot race an `EnsureSession` into
 /// spawning a duplicate owner for a still-running turn.
-/// Fold a post-Welcome settle frame into initial bootstrap `workers` ONLY for
-/// newly discovered / previously ownerless sessions that have no buffered
-/// `WorkerEvent` or `CrashedWorkerDrained` ahead of them. Connected `Welcome`
-/// snapshots (including `crashed_drain_active: true`) are never overwritten by
-/// a later settle snapshot ahead of buffered replay events; all settle frames
-/// still replay in exact wire order via `buffered` (R11-H4).
-fn fold_settle_frame(
-    workers: &mut Vec<WorkerSnapshot>,
-    seen_events: &mut HashSet<String>,
-    frame: &Frame,
-) {
-    match frame {
-        Frame::WorkerEvent { session_id, .. } | Frame::CrashedWorkerDrained { session_id, .. } => {
-            seen_events.insert(session_id.clone());
-        }
-        Frame::Snapshot { worker } => {
-            if seen_events.contains(&worker.session_id) {
-                return;
-            }
-            if let Some(existing) = workers
-                .iter_mut()
-                .find(|existing| existing.session_id == worker.session_id)
-            {
-                if !existing.has_connected_owner() {
-                    existing.clone_from(worker);
-                }
-            } else {
-                workers.push((**worker).clone());
-            }
-        }
-        _ => {}
-    }
-}
-
-async fn settle_frames(
-    mut reader: FrameReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
-    mut workers: Vec<WorkerSnapshot>,
-    protocol: u16,
+async fn connect_settled(
+    socket: &Path,
 ) -> Result<(
     FrameReader<OwnedReadHalf>,
     OwnedWriteHalf,
@@ -1721,8 +1670,8 @@ async fn settle_frames(
     Vec<Frame>,
     u16,
 )> {
+    let (mut reader, writer, mut workers, protocol) = connect_once(socket).await?;
     let mut buffered = Vec::new();
-    let mut seen_events = HashSet::new();
     let now = tokio::time::Instant::now();
     let minimum_settle = now + Duration::from_millis(500);
     let deadline = now + Duration::from_secs(1);
@@ -1734,7 +1683,16 @@ async fn settle_frames(
         let quiet = remaining.min(Duration::from_millis(250));
         match tokio::time::timeout(quiet, reader.next()).await {
             Ok(Ok(Some(frame))) => {
-                fold_settle_frame(&mut workers, &mut seen_events, &frame);
+                if let Frame::Snapshot { worker } = &frame {
+                    if let Some(existing) = workers
+                        .iter_mut()
+                        .find(|existing| existing.session_id == worker.session_id)
+                    {
+                        existing.clone_from(worker);
+                    } else {
+                        workers.push((**worker).clone());
+                    }
+                }
                 buffered.push(frame);
             }
             Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
@@ -1746,19 +1704,6 @@ async fn settle_frames(
     Ok((reader, writer, workers, buffered, protocol))
 }
 
-async fn connect_settled(
-    socket: &Path,
-) -> Result<(
-    FrameReader<OwnedReadHalf>,
-    OwnedWriteHalf,
-    Vec<WorkerSnapshot>,
-    Vec<Frame>,
-    u16,
-)> {
-    let (reader, writer, workers, protocol) = connect_once(socket).await?;
-    settle_frames(reader, writer, workers, protocol).await
-}
-
 async fn connect_settled_stream(
     stream: UnixStream,
 ) -> Result<(
@@ -1768,8 +1713,38 @@ async fn connect_settled_stream(
     Vec<Frame>,
     u16,
 )> {
-    let (reader, writer, workers, protocol) = connect_once_stream(stream).await?;
-    settle_frames(reader, writer, workers, protocol).await
+    let (mut reader, writer, mut workers, protocol) = connect_once_stream(stream).await?;
+    let mut buffered = Vec::new();
+    let now = tokio::time::Instant::now();
+    let minimum_settle = now + Duration::from_millis(500);
+    let deadline = now + Duration::from_secs(1);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let quiet = remaining.min(Duration::from_millis(250));
+        match tokio::time::timeout(quiet, reader.next()).await {
+            Ok(Ok(Some(frame))) => {
+                if let Frame::Snapshot { worker } = &frame {
+                    if let Some(existing) = workers
+                        .iter_mut()
+                        .find(|existing| existing.session_id == worker.session_id)
+                    {
+                        existing.clone_from(worker);
+                    } else {
+                        workers.push((**worker).clone());
+                    }
+                }
+                buffered.push(frame);
+            }
+            Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) if tokio::time::Instant::now() < minimum_settle => {}
+            Err(_) => break,
+        }
+    }
+    Ok((reader, writer, workers, buffered, protocol))
 }
 
 async fn connection_manager(
@@ -1787,7 +1762,6 @@ async fn connection_manager(
             None => match connect_settled(&shared.socket).await {
                 Ok((reader, writer, workers, buffered, protocol)) => {
                     shared.protocol.store(protocol, Ordering::Release);
-                    snapshot::clear_blocked_draining_epochs(&shared);
                     merge_worker_snapshots_with_protocol(&shared, workers, protocol).await;
                     Ok((reader, writer, buffered, protocol))
                 }
@@ -1813,11 +1787,9 @@ async fn connection_manager(
         shared.account_stop_epoch.fetch_add(1, Ordering::AcqRel);
         notice_recovery::set_connected_if_active(&shared);
         shared.sent.lock().clear();
-        snapshot::clear_blocked_draining_epochs(&shared);
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
             tracing::warn!(error = %error, "Machine broker connection dropped");
         }
-        snapshot::clear_blocked_draining_epochs(&shared);
         notice_recovery::set_connected(&shared, false);
         if shared.shutdown.load(Ordering::Acquire) {
             return;
@@ -2006,6 +1978,14 @@ fn subagent_cancel_supported(shared: &Shared) -> bool {
 }
 
 fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
+    if matches!(command, CoreCommand::DrainCrashedWorker { .. })
+        && (shared.machine_protocol
+            < crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION
+            || shared.protocol.load(Ordering::Acquire)
+                < crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION)
+    {
+        return false;
+    }
     let planned = match command {
         CoreCommand::EnsureSession { session } => session.mcp_plan.is_some(),
         CoreCommand::RecoverExecutionSession { session, .. }
@@ -2027,14 +2007,6 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
         return false;
     }
     if matches!(command, CoreCommand::CancelSubagent { .. }) && !subagent_cancel_supported(shared) {
-        return false;
-    }
-    if matches!(command, CoreCommand::DrainCrashedWorker { .. })
-        && (shared.machine_protocol
-            < crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION
-            || shared.protocol.load(Ordering::Acquire)
-                < crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION)
-    {
         return false;
     }
     if shared.protocol.load(Ordering::Acquire)
@@ -2194,61 +2166,105 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &session_id, "worker event");
                 return Ok(());
             }
-            if snapshot::is_event_epoch_blocked(shared, &session_id, &worker_epoch) {
-                return Ok(());
-            }
             let key = (session_id.clone(), worker_epoch.clone());
-            if !snapshot::check_and_dedup_event_sequence(shared, &key, runtime_seq)? {
-                let mut undelivered_ack = None;
-                snapshot::observe_crashed_event(
-                    shared,
-                    &session_id,
-                    &worker_epoch,
-                    runtime_seq,
-                    &event,
+            let previous = shared.highwaters.lock().get(&key).copied();
+            // After a Cowboy restart the worker has already discarded every
+            // ACKed prefix, so the first replayed sequence may be greater than
+            // one. Once this controller observes a sequence, gaps are errors.
+            if let Some(previous) = previous
+                && runtime_seq > previous.saturating_add(1)
+            {
+                anyhow::bail!(
+                    "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
                 );
-                let admission = native_admission::event(shared, &session_id, &worker_epoch, || {
+            }
+            if previous.is_none_or(|previous| runtime_seq > previous) {
+                let mut undelivered_ack = None;
+                snapshot::observe_crashed_event(shared, &key, runtime_seq, &event);
+                let admitted = native_admission::event(shared, &session_id, &worker_epoch, || {
                     undelivered_ack =
                         notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
-                    // Exact turn-ID prompt retirement stays independent of Clear (R17-H2).
+                    // Account signals and uncertain effects of an admitted
+                    // epoch are observed even while its transcript is not
+                    // projected (a reset).
+                    // A turn ending retires its own pending prompt by turn id,
+                    // also when Clear fences the epoch that ran it.
+                    turn_end::signal(shared, &session_id, &event);
                     turn_end::ended(shared, &session_id, &event);
                     snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
                     let _projection = shared.hub.runtime_projection_guard();
-                    snapshot::signal_admitted_turn_end_locked(
-                        shared,
-                        &session_id,
-                        &worker_epoch,
-                        runtime_seq,
-                        &event,
-                    );
-                    snapshot::project_admitted_worker_event(
-                        shared,
-                        &key,
-                        &session_id,
-                        &worker_epoch,
-                        runtime_seq,
-                        &event,
-                        &diagnostics,
-                        &mut undelivered_ack,
-                    );
+                    let resetting = shared.resetting.lock().contains(&session_id);
+                    let stale_idle = matches!(
+                        event,
+                        RuntimeEvent::Status {
+                            state: WorkerState::Running | WorkerState::Draining,
+                            ..
+                        }
+                    ) && shared
+                        .workers
+                        .lock()
+                        .get(&session_id)
+                        .is_some_and(|worker| worker.current_turn_id.is_some());
+                    if stale_idle {
+                        tracing::warn!(
+                            session = %session_id,
+                            runtime_seq,
+                            "ignoring stale idle status while a newer turn is active"
+                        );
+                    } else if !resetting
+                        && snapshot::admits_event(shared, &session_id, &worker_epoch, &event)
+                    {
+                        if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
+                            telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
+                        }
+                        let auto_permission =
+                            snapshot::codex_full_access_permission(shared, &session_id, &event);
+                        let is_config_options =
+                            matches!(&event, RuntimeEvent::ConfigOptions { .. });
+                        resolve_steering_update(shared, &session_id, &event);
+                        update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
+                        if let RuntimeEvent::Status {
+                            state: WorkerState::Crashed | WorkerState::Exited,
+                            detail,
+                        } = &event
+                        {
+                            fail_config_startup(
+                                shared,
+                                &session_id,
+                                detail
+                                    .as_deref()
+                                    .unwrap_or("worker exited before configuration completed"),
+                            );
+                        }
+                        let worker = shared.workers.lock().get(&session_id).cloned();
+                        let idle_guard = worker
+                            .as_ref()
+                            .and_then(|worker| idle_snapshot_guard(shared, worker));
+                        if is_config_options && let Some(worker) = worker.as_ref() {
+                            sync_config_for_worker(shared, worker);
+                        }
+                        undelivered_ack = notice_recovery::project_worker_outcome(
+                            shared,
+                            &key,
+                            &session_id,
+                            runtime_seq,
+                            event.clone(),
+                            idle_guard,
+                            auto_permission,
+                        );
+                    }
                 })
                 .await;
-                snapshot::settle_draining_event_admission(
-                    shared,
-                    &session_id,
-                    &worker_epoch,
-                    admission,
-                )?;
                 notice_recovery::settle_event_undelivered(
                     shared,
                     &key,
                     runtime_seq,
                     &event,
-                    admission.is_admitted(),
+                    admitted,
                     undelivered_ack,
                 )
                 .await?;
-                snapshot::record_processed_event_sequence(shared, key, runtime_seq);
+                shared.highwaters.lock().insert(key, runtime_seq);
             }
             write_broker_frame(
                 writer,
@@ -2374,10 +2390,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
             }
-            if worker.crashed_drain_active && shared.resetting.lock().contains(&worker.session_id) {
-                snapshot::record_welcome_draining_crashed_epoch(shared, &worker);
-            }
-            snapshot::observe_crashed_sighting(shared, &worker);
+            snapshot::observe_frame_snapshot(shared, &worker);
             let mut projected = false;
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
@@ -2416,44 +2429,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
         other => tracing::debug!(?other, "ignoring unrelated Machine broker frame"),
     }
     Ok(())
-}
-
-fn queue_permission(shared: &Shared, session_id: &str, request_id: String, option_id: String) {
-    let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
-    let command_id = format!("permission-{}-{value}", std::process::id());
-    shared.sent.lock().remove(&command_id);
-    shared.pending.lock().insert(
-        command_id.clone(),
-        CoreCommand::Permission {
-            session_id: session_id.to_owned(),
-            command_id,
-            request_id,
-            option_id: Some(option_id),
-        },
-    );
-    let _ = shared.notify.send(());
-}
-
-fn begin_reset(shared: &Shared, session_id: &str) {
-    let replaced = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .map(|worker| worker.worker_epoch.clone())
-        .unwrap_or_default();
-    let placeholder = format!(
-        "pending-reset:{}",
-        shared.command_counter.fetch_add(1, Ordering::Relaxed) + 1
-    );
-    shared.resetting.lock().insert(session_id.to_owned());
-    shared
-        .active_reset_commands
-        .lock()
-        .insert(session_id.to_owned(), placeholder);
-    shared
-        .reset_replacements
-        .lock()
-        .insert(session_id.to_owned(), (replaced, None));
 }
 
 async fn adopt_snapshot(shared: &Arc<Shared>, worker: &WorkerSnapshot) {
@@ -2498,7 +2473,6 @@ async fn merge_worker_snapshots_with_protocol(
             continue;
         }
         if shared.resetting.lock().contains(&worker.session_id) {
-            // Preserve epoch-bound draining marker & raw sighting during bootstrap reload (R5-H5).
             snapshot::record_welcome_draining_crashed_epoch(shared, &worker);
             continue;
         }
@@ -2594,52 +2568,35 @@ fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn update_snapshot_from_event(
     shared: &Shared,
     session_id: &str,
-    worker_epoch: &str,
     runtime_seq: u64,
     event: &RuntimeEvent,
-    historical_only: bool,
 ) {
     let mut workers = shared.workers.lock();
     let Some(worker) = workers.get_mut(session_id) else {
         return;
     };
-    if historical_only {
-        if worker.worker_epoch == worker_epoch
-            && let RuntimeEvent::Update { update, .. } = event
-            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
-        {
-            crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
-        }
-        return;
-    }
-    worker.last_runtime_seq = worker.last_runtime_seq.max(runtime_seq);
+    worker.last_runtime_seq = runtime_seq;
     match event {
         RuntimeEvent::Ready { agent_session_id } => {
             worker.state = WorkerState::Running;
-            worker.exit_detail = None;
             if agent_session_id.is_some() {
                 worker.agent_session_id.clone_from(agent_session_id);
             }
         }
-        RuntimeEvent::Status { state, detail } => {
+        RuntimeEvent::Status { state, .. } => {
             worker.state = *state;
             if *state == WorkerState::Exited {
                 worker.native_cycle_active = false;
             }
             if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                 worker.native_cycle_id = None;
-                worker.exit_detail.clone_from(detail);
-            } else {
-                worker.exit_detail = None;
             }
         }
         RuntimeEvent::TurnStarted { turn_id, .. } => {
             worker.state = WorkerState::Busy;
-            worker.exit_detail = None;
             worker.current_turn_id = Some(turn_id.clone());
             worker.native_cycle_id = None;
         }
@@ -2870,7 +2827,6 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     }
 }
 
-#[cfg(test)]
 fn projected_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
@@ -2894,53 +2850,18 @@ fn projected_provider_auth_failure(
     ))
 }
 
-fn mark_projected_provider_auth_expired(
-    shared: &Shared,
-    session_id: &str,
-    worker_epoch: &str,
-    event: &RuntimeEvent,
-) {
-    let Some((provider_id, account_id, generation)) =
-        snapshot::provider_auth_expiry_target(shared, session_id, worker_epoch, event)
-    else {
-        return;
-    };
-    expire_provider_auth_generation(shared, session_id, &provider_id, &account_id, generation);
-}
-
-pub(super) fn mark_launch_provider_auth_expired(
-    shared: &Shared,
-    session_id: &str,
-    launch: &StartSession,
-    detail: &str,
-) {
-    if !crate::provider_behavior::is_provider_auth_required_error(detail) {
-        return;
-    }
-    let Some(generation) = launch.provider_auth_generation else {
-        return;
-    };
-    expire_provider_auth_generation(
-        shared,
-        session_id,
-        &launch.provider,
-        &launch.provider_account_id,
-        generation,
-    );
-}
-
-fn expire_provider_auth_generation(
-    shared: &Shared,
-    session_id: &str,
-    provider_id: &str,
-    account_id: &crate::provider_account::ProviderAccountId,
-    generation: u64,
-) {
+fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
     let Some(provider_auth) = shared.provider_auth.as_ref() else {
         return;
     };
-    let scope = native_admission::credential_scope(shared, provider_auth, account_id, provider_id);
-    match scope.and_then(|scope| scope.mark_expired(provider_id, generation)) {
+    let Some((provider_id, account_id, generation)) =
+        projected_provider_auth_failure(&shared.hub, session_id, event)
+    else {
+        return;
+    };
+    let scope =
+        native_admission::credential_scope(shared, provider_auth, &account_id, &provider_id);
+    match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {
         Ok(Some(status)) => tracing::warn!(
             session = session_id,
             provider = %provider_id,
@@ -3386,14 +3307,7 @@ mod tests {
             cmid: None,
         };
         let before = hub.snapshot("cycle").unwrap().0.len();
-        update_snapshot_from_event(
-            &runtime.shared,
-            "cycle",
-            &worker.worker_epoch,
-            5,
-            &named,
-            false,
-        );
+        update_snapshot_from_event(&runtime.shared, "cycle", 5, &named);
         apply_event(&hub, "cycle", named);
         assert_eq!(
             hub.snapshot("cycle").unwrap().0.len(),
@@ -3421,39 +3335,33 @@ mod tests {
         update_snapshot_from_event(
             &runtime.shared,
             "cycle",
-            &worker.worker_epoch,
             6,
             &RuntimeEvent::TurnStarted {
                 turn_id: "turn-1".into(),
                 command_id: "command-1".into(),
             },
-            false,
         );
         assert_eq!(runtime.delivery_target("cycle").unwrap().turn_id, "turn-1");
         update_snapshot_from_event(
             &runtime.shared,
             "cycle",
-            &worker.worker_epoch,
             7,
             &RuntimeEvent::TurnEnded {
                 turn_id: "turn-1".into(),
                 stop_reason: "end_turn".into(),
                 usage: None,
             },
-            false,
         );
         assert_eq!(runtime.delivery_target("cycle"), None);
         for cycle in [Some("native-b"), None] {
             update_snapshot_from_event(
                 &runtime.shared,
                 "cycle",
-                &worker.worker_epoch,
                 8,
                 &RuntimeEvent::Update {
                     update: crate::runtime_wire::native_cycle_update(cycle),
                     cmid: None,
                 },
-                false,
             );
         }
         assert_eq!(runtime.delivery_target("cycle"), None);
@@ -3850,7 +3758,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
     async fn credential_rejection_expires_only_the_sessions_account_and_machine_grant() {
         use crate::provider_service::{ProviderAuthService, ServiceAuthenticationState};
         use base64::Engine as _;
@@ -3900,7 +3807,7 @@ mod tests {
             provider: "portable-fixture".into(),
             provider_version: "fixture".into(),
             provider_generation_digest: "sha256:fixture".into(),
-            provider_account_id: id.clone(),
+            provider_account_id: id,
             provider_auth_generation: Some(1),
             provider_behavior: None,
             machine_id: "hawk".into(),
@@ -3915,16 +3822,7 @@ mod tests {
             owner_user_id: None,
             owner_username: None,
         });
-        let mut worker = snapshot("named");
-        worker.state = WorkerState::Running;
-        worker.current_turn_id = None;
-        let launch = worker.launch.as_mut().unwrap();
-        launch.provider = "portable-fixture".into();
-        launch.provider_version = "fixture".into();
-        launch.provider_generation_digest = "sha256:fixture".into();
-        launch.provider_account_id = id;
-        launch.provider_auth_generation = Some(1);
-        let mut runtime = RemoteRuntime::for_test(hub, vec![worker]);
+        let mut runtime = RemoteRuntime::for_test(hub, Vec::new());
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
             .unwrap()
             .provider_auth = Some(Arc::clone(&auth));
@@ -3935,7 +3833,7 @@ mod tests {
                 true,
             )),
         };
-        mark_projected_provider_auth_expired(&runtime.shared, "named", "epoch-1", &rejected);
+        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
             first
                 .status("portable-fixture")
@@ -3946,7 +3844,7 @@ mod tests {
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
             .unwrap()
             .auth_recipient_key = Some(recipient);
-        mark_projected_provider_auth_expired(&runtime.shared, "named", "epoch-1", &rejected);
+        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
         assert_eq!(
             first
                 .status("portable-fixture")

@@ -229,8 +229,8 @@ pub(super) fn handle_rejected_ack(
 ) {
     if matches!(&command, Some(CoreCommand::DrainCrashedWorker { .. })) {
         // Correlated acceptance/revocation already ran in
-        // `snapshot::handle_crashed_drain_command_ack` (R12-H2); never
-        // unconditionally clear an active drain on a duplicate refusal here.
+        // `snapshot::handle_crashed_drain_command_ack`; never unconditionally
+        // clear an active drain on a duplicate refusal here.
         tracing::debug!(
             session = session_id,
             %command_id,
@@ -417,7 +417,6 @@ pub(super) fn spawn_record_snapshot_worker_epoch_if_notice(
 /// Defers `UndeliveredPrompt` for a `call-notice:` to [`settle_undelivered_notice`]
 /// so durable validation, payload rebuild, deduplication, and FIFO store admission
 /// run before mutating Hub or sending `Ack`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn project_worker_outcome(
     shared: &Shared,
     key: &(String, String),
@@ -426,9 +425,7 @@ pub(super) fn project_worker_outcome(
     event: RuntimeEvent,
     idle_guard: Option<u64>,
     auto_permission: Option<(String, String)>,
-    replay_scope: super::snapshot::ReplayScope,
 ) -> Option<PendingUndeliveredNotice> {
-    use super::snapshot::ReplayScope;
     if let Some((request_id, option_id)) = auto_permission {
         tracing::info!(
             session = %session_id,
@@ -439,182 +436,57 @@ pub(super) fn project_worker_outcome(
         super::queue_permission(shared, session_id, request_id, option_id);
         return None;
     }
-    if replay_scope != ReplayScope::NonOwningDraining {
-        super::mark_projected_provider_auth_expired(shared, session_id, &key.1, &event);
-    }
+    super::mark_projected_provider_auth_expired(shared, session_id, &event);
     super::prompt_tracking::observe_worker_event(shared, session_id, &event);
-    // Only live owning events advance `hub.note_worker_incarnation` via `divert`;
-    // below-watermark/draining replay uses `intercept` and stamps producer epoch
-    // on subagent snapshots without changing live incarnation (R16-M1, R18-M3).
-    let remaining = if replay_scope == ReplayScope::Live {
-        super::divert(&shared.hub, key, runtime_seq, event)
-    } else {
-        crate::subagent_transcripts::intercept(&key.0, &key.1, runtime_seq, event)
-    };
-    let deferred = remaining.and_then(|event| match event {
-        RuntimeEvent::UndeliveredPrompt {
-            command_id,
-            cmid: Some(cid),
-            content,
-            error,
-        } if cid.starts_with(CALL_NOTICE_PREFIX) => {
-            shared.in_flight_prompts.lock().retire_command(&command_id);
-            let text = content
-                .iter()
-                .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Some(PendingUndeliveredNotice {
-                session_id: session_id.to_owned(),
-                worker_epoch: key.1.clone(),
-                runtime_seq,
+    let deferred =
+        super::divert(&shared.hub, key, runtime_seq, event).and_then(|event| match event {
+            RuntimeEvent::UndeliveredPrompt {
                 command_id,
-                cmid: cid,
-                text,
+                cmid: Some(cid),
                 content,
                 error,
-                admitted: true,
-            })
-        }
-        RuntimeEvent::UndeliveredPrompt {
-            command_id,
-            cmid,
-            content,
-            error,
-        } => {
-            super::prompt_tracking::handle_undelivered_prompt(
-                shared,
-                session_id,
-                &command_id,
-                cmid.as_deref(),
-                content,
-                error,
-            );
-            None
-        }
-        other => {
-            match replay_scope {
-                ReplayScope::Live => super::apply_event(&shared.hub, session_id, other),
-                ReplayScope::OwningBelowCrashWatermark => {
-                    project_owning_below_crash_event(&shared.hub, session_id, &key.1, other);
-                }
-                ReplayScope::NonOwningDraining => {
-                    project_non_owning_draining_event(&shared.hub, session_id, &key.1, other);
-                }
+            } if cid.starts_with(CALL_NOTICE_PREFIX) => {
+                shared.in_flight_prompts.lock().retire_command(&command_id);
+                let text = content
+                    .iter()
+                    .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Some(PendingUndeliveredNotice {
+                    session_id: session_id.to_owned(),
+                    worker_epoch: key.1.clone(),
+                    runtime_seq,
+                    command_id,
+                    cmid: cid,
+                    text,
+                    content,
+                    error,
+                    admitted: true,
+                })
             }
-            None
-        }
-    });
+            RuntimeEvent::UndeliveredPrompt {
+                command_id,
+                cmid,
+                content,
+                error,
+            } => {
+                super::prompt_tracking::handle_undelivered_prompt(
+                    shared,
+                    session_id,
+                    &command_id,
+                    cmid.as_deref(),
+                    content,
+                    error,
+                );
+                None
+            }
+            other => {
+                super::apply_event(&shared.hub, session_id, other);
+                None
+            }
+        });
     super::reconcile_idle_guard(shared, session_id, idle_guard);
     deferred
-}
-
-fn stamp_producer_epoch_if_subagent(update: &mut serde_json::Value, worker_epoch: &str) {
-    if !worker_epoch.is_empty()
-        && update
-            .get("sessionUpdate")
-            .and_then(serde_json::Value::as_str)
-            == Some(crate::runtime_wire::SUBAGENT_UPDATE)
-        && let Some(object) = update.as_object_mut()
-    {
-        object.insert(
-            "incarnation".to_owned(),
-            serde_json::Value::String(worker_epoch.to_owned()),
-        );
-    }
-}
-
-fn is_content_or_subagent_update(update: &serde_json::Value) -> bool {
-    crate::runtime_wire::current_turn_support(update).is_none()
-        && crate::runtime_wire::background_tasks_count(update).is_none()
-        && crate::runtime_wire::native_cycle(update).is_none()
-        && crate::runtime_wire::uncertain_effect(update).is_none()
-        && update
-            .get("sessionUpdate")
-            .and_then(serde_json::Value::as_str)
-            != Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
-}
-
-/// First-delivery replay from the CURRENT owning worker below its `Crashed`
-/// snapshot watermark: preserves first-delivery `TurnEnded` completion/refusal
-/// (so managed calls do not report `child_crashed` and refusals keep their
-/// hold, R18-H4), content updates, and producer-fenced `SUBAGENT_UPDATE`
-/// (R18-M3), while skipping stale Running/Busy status, permissions, config,
-/// wakeup, usage, and native-ID mutations.
-fn project_owning_below_crash_event(
-    hub: &crate::core::Hub,
-    session_id: &str,
-    worker_epoch: &str,
-    event: RuntimeEvent,
-) {
-    if !hub.accepts_runtime_projection(session_id) {
-        return;
-    }
-    match event {
-        RuntimeEvent::Update { mut update, cmid } if is_content_or_subagent_update(&update) => {
-            stamp_producer_epoch_if_subagent(&mut update, worker_epoch);
-            hub.push_historical_from_worker(
-                session_id,
-                crate::agent_model::Event::Update { update },
-                cmid,
-            );
-        }
-        RuntimeEvent::TurnEnded {
-            stop_reason, usage, ..
-        } => {
-            // Current owning worker's first-delivery turn completion before crash:
-            // record TurnEnd + durable completion without regressing Crashed -> Running.
-            let refused = stop_reason.eq_ignore_ascii_case("refusal");
-            hub.push(
-                session_id,
-                crate::agent_model::Event::TurnEnd { stop_reason, usage },
-            );
-            if refused {
-                hub.set_status(
-                    session_id,
-                    super::Status::Crashed,
-                    Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
-                );
-            } else {
-                hub.settle_restart_interruption(session_id);
-            }
-            hub.complete_turn(session_id);
-        }
-        RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
-            hub.broadcast_error(Some(session_id.to_owned()), message);
-        }
-        _ => {}
-    }
-}
-
-/// Strict allowlist for non-owning draining epochs (replaced worker or active
-/// reset): appends content updates and producer-fenced `SUBAGENT_UPDATE` (never
-/// displacing a newer producer's child observation, R17-M3/R18-M3) via
-/// `push_historical_from_worker`, excluding `TurnEnded`, `PermissionResolved`,
-/// `AgentSessionId`, and all live status/config/wakeup/permission hooks.
-fn project_non_owning_draining_event(
-    hub: &crate::core::Hub,
-    session_id: &str,
-    worker_epoch: &str,
-    event: RuntimeEvent,
-) {
-    if !hub.accepts_runtime_projection(session_id) {
-        return;
-    }
-    match event {
-        RuntimeEvent::Update { mut update, cmid } if is_content_or_subagent_update(&update) => {
-            stamp_producer_epoch_if_subagent(&mut update, worker_epoch);
-            hub.push_historical_from_worker(
-                session_id,
-                crate::agent_model::Event::Update { update },
-                cmid,
-            );
-        }
-        RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
-            hub.broadcast_error(Some(session_id.to_owned()), message);
-        }
-        _ => {}
-    }
 }
 
 /// Extract a `call-notice:` `UndeliveredPrompt` when transcript projection was

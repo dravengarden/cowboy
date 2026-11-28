@@ -216,56 +216,14 @@ impl Hub {
     /// used to tag a dispatched prompt's user-message echo so the originating
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
-        self.push_tagged_inner(session_id, event, cmid, false, false);
+        self.push_tagged_inner(session_id, event, cmid, false);
     }
 
     /// Like [`Self::push_tagged`] for live worker-emitted events: any
     /// `user_message_chunk` not backed by a Controller dispatch fails closed as
     /// non-owner.
     pub fn push_tagged_from_worker(&self, session_id: &str, event: Event, cmid: Option<String>) {
-        self.push_tagged_inner(session_id, event, cmid, true, false);
-    }
-
-    /// Return the highest processed runtime event sequence for
-    /// `(session_id, worker_epoch)` in this Controller process (R18-H3).
-    #[must_use]
-    pub fn runtime_event_highwater(&self, session_id: &str, worker_epoch: &str) -> Option<u64> {
-        self.inner
-            .runtime_event_highwaters
-            .lock()
-            .get(&(session_id.to_owned(), worker_epoch.to_owned()))
-            .copied()
-    }
-
-    /// Record a processed runtime event sequence monotonically for
-    /// `(session_id, worker_epoch)` so tunnel replacement never re-applies
-    /// already-projected events (R18-H3).
-    pub fn record_runtime_event_highwater(&self, session_id: &str, worker_epoch: &str, seq: u64) {
-        const MAX_HIGHWATERS: usize = 16_384;
-        let mut map = self.inner.runtime_event_highwaters.lock();
-        let key = (session_id.to_owned(), worker_epoch.to_owned());
-        if let Some(existing) = map.get_mut(&key) {
-            *existing = (*existing).max(seq);
-            return;
-        }
-        if map.len() >= MAX_HIGHWATERS
-            && let Some(evict) = map.keys().next().cloned()
-        {
-            map.remove(&evict);
-        }
-        map.insert(key, seq);
-    }
-
-    /// Append a historical replay transcript row from a crashed/draining worker
-    /// without touching live attention, compaction, activity, or native-ID
-    /// reducers (R16-M1).
-    pub fn push_historical_from_worker(
-        &self,
-        session_id: &str,
-        event: Event,
-        cmid: Option<String>,
-    ) {
-        self.push_tagged_inner(session_id, event, cmid, true, true);
+        self.push_tagged_inner(session_id, event, cmid, true);
     }
 
     fn push_tagged_inner(
@@ -274,7 +232,6 @@ impl Hub {
         event: Event,
         mut cmid: Option<String>,
         from_worker: bool,
-        historical: bool,
     ) {
         let mut event = self.prepare_attention_event(session_id, event);
         // A subagent snapshot is fenced by its producer identity (I4) before
@@ -290,7 +247,7 @@ impl Hub {
             let seq = s.next_seq;
             let mut subagent_ending = None;
             if let (Some(child), Event::Update { update }) = (&subagent_child, &event) {
-                match self.accept_subagent_snapshot(session_id, child, update, seq, historical) {
+                match self.accept_subagent_snapshot(session_id, child, update, seq) {
                     Some(ending) => subagent_ending = Some(ending),
                     None => return,
                 }
@@ -311,17 +268,23 @@ impl Hub {
             {
                 return;
             }
-            let (attention_changed, native_wait_started) = if historical {
-                (false, false)
-            } else {
-                Self::apply_live_event_reducers(
-                    s,
-                    &event,
-                    subagent_child.as_deref(),
-                    subagent_ending,
-                )
-            };
+            if matches!(event, Event::TurnEnd { .. }) {
+                s.active_turn_compacting = false;
+            }
+            s.pending_actions.observe(&event);
+            let attention = s.pending_actions.summary();
+            let attention_changed = s.meta.attention != attention;
+            s.meta.attention = attention;
             s.next_seq += 1;
+            if let Some(boundary) = context_rollover::HistoryBoundary::from_event(&event) {
+                s.history_boundary = boundary;
+            }
+            let native_wait_started = subagent_child
+                .as_deref()
+                .is_some_and(|child| native_wait_start(s, &event, child, subagent_ending));
+            if counts_as_activity(&event) {
+                s.last_activity = std::time::Instant::now();
+            }
             if subagent_child.is_some() {
                 stamp_subagent_snapshot(&mut event, seq, subagent_ending);
             }
@@ -332,8 +295,7 @@ impl Hub {
                 cmid,
             };
             // A send begins one turn at its first chunk, however many blocks follow.
-            if !historical
-                && Self::is_owner_envelope_for_session(s, &envelope)
+            if Self::is_owner_envelope_for_session(s, &envelope)
                 && !s
                     .log
                     .last()
@@ -367,13 +329,10 @@ impl Hub {
             {
                 s.reached_start = false;
             }
-            let durable_agent_session_id = (!historical && is_user_message_chunk(&envelope))
+            let durable_agent_session_id = is_user_message_chunk(&envelope)
                 .then(|| s.meta.agent_session_id.clone())
                 .flatten();
-            // Historical replay must never index a newer partial answer as a
-            // completed turn boundary (R17-M2).
-            let turn_completion = if !historical && matches!(envelope.event, Event::TurnEnd { .. })
-            {
+            let turn_completion = if matches!(envelope.event, Event::TurnEnd { .. }) {
                 Self::extract_turn_completion_in_session(session_id, s, envelope.seq)
             } else {
                 None
@@ -405,104 +364,7 @@ impl Hub {
             }
             (envelope, attention_changed, native_wait_started)
         };
-        self.finish_pushed_event(
-            session_id,
-            envelope,
-            attention_changed,
-            native_wait_started,
-            historical,
-        );
-    }
-
-    /// I4: decide whether a subagent snapshot is a new observation, and
-    /// atomically record its terminal occurrence identity. `None` drops it.
-    fn accept_subagent_snapshot(
-        &self,
-        session_id: &str,
-        child: &str,
-        update: &serde_json::Value,
-        seq: u64,
-        historical: bool,
-    ) -> Option<SubagentEnding> {
-        use crate::transcript_anchors::{METRICS, SnapshotVerdict, judge_snapshot, mark_of};
-        let mut mark = mark_of(update);
-        let mut background = self.inner.background.lock();
-        let ledger = background.entry(session_id.to_owned()).or_default();
-        let previous = ledger.marks.get(child);
-        // A historical producer must never displace an observation recorded by
-        // a different (newer) worker incarnation, while still allowing its own
-        // child's first-delivery terminal update to settle (R17-M3, R18-M3).
-        if historical
-            && previous.is_some_and(|prev| {
-                prev.incarnation.is_some() && prev.incarnation != mark.incarnation
-            })
-        {
-            return None;
-        }
-        let ending = match (mark.terminal, previous) {
-            (false, previous) => {
-                mark.terminal_seq = None;
-                SubagentEnding::Working {
-                    first_snapshot: previous.is_none(),
-                    after_idle: previous.is_some_and(|previous| {
-                        previous.terminal
-                            && mark.incarnation.is_some()
-                            && previous.incarnation == mark.incarnation
-                    }),
-                }
-            }
-            (true, Some(previous)) if previous.terminal => {
-                mark.terminal_seq = previous.terminal_seq;
-                SubagentEnding::AlreadyEnded(previous.terminal_seq)
-            }
-            (true, _) => {
-                mark.terminal_seq = Some(seq);
-                SubagentEnding::Ended(seq)
-            }
-        };
-        match judge_snapshot(previous, &mark) {
-            SnapshotVerdict::Duplicate => {
-                METRICS.duplicates.fetch_add(1, Ordering::Relaxed);
-                return None;
-            }
-            SnapshotVerdict::Stale => {
-                METRICS.revision_stale.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!(session = %session_id, child, "dropping an older subagent revision");
-                return None;
-            }
-            SnapshotVerdict::Conflict => {
-                METRICS.revision_conflicts.fetch_add(1, Ordering::Relaxed);
-                tracing::warn!(session = %session_id, child, revision = mark.revision,
-                    "subagent revision conflict: equal revision, different payload");
-            }
-            SnapshotVerdict::Accept => {}
-        }
-        ledger.marks.insert(child.to_owned(), mark);
-        Some(ending)
-    }
-
-    fn apply_live_event_reducers(
-        s: &mut Session,
-        event: &Event,
-        subagent_child: Option<&str>,
-        subagent_ending: Option<SubagentEnding>,
-    ) -> (bool, bool) {
-        if matches!(event, Event::TurnEnd { .. }) {
-            s.active_turn_compacting = false;
-        }
-        s.pending_actions.observe(event);
-        let attention = s.pending_actions.summary();
-        let attention_changed = s.meta.attention != attention;
-        s.meta.attention = attention;
-        if let Some(boundary) = context_rollover::HistoryBoundary::from_event(event) {
-            s.history_boundary = boundary;
-        }
-        let native_wait_started =
-            subagent_child.is_some_and(|child| native_wait_start(s, event, child, subagent_ending));
-        if counts_as_activity(event) {
-            s.last_activity = std::time::Instant::now();
-        }
-        (attention_changed, native_wait_started)
+        self.finish_pushed_event(session_id, envelope, attention_changed, native_wait_started);
     }
 
     fn apply_canonical_hot_log(s: &mut Session, seq: u64, canonical: Envelope) {
@@ -534,11 +396,8 @@ impl Hub {
         envelope: Envelope,
         attention_changed: bool,
         native_wait_started: bool,
-        historical: bool,
     ) {
-        if !historical {
-            self.observe_compaction(session_id, &envelope.event);
-        }
+        self.observe_compaction(session_id, &envelope.event);
         if is_user_message_chunk(&envelope)
             && let Some(cmid) = envelope
                 .cmid

@@ -237,8 +237,15 @@ impl Broker {
             }
             Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
             None => {
-                if !adopt_only && !self.launching.lock().insert(session_id.to_owned()) {
-                    return Err(None);
+                if !adopt_only {
+                    if !self.launching.lock().insert(session_id.to_owned()) {
+                        return Err(None);
+                    }
+                    self.crashed_drains
+                        .inner
+                        .lock()
+                        .recently_drained
+                        .remove(session_id);
                 }
                 Ok((None, !adopt_only))
             }
