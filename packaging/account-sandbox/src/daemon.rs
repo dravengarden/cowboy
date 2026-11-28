@@ -293,6 +293,11 @@ impl Daemon {
         }
     }
 
+    /// Bytes of runtime registrations staging now.
+    pub(crate) fn staging_bytes(&self) -> u64 {
+        guard(&self.staging).bytes
+    }
+
     pub(crate) fn check_space(&self) -> Outcome<()> {
         let free = self.host.free_bytes(&self.config.state_root)?;
         if free < self.config.free_space_reserve_bytes {

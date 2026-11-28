@@ -117,15 +117,22 @@ fn serve(arguments: &[String]) -> Result<()> {
         // previous instance) and settle units systemd confirmed gone.
         let daemon = Arc::clone(&daemon);
         std::thread::spawn(move || {
-            let mut tick = 0_u64;
             loop {
                 std::thread::sleep(daemon::SWEEP_INTERVAL);
                 daemon.sweep_units();
-                tick = tick.wrapping_add(1);
-                // Every 30 s grow homes running low; hourly prune old logs.
-                if tick.is_multiple_of(15) {
-                    daemon.sweep_capacity(tick.is_multiple_of(1800));
-                }
+            }
+        });
+    }
+    {
+        // Grow homes running low and prune old logs on a thread of their
+        // own, so a slow resize never delays the unit sweep.
+        let daemon = Arc::clone(&daemon);
+        std::thread::spawn(move || {
+            let mut sweeps = 0_u64;
+            loop {
+                std::thread::sleep(capacity::CAPACITY_INTERVAL);
+                sweeps = sweeps.wrapping_add(1);
+                daemon.sweep_capacity(sweeps.is_multiple_of(capacity::LOG_PRUNE_EVERY));
             }
         });
     }

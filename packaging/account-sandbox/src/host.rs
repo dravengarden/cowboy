@@ -2,7 +2,7 @@
 //! home images, mounts and systemd. A trait so the state machine is tested
 //! unprivileged against a fake (`crate::fake`).
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd as _, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -97,32 +97,46 @@ pub trait Host: Send + Sync {
     fn list_units(&self, pattern: &str) -> Result<Vec<String>>;
     fn boot_id(&self) -> Result<String>;
     fn free_bytes(&self, path: &Path) -> Result<u64>;
-    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage>;
-    /// Grow the filesystem mounted at `target` from `image` to the image
-    /// file's current length: refresh its loop device's capacity, then
-    /// resize the mounted ext4 online.
-    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()>;
+    /// Size and free space of the filesystem `dir` is on.
+    fn filesystem_usage(&self, dir: BorrowedFd<'_>) -> Result<FsUsage>;
+    /// Verify that `home` is the root of the ext4 filesystem on the loop
+    /// device whose backing file is `image` (same inode), then give the
+    /// device the image's length and grow the mounted filesystem online to
+    /// the whole device. Whether the filesystem was resized. Both objects
+    /// stay pinned by their descriptors throughout, and nothing shrinks.
+    fn reconcile_home(&self, image: &std::fs::File, home: BorrowedFd<'_>) -> Result<bool>;
 }
 
-/// The loop device `/dev/loopN` mounted at `target` in `mountinfo`.
-fn loop_source(mountinfo: &str, target: &str) -> Result<String> {
-    let line = mountinfo
-        .lines()
-        .find(|line| line.split(' ').nth(4) == Some(target))
-        .with_context(|| format!("{target} is not mounted"))?;
-    let (_, after) = line.split_once(" - ").context("malformed mountinfo line")?;
-    let source = after
-        .split(' ')
-        .nth(1)
-        .context("mountinfo line has no source")?;
-    let number = source
-        .strip_prefix("/dev/loop")
-        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+/// The loop block device major number.
+const LOOP_MAJOR: u32 = 7;
+/// The root directory inode of an ext4 filesystem.
+const EXT4_ROOT_INODE: u64 = 2;
+
+/// Block count and block size of the ext4 superblock read from `device`
+/// (through the page cache the mounted filesystem writes its superblock to).
+fn ext4_geometry(device: BorrowedFd<'_>) -> Result<(u64, u64)> {
+    let mut superblock = [0_u8; 1024];
+    let read = rustix::io::pread(device, &mut superblock, 1024).context("read the superblock")?;
+    ensure!(read == superblock.len(), "short superblock read");
+    let u32_at = |offset: usize| {
+        u32::from_le_bytes(
+            superblock[offset..offset + 4]
+                .try_into()
+                .expect("four bytes"),
+        )
+    };
     ensure!(
-        number.is_some(),
-        "{target} is mounted from {source}, not a loop device"
+        u16::from_le_bytes([superblock[0x38], superblock[0x39]]) == 0xEF53,
+        "not an ext4 filesystem"
     );
-    Ok(source.to_owned())
+    let log_block_size = u32_at(0x18);
+    ensure!(log_block_size <= 6, "unsupported ext4 block size");
+    let mut blocks = u64::from(u32_at(0x04));
+    // INCOMPAT_64BIT: the block count's high half is in use.
+    if u32_at(0x60) & 0x80 != 0 {
+        blocks |= u64::from(u32_at(0x150)) << 32;
+    }
+    Ok((blocks, 1024_u64 << log_block_size))
 }
 
 /// The production host: system tools at configured absolute paths.
@@ -366,9 +380,8 @@ impl Host for SystemHost {
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
 
-    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage> {
-        let stat =
-            rustix::fs::statvfs(path).with_context(|| format!("statvfs {}", path.display()))?;
+    fn filesystem_usage(&self, dir: BorrowedFd<'_>) -> Result<FsUsage> {
+        let stat = rustix::fs::fstatvfs(dir).context("fstatvfs")?;
         Ok(FsUsage {
             size_bytes: stat.f_blocks.saturating_mul(stat.f_frsize),
             free_bytes: stat.f_bavail.saturating_mul(stat.f_frsize),
@@ -377,22 +390,53 @@ impl Host for SystemHost {
         })
     }
 
-    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()> {
-        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")?;
-        let device = loop_source(&mountinfo, path_arg(target)?)?;
-        // Only the loop device backed by this very image is resized.
-        let name = device.trim_start_matches("/dev/");
-        let backing = std::fs::read_to_string(format!("/sys/block/{name}/loop/backing_file"))
-            .with_context(|| format!("read the backing file of {device}"))?;
+    fn reconcile_home(&self, image: &std::fs::File, home: BorrowedFd<'_>) -> Result<bool> {
+        let home_stat = rustix::fs::fstat(home).context("stat home")?;
+        let image_stat = rustix::fs::fstat(image).context("stat home image")?;
         ensure!(
-            backing.trim_end() == path_arg(image)?,
-            "{device} is backed by {}, not {}",
-            backing.trim_end(),
-            image.display()
+            home_stat.st_ino == EXT4_ROOT_INODE,
+            "home is not the root of its filesystem"
         );
-        run_ok(&self.tools.losetup, &["--set-capacity", &device])?;
-        run_ok(&self.tools.resize2fs, &[&device])?;
-        Ok(())
+        let device = home_stat.st_dev;
+        ensure!(
+            rustix::fs::major(device) == LOOP_MAJOR,
+            "home is not on a loop device"
+        );
+        let path = format!("/dev/loop{}", rustix::fs::minor(device));
+        let loop_device = rustix::fs::open(
+            path.as_str(),
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        )
+        .with_context(|| format!("open {path}"))?;
+        let device_stat = rustix::fs::fstat(&loop_device)?;
+        ensure!(
+            rustix::fs::FileType::from_raw_mode(device_stat.st_mode)
+                == rustix::fs::FileType::BlockDevice
+                && device_stat.st_rdev == device,
+            "{path} is not the device home is mounted from"
+        );
+        let status = crate::raw::loop_status(loop_device.as_fd())
+            .with_context(|| format!("loop status of {path}"))?;
+        ensure!(
+            status.lo_inode == image_stat.st_ino && status.lo_device == image_stat.st_dev,
+            "{path} is not backed by this home image"
+        );
+        ensure!(
+            status.lo_offset == 0 && status.lo_sizelimit == 0,
+            "{path} maps only part of its backing file"
+        );
+        crate::raw::loop_set_capacity(loop_device.as_fd())
+            .with_context(|| format!("refresh the capacity of {path}"))?;
+        let device_bytes = crate::raw::block_device_bytes(loop_device.as_fd())?;
+        let (blocks, block_size) = ext4_geometry(loop_device.as_fd())?;
+        let device_blocks = device_bytes / block_size;
+        if device_blocks <= blocks {
+            return Ok(false);
+        }
+        crate::raw::ext4_resize(home, device_blocks)
+            .with_context(|| format!("grow the filesystem on {path} to {device_blocks} blocks"))?;
+        Ok(true)
     }
 }
 
@@ -404,29 +448,14 @@ pub fn var_run_is_directory() -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn only_a_loop_device_is_a_growable_source() {
-        let mountinfo = "\
-29 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
-80 29 7:2 / /var/lib/x/accounts/k/home rw,nosuid shared:40 - ext4 /dev/loop2 rw
-81 29 0:5 / /var/lib/x/accounts/j/home rw shared:41 - tmpfs tmpfs rw
-";
-        assert_eq!(
-            super::loop_source(mountinfo, "/var/lib/x/accounts/k/home").unwrap(),
-            "/dev/loop2"
-        );
-        assert!(super::loop_source(mountinfo, "/var/lib/x/accounts/j/home").is_err());
-        assert!(super::loop_source(mountinfo, "/").is_err());
-        assert!(super::loop_source(mountinfo, "/absent").is_err());
-    }
-
-    /// The real tools grow a mounted loop image online. Needs root, loop
-    /// devices, `mkfs.ext4`, `losetup` and `resize2fs` on `PATH`:
+    /// A mounted loop image grows online through the pinned descriptors.
+    /// Needs root, loop devices, `mkfs.ext4` and `mount`/`umount` on `PATH`:
     /// `sudo <test binary> --ignored a_mounted_loop_image_grows_online`.
     #[test]
     #[ignore = "needs root, loop devices and e2fsprogs"]
     fn a_mounted_loop_image_grows_online() {
         use super::Host as _;
+        use std::os::fd::AsFd as _;
         let which = |name: &str| {
             std::env::split_paths(&std::env::var_os("PATH").unwrap())
                 .map(|dir| dir.join(name))
@@ -436,8 +465,6 @@ mod tests {
         let host = super::SystemHost {
             tools: crate::config::Tools {
                 mkfs_ext4: which("mkfs.ext4"),
-                losetup: which("losetup"),
-                resize2fs: which("resize2fs"),
                 mount: which("mount"),
                 umount: which("umount"),
                 ..crate::config::Tools::default()
@@ -446,27 +473,46 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (image, home) = (temp.path().join("home.img"), temp.path().join("home"));
         std::fs::create_dir(&home).unwrap();
-        let file = std::fs::File::create(&image).unwrap();
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&image)
+            .unwrap();
         file.set_len(64 << 20).unwrap();
         host.format_image(&image, 4096, (0, 0)).unwrap();
+        let other = temp.path().join("other.img");
+        std::fs::write(&other, b"").unwrap();
         host.mount_image(&image, &home).unwrap();
         let result = std::panic::catch_unwind(|| {
-            let before = host.filesystem_usage(&home).unwrap();
+            let root = crate::safefs::open_root(&home).unwrap();
+            let before = host.filesystem_usage(root.as_fd()).unwrap();
+            // Nothing to do at the current size.
+            assert!(!host.reconcile_home(&file, root.as_fd()).unwrap());
             std::fs::write(home.join("data"), vec![7_u8; 40 << 20]).unwrap();
-            file.set_len(256 << 20).unwrap();
-            host.grow_mounted_image(&image, &home).unwrap();
-            let after = host.filesystem_usage(&home).unwrap();
+            rustix::fs::fallocate(
+                &file,
+                rustix::fs::FallocateFlags::empty(),
+                (256 << 20) - 4096,
+                4096,
+            )
+            .unwrap();
+            // Another image's file is refused before anything changes.
+            let other = std::fs::File::open(&other).unwrap();
+            assert!(host.reconcile_home(&other, root.as_fd()).is_err());
+            assert!(host.reconcile_home(&file, root.as_fd()).unwrap());
+            let after = host.filesystem_usage(root.as_fd()).unwrap();
             assert!(
                 after.size_bytes > before.size_bytes * 3,
                 "{before:?} -> {after:?}"
             );
             assert!(after.inodes > before.inodes * 3, "{before:?} -> {after:?}");
             assert_eq!(std::fs::read(home.join("data")).unwrap().len(), 40 << 20);
-            // Another image's mount point is refused.
-            assert!(
-                host.grow_mounted_image(&temp.path().join("other.img"), &home)
-                    .is_err()
-            );
+            assert!(!host.reconcile_home(&file, root.as_fd()).unwrap());
+            // A directory that is not a mount root is refused.
+            std::fs::create_dir(home.join("sub")).unwrap();
+            let sub = crate::safefs::open_root(&home.join("sub")).unwrap();
+            assert!(host.reconcile_home(&file, sub.as_fd()).is_err());
         });
         host.unmount(&home).unwrap();
         result.unwrap();

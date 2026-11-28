@@ -1090,25 +1090,35 @@ rather than a fixed size (`packaging/account-sandbox/src/capacity.rs`):
 
 - A new image is 4 GiB (`home_image_bytes`, 262,144 inodes). A mounted home
   grows when its free space falls below `max(home_grow_free_bytes` (1 GiB)`,
-  size / 4)` or an eighth of its inodes remain: the daemon doubles the image
-  file, refreshes its loop device (`losetup --set-capacity`, only the device
-  whose `backing_file` is that image) and resizes the mounted ext4 online
-  (`resize2fs`), which scales its inodes too.
-- Growth stops at `home_image_max_bytes` (32 GiB) and needs the state root's
-  free space to stay above `free_space_reserve_bytes` with the whole added
-  size counted as written, so homes cannot crowd out the host.
-- Every start checks (and grows) its home first; the sweep checks every
-  mounted home every 30 s while units run. A start other than `logout` is
-  refused with `insufficient_space` ("account home storage is exhausted",
-  with the reason growth was held) while the home keeps less than
-  `home_min_free_bytes` (256 MiB) free, so `agy` never starts into a full
-  disk. Signing out stays possible on a full home.
-- Growth is idempotent and crash safe: an image file longer than its
-  filesystem (interrupted between lengthening and `resize2fs`) is only
-  resized by the next check.
+  size / 4)` or an eighth of its inodes remain: the image file doubles up to
+  `home_image_max_bytes` (32 GiB; never below the initial size). It only ever
+  grows: `fallocate` of its new last block, never a truncate, so a concurrent
+  manual expansion cannot be undone.
+- The daemon then verifies, through descriptors it holds for the whole
+  operation, that the mounted home is the root of an ext4 filesystem on a
+  loop device (`major 7`, root inode) whose backing file is that image
+  (`LOOP_GET_STATUS64` device and inode, no offset or size limit), refreshes
+  the device (`LOOP_SET_CAPACITY`) and grows the mounted filesystem to the
+  whole device (`EXT4_IOC_RESIZE_FS`; the kernel never shrinks). No external
+  tool resolves a path in between. Every check reconciles device and
+  filesystem first, so a grow interrupted after lengthening the file is
+  finished by the next check whatever the pressure.
+- Growth charges the host: it needs the state root to keep
+  `free_space_reserve_bytes` plus every image's unallocated sparse length
+  (including this growth) plus registrations staging. One daemon-wide lock
+  serializes all growth, so two accounts cannot spend the same headroom, and
+  `remove_account` takes it before unmounting a home.
+- A capacity thread of its own checks every mounted home every 30 s without
+  account locks, so a slow resize never delays fencing, stops or the unit
+  sweep. A start other than `logout` grows synchronously only when its home
+  is below `home_min_free_bytes` (256 MiB) and is refused with
+  `insufficient_space` ("account home storage is exhausted", with the reason
+  growth was held) while it stays there, so `agy` never starts into a full
+  disk. Logout is never checked: signing out stays possible on a full home.
 - `agy` log files (`~/.gemini/antigravity-cli/log`) older than
-  `agy_log_retention_days` (14) are removed hourly, opened beneath the home
-  without following symlinks.
+  `agy_log_retention_days` (14) are removed hourly, only while the account
+  runs no unit (a live `agy` reopens its log by name) and under the account
+  lock, opened beneath the home without following symlinks.
 
 **Not in this revision.** Conversations no recoverable Cowboy session
 references (sessions purged from Trash, conversations of failed starts:

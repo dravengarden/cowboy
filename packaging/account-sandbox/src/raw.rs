@@ -1,10 +1,11 @@
 //! The crate's only `unsafe`: the Landlock syscalls rustix has no wrapper for
-//! (`landlock_create_ruleset`, `landlock_restrict_self`). Everything else,
-//! including `openat2`, goes through rustix's safe API.
+//! (`landlock_create_ruleset`, `landlock_restrict_self`) and the loop device
+//! and ext4 ioctls of online home growth (`crate::capacity`). Everything
+//! else, including `openat2`, goes through rustix's safe API.
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::fd::{AsRawFd as _, BorrowedFd, FromRawFd as _, OwnedFd};
 
 /// `LANDLOCK_CREATE_RULESET_VERSION`: ask the kernel for its Landlock ABI.
 const CREATE_RULESET_VERSION: libc::c_uint = 1;
@@ -103,4 +104,95 @@ pub fn take_listen_fd() -> io::Result<Option<OwnedFd>> {
     let fd = unsafe { OwnedFd::from_raw_fd(3) };
     rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC)?;
     Ok(Some(fd))
+}
+
+/// `struct loop_info64` (`linux/loop.h`), field names as in C.
+#[repr(C)]
+#[allow(clippy::struct_field_names)]
+pub struct LoopInfo64 {
+    /// `dev_t` of the filesystem holding the backing file.
+    pub lo_device: u64,
+    /// Inode of the backing file.
+    pub lo_inode: u64,
+    lo_rdevice: u64,
+    pub lo_offset: u64,
+    pub lo_sizelimit: u64,
+    lo_number: u32,
+    lo_encrypt_type: u32,
+    lo_encrypt_key_size: u32,
+    lo_flags: u32,
+    lo_file_name: [u8; 64],
+    lo_crypt_name: [u8; 64],
+    lo_encrypt_key: [u8; 32],
+    lo_init: [u64; 2],
+}
+
+const LOOP_GET_STATUS64: u32 = 0x4C05;
+const LOOP_SET_CAPACITY: u32 = 0x4C07;
+/// `_IOR(0x12, 114, size_t)`.
+const BLKGETSIZE64: u32 = 0x8008_1272;
+/// `_IOW('f', 16, __u64)`.
+const EXT4_IOC_RESIZE_FS: u32 = 0x4008_6610;
+
+/// The request number in the C library's `ioctl` parameter type (`int` on
+/// musl, `unsigned long` on glibc), bit for bit.
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::useless_conversion
+)]
+fn request(code: u32) -> libc::Ioctl {
+    code as libc::Ioctl
+}
+
+fn check(result: libc::c_int) -> io::Result<()> {
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// `LOOP_GET_STATUS64` of the loop device `device`.
+pub fn loop_status(device: BorrowedFd<'_>) -> io::Result<LoopInfo64> {
+    let mut info = std::mem::MaybeUninit::<LoopInfo64>::zeroed();
+    // SAFETY: `info` is a writable, zero-initialised `loop_info64` the
+    // kernel fills completely on success.
+    check(unsafe {
+        libc::ioctl(
+            device.as_raw_fd(),
+            request(LOOP_GET_STATUS64),
+            info.as_mut_ptr(),
+        )
+    })?;
+    // SAFETY: every field is plain data and the struct started zeroed.
+    Ok(unsafe { info.assume_init() })
+}
+
+/// `LOOP_SET_CAPACITY`: the loop device takes its backing file's length.
+pub fn loop_set_capacity(device: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: the request takes no argument.
+    check(unsafe { libc::ioctl(device.as_raw_fd(), request(LOOP_SET_CAPACITY), 0) })
+}
+
+/// `BLKGETSIZE64`: the block device's size in bytes.
+pub fn block_device_bytes(device: BorrowedFd<'_>) -> io::Result<u64> {
+    let mut bytes = 0_u64;
+    // SAFETY: the kernel writes one `u64` to the valid pointer.
+    check(unsafe { libc::ioctl(device.as_raw_fd(), request(BLKGETSIZE64), &raw mut bytes) })?;
+    Ok(bytes)
+}
+
+/// `EXT4_IOC_RESIZE_FS` on a descriptor of the mounted filesystem: grow it
+/// online to `blocks` blocks. The kernel refuses to shrink and does nothing
+/// for the current size.
+pub fn ext4_resize(filesystem: BorrowedFd<'_>, blocks: u64) -> io::Result<()> {
+    // SAFETY: the kernel reads one `u64` from the valid pointer.
+    check(unsafe {
+        libc::ioctl(
+            filesystem.as_raw_fd(),
+            request(EXT4_IOC_RESIZE_FS),
+            &raw const blocks,
+        )
+    })
 }

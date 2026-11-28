@@ -95,6 +95,8 @@ impl Daemon {
                 ));
             }
             drop(home);
+            // Never while a capacity check holds the mounted home.
+            let _capacity = crate::capacity::capacity_lock();
             self.host.unmount(&paths.home)?;
         }
         for name in safefs::list(dir.as_fd())? {

@@ -22,11 +22,12 @@ pub struct State {
     pub stdio: Vec<UnitStdio>,
     /// Units whose `systemd-run` client was killed.
     pub killed: HashSet<String>,
-    /// Usage of filesystems mounted at a path; others are nearly empty.
-    pub usage: HashMap<PathBuf, FsUsage>,
-    /// `(image, target)` of every online grow.
-    pub grown: Vec<(PathBuf, PathBuf)>,
-    /// The next online grow fails.
+    /// Usage of the filesystem of a directory `(st_dev, st_ino)`; others
+    /// are nearly empty.
+    pub usage: HashMap<(u64, u64), FsUsage>,
+    /// Image lengths of every reconcile that resized.
+    pub grown: Vec<u64>,
+    /// The next reconcile fails.
     pub grow_fails: bool,
     next_invocation: u64,
 }
@@ -250,8 +251,9 @@ impl Host for FakeHost {
         Ok(self.free.load(Ordering::Relaxed))
     }
 
-    fn filesystem_usage(&self, path: &Path) -> Result<FsUsage> {
-        Ok(self.state().usage.get(path).copied().unwrap_or(FsUsage {
+    fn filesystem_usage(&self, dir: std::os::fd::BorrowedFd<'_>) -> Result<FsUsage> {
+        let key = dir_key(dir)?;
+        Ok(self.state().usage.get(&key).copied().unwrap_or(FsUsage {
             size_bytes: 1 << 40,
             free_bytes: 1 << 40,
             inodes: 1 << 20,
@@ -261,21 +263,37 @@ impl Host for FakeHost {
 
     /// The filesystem takes the image file's length; its used space and
     /// inodes stay, so the new space is free.
-    fn grow_mounted_image(&self, image: &Path, target: &Path) -> Result<()> {
-        let length = std::fs::metadata(image)?.len();
+    fn reconcile_home(
+        &self,
+        image: &std::fs::File,
+        home: std::os::fd::BorrowedFd<'_>,
+    ) -> Result<bool> {
+        let length = image.metadata()?.len();
+        let key = dir_key(home)?;
         let mut state = self.state();
         if std::mem::take(&mut state.grow_fails) {
-            bail!("resize2fs failed");
+            bail!("EXT4_IOC_RESIZE_FS failed");
         }
-        state.grown.push((image.to_owned(), target.to_owned()));
-        if let Some(usage) = state.usage.get_mut(target) {
-            let added = length.saturating_sub(usage.size_bytes);
-            let scale = length / usage.size_bytes.max(1);
-            usage.free_bytes += added;
-            usage.free_inodes += usage.inodes * scale.saturating_sub(1);
-            usage.inodes *= scale.max(1);
-            usage.size_bytes = length;
+        let Some(usage) = state.usage.get_mut(&key) else {
+            return Ok(false);
+        };
+        // ext4 reports its size without about 3% of metadata.
+        let reported = length / 100 * 97;
+        if reported <= usage.size_bytes {
+            return Ok(false);
         }
-        Ok(())
+        let scale = reported / usage.size_bytes.max(1);
+        usage.free_bytes += reported - usage.size_bytes;
+        usage.free_inodes += usage.inodes * scale.saturating_sub(1);
+        usage.inodes *= scale.max(1);
+        usage.size_bytes = reported;
+        state.grown.push(length);
+        Ok(true)
     }
+}
+
+/// The identity of the directory `dir`.
+pub fn dir_key(dir: std::os::fd::BorrowedFd<'_>) -> Result<(u64, u64)> {
+    let stat = rustix::fs::fstat(dir)?;
+    Ok((stat.st_dev, stat.st_ino))
 }

@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/cowboy-account-sandbox/config.json";
 const GIB: u64 = 1024 * 1024 * 1024;
+/// Largest accepted retention, in days (ten years).
+const MAX_DAYS: u64 = 3650;
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 /// Address ranges always denied to account units; `ip_deny` only appends to
@@ -95,8 +97,6 @@ pub struct Tools {
     pub useradd: PathBuf,
     pub userdel: PathBuf,
     pub mkfs_ext4: PathBuf,
-    pub losetup: PathBuf,
-    pub resize2fs: PathBuf,
     pub mount: PathBuf,
     pub umount: PathBuf,
 }
@@ -138,8 +138,6 @@ impl Default for Tools {
             useradd: "/usr/sbin/useradd".into(),
             userdel: "/usr/sbin/userdel".into(),
             mkfs_ext4: "/usr/sbin/mkfs.ext4".into(),
-            losetup: "/usr/sbin/losetup".into(),
-            resize2fs: "/usr/sbin/resize2fs".into(),
             mount: "/usr/bin/mount".into(),
             umount: "/usr/bin/umount".into(),
         }
@@ -189,17 +187,15 @@ impl Config {
             self.home_image_inodes >= 1024,
             "home_image_inodes is below 1024"
         );
-        ensure!(
-            self.home_image_max_bytes >= self.home_image_bytes,
-            "home_image_max_bytes is below home_image_bytes"
-        );
+        // A ceiling below the initial size means no growth (the daemon uses
+        // the larger), so a legacy configuration of any size stays valid.
         ensure!(
             self.home_min_free_bytes < self.home_grow_free_bytes,
             "home_min_free_bytes must be below home_grow_free_bytes"
         );
         ensure!(
-            self.home_grow_free_bytes < self.home_image_bytes,
-            "home_grow_free_bytes must be below home_image_bytes"
+            self.agy_log_retention_days <= MAX_DAYS,
+            "agy_log_retention_days exceeds {MAX_DAYS}"
         );
         ensure!(
             self.max_runtime_units != Some(0),
@@ -281,39 +277,20 @@ mod tests {
     }
 
     #[test]
-    fn home_capacity_bounds_are_ordered() {
-        for (adjust, valid) in [
-            (
-                Config {
-                    home_image_max_bytes: GIB,
-                    ..Config::default()
-                },
-                false,
-            ),
-            (
-                Config {
-                    home_min_free_bytes: 2 * GIB,
-                    ..Config::default()
-                },
-                false,
-            ),
-            (
-                Config {
-                    home_grow_free_bytes: 8 * GIB,
-                    ..Config::default()
-                },
-                false,
-            ),
-            (
-                Config {
-                    home_image_max_bytes: 4 * GIB,
-                    ..Config::default()
-                },
-                true,
-            ),
-        ] {
-            assert_eq!(adjust.validated().is_ok(), valid);
+    fn legacy_image_sizes_stay_valid_and_new_bounds_are_checked() {
+        for size in [GIB, 2 * GIB, 4 * GIB, 8 * GIB, 64 * GIB] {
+            let json = format!(r#"{{"home_image_bytes":{size},"home_image_inodes":131072}}"#);
+            let config: Config = serde_json::from_str(&json).unwrap();
+            config.validated().unwrap();
         }
+        let config = |adjust: fn(&mut Config)| {
+            let mut config = Config::default();
+            adjust(&mut config);
+            config.validated()
+        };
+        assert!(config(|c| c.home_min_free_bytes = 2 * GIB).is_err());
+        assert!(config(|c| c.agy_log_retention_days = 300_000_000_000_000).is_err());
+        assert!(config(|c| c.agy_log_retention_days = 0).is_ok());
     }
 
     #[test]
