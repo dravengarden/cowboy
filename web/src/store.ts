@@ -43,6 +43,7 @@ import {
   removeSessionById,
   upsertSession,
 } from "./sessionDelta";
+import { cachedDeliveryOptions, clearDeliveryOptionsCache } from "./deliveryPolicy";
 import { buildQueueMutationCommand } from "./queueMutationCommand";
 import {
   interactiveClientKind,
@@ -143,7 +144,7 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 import { ContextNavigationNotice, evictSessionContext, invalidateReferencingContexts, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
-import { bulkActivatableDrafts, wrapUpOutboxPatch, wrapUpQueueAddOptions, type WrapUpOutboxFields } from "./wrapUpDelivery";
+import { bulkActivatableDrafts, postWrapUpQueued, wrapUpOutboxPatch, wrapUpQueueAddOptions, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -173,7 +174,7 @@ import {
   acceptsMachineSnapshot,
   projectMachineOccupancy,
 } from "./machineState";
-import { type ConfigOption, type ClientCapacity, type ContentBlock, type Delivery, type DraftSchedule, type Envelope, type Inbound, type MachineSummary, type Outbound, type SessionBootstrapResponse, type SessionMeta, type WireQueued } from "./protocol";
+import { type ConfigOption, type ClientCapacity, type ContentBlock, type Delivery, type DraftSchedule, type Envelope, type Inbound, type MachineSummary, type Outbound, type SessionBootstrapResponse, type SessionMeta, type WireDeliveryOrigin, type WireQueued } from "./protocol";
 import { observePromptSuggestion } from "./promptSuggestions";
 import { dropEventsBefore, lastContextClearSeq, snapshotJoinGap } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
@@ -266,6 +267,8 @@ export interface QueuedMessage extends WrapUpOutboxFields {
   failure?: string;
   /** Where this local row came from, so a failed send can return there. */
   origin?: DeliveryOrigin;
+  /** Server-authoritative C-auth content provenance from `WireQueued.origin`. */
+  serverOrigin?: WireDeliveryOrigin;
   /** Present only on a DRAFT with a future fire time — the server auto-activates
    *  it then. Drives the draft-row clock chip. Absent on plain drafts. */
   schedule?: DraftSchedule;
@@ -1590,7 +1593,7 @@ function applyCommandResult(
   commitQueue(msg.session_id);
   persistHeld(msg.session_id);
   if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
-  else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
+  else if (msg.outcome === "rejected" && (isQueuedSend(pending.name) || (pending.name === "activateDraft" && (pending.args as { wrapUp?: boolean }).wrapUp === true))) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
 }
 
 function handle(msg: Outbound): void {
@@ -2207,7 +2210,7 @@ function connect(): void {
       // idempotent; this closes the visible-pending-but-never-runs window.
       if (socketReady && socket?.readyState === WebSocket.OPEN) {
         for (const entry of syncClients.values()) entry.resend();
-        for (const store of qClients.values()) store.resend();
+        clearDeliveryOptionsCache(); for (const store of qClients.values()) store.resend();
       }
     } catch (err) {
       console.warn("sync hydrate failed", err);
@@ -3868,13 +3871,7 @@ function retireEchoedRecoveryDrafts(sessionId: string, events: readonly Envelope
 }
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
-  return buildQueueMutationCommand(
-    sessionId,
-    m,
-    qClients.get(sessionId)?.baseValue().drafts ?? [],
-    state.sessions,
-    contentOf,
-  );
+  return buildQueueMutationCommand(sessionId, m, qClients.get(sessionId)?.baseValue().drafts ?? [], state.sessions, contentOf, cachedDeliveryOptions(sessionId)?.wrap_up_draft_supported === true);
 }
 
 function needsDraftSource(sessionId: string): boolean {
@@ -5121,6 +5118,22 @@ export async function wrapUpPrompt(sessionId: string, text: string, attachments:
   return qAdd("queue", sessionId, trimmed, attachments, wrapUpQueueAddOptions(sessionId, target));
 }
 
+export async function wrapUpQueued(sessionId: string, id: string, target?: QueuedMessage["wrapUpTarget"], editingToken?: string): Promise<{ status: "queued" | "dispatched"; hinted: boolean }> {
+  if (sessionActionSnapshot()) throw new Error("Finish or cancel the pending session action before sending.");
+  try { await requireCurrentAgentContext(sessionId); } catch (error) { contextSendError(sessionId, error); }
+  const row = findQueued(sessionId, id);
+  if (row === undefined) throw new Error("Queued message no longer exists.");
+  const resolved = queuedSendTarget(confirmedPending(sessionId)?.queue ?? [], row);
+  if (resolved.kind === "local") {
+    const localCmid = resolved.cmid;
+    await waitForState(() => (confirmedPending(sessionId)?.queue ?? []).some((item) => item.cmid === localCmid), "Confirm queued message");
+    const confirmed = (confirmedPending(sessionId)?.queue ?? []).find((item) => item.cmid === localCmid);
+    if (!confirmed) throw new Error("Queued message no longer exists.");
+    return postWrapUpQueued(sessionId, confirmed.id, target, editingToken);
+  }
+  return postWrapUpQueued(sessionId, resolved.id, target, editingToken);
+}
+
 /** Jump to front of queue without interrupting the running turn. */
 export async function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const trimmed = text.trimEnd();
@@ -5426,54 +5439,32 @@ export function clearDrafts(sessionId: string): Promise<void> {
   );
 }
 
-export async function activateDraft(sessionId: string, id: string, opts?: { front?: boolean }): Promise<void> {
+export async function activateDraft(sessionId: string, id: string, opts?: { front?: boolean; wrapUp?: boolean; wrapUpTarget?: QueuedMessage["wrapUpTarget"]; editingToken?: string }): Promise<void> {
   await prepareAuthoredSend(sessionId, findDraft(sessionId, id)?.cmid);
   const row = findDraft(sessionId, id);
-  if (row === undefined) return Promise.resolve();
-  if (await composeDraftForStagedAgent(sessionId, row)) return;
-  const dest = opts?.front ? "queue" : destinationForPrompt(
-    sessionDispatchable(sessionId),
-    (state.queues.get(sessionId)?.length ?? 0) === 0,
-  );
+  if (row === undefined) { if (opts?.wrapUp) throw new Error("Draft no longer exists."); return; }
+  if (opts?.wrapUp) { try { await requireCurrentAgentContext(sessionId); } catch (error) { contextSendError(sessionId, error); } }
+  else if (await composeDraftForStagedAgent(sessionId, row)) return;
+  const front = Boolean(opts?.front || opts?.wrapUp);
+  const dest = front ? "queue" : destinationForPrompt(sessionDispatchable(sessionId), (state.queues.get(sessionId)?.length ?? 0) === 0);
   const opId = newCmid();
-  const presented: QueuedMessage = {
-    id: `opt-${opId}`,
-    text: row.text,
-    attachments: row.attachments,
-    cmid: opId,
-    origin: "draft",
-  };
+  const presented: QueuedMessage = { id: `opt-${opId}`, text: row.text, attachments: row.attachments, cmid: opId, origin: "draft", ...(row.serverOrigin !== undefined ? { serverOrigin: row.serverOrigin } : {}) };
   qStatus.set(opId, "committing");
-  if (dest !== "transcript") {
-    revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
-  }
+  if (dest !== "transcript") revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
   try {
-    await mutateQueueDurably(sessionId,
-      "activateDraft",
-      {
-        id,
-        row: presented,
-        destination: dest,
-        ...(opts?.front ? { front: true } : {}),
-        ...(row.cmid !== undefined && id === `opt-${row.cmid}`
-          ? { sourceCmid: row.cmid }
-          : {}),
-      },
-      opId,
-    );
-  } catch (error) {
-    qStatus.delete(opId);
-    if (dest === "transcript") patchMessage(sessionId, opId, "drop");
-    else commitQueue(sessionId);
-    throw error;
+    await mutateQueueDurably(sessionId, "activateDraft", {
+      id, row: presented, destination: dest, ...(front ? { front: true } : {}),
+      ...(opts?.wrapUp && opts.wrapUpTarget ? { wrapUp: true, wrapUpSessionId: sessionId, wrapUpTarget: opts.wrapUpTarget, ...(opts.editingToken ? { editingToken: opts.editingToken } : {}) } : {}),
+      ...(row.cmid !== undefined && id === `opt-${row.cmid}` ? { sourceCmid: row.cmid } : {}),
+    }, opId);
+  } catch (error) { qStatus.delete(opId); if (dest === "transcript") patchMessage(sessionId, opId, "drop"); else commitQueue(sessionId); throw error; }
+  if (opts?.wrapUp) {
+    let rejected: string | undefined;
+    await waitForState(() => { const f = qFailure.get(opId); if (f !== undefined) { rejected = f; return true; } return !(qClients.get(sessionId)?.pending() ?? []).some((m) => m.id === opId); }, "Wrap up draft");
+    if (rejected !== undefined) throw new Error(rejected);
+    return;
   }
-  await waitForState(
-    (snapshot) =>
-      !(snapshot.drafts.get(sessionId) ?? []).some((message) =>
-        message.id === id
-      ),
-    "Send draft",
-  );
+  await waitForState((snapshot) => !(snapshot.drafts.get(sessionId) ?? []).some((m) => m.id === id), "Send draft");
 }
 
 // Send all non-recovery drafts (front-to-back); recovery-* drafts need individual resend.

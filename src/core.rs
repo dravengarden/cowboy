@@ -40,7 +40,9 @@ mod hub_config;
 mod hub_dispatch_origin;
 mod hub_wrap_up;
 use hub_config::{ConfigPreviews, add_config_choices};
-pub use hub_wrap_up::FrontSubmitOutcome;
+pub use hub_wrap_up::{
+    DraftWrapUpOutcome, FrontSubmitOutcome, QueuedWrapUpOutcome, WrapUpFollowUp,
+};
 mod hub_events;
 pub use hub_events::FanoutFrame;
 pub use hub_queue::{
@@ -1043,6 +1045,12 @@ pub enum Inbound {
         cmid: Option<String>,
         #[serde(default)]
         front: bool,
+        #[serde(default)]
+        wrap_up: bool,
+        #[serde(default)]
+        wrap_up_target: Option<crate::send_delivery::DeliveryTarget>,
+        #[serde(default)]
+        editing_token: Option<String>,
     },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },

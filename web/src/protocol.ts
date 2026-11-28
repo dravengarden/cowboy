@@ -370,6 +370,12 @@ export interface ConfigOption {
 // ACP content-block array (empty for plain text); `text` is kept for display /
 // re-edit. Mirrors src/core.rs `QueuedMessage`. The store converts this to/from
 // the UI shape (which carries reconstructed `Attachment`s instead of raw blocks).
+export type WireDeliveryOrigin =
+  | { kind: "owner" }
+  | { kind: "automation" }
+  | { kind: "peer"; from_session: string }
+  | { kind: "cowboy"; source: string };
+
 export interface WireQueued {
   id: string;
   text: string;
@@ -380,6 +386,8 @@ export interface WireQueued {
   /** Present only on a DRAFT with a future fire time — the server auto-activates
    *  it then. Absent on plain drafts / queued items. Mirrors src/core.rs. */
   schedule?: DraftSchedule;
+  /** Authoritative content writer provenance from C-auth (absent on pre-C-auth legacy rows). */
+  origin?: WireDeliveryOrigin;
 }
 
 /** Where a fired scheduled draft lands in the send-queue. `back` = tail (runs
@@ -594,7 +602,16 @@ export type Inbound =
   }
   | { type: "remove_draft"; session_id: string; id: string; cmid?: string }
   | { type: "clear_drafts"; session_id: string }
-  | { type: "activate_draft"; session_id: string; id: string; cmid?: string; front?: boolean }
+  | {
+    type: "activate_draft";
+    session_id: string;
+    id: string;
+    cmid?: string;
+    front?: boolean;
+    wrap_up?: boolean;
+    wrap_up_target?: { worker_epoch: string; turn_id: string } | null;
+    editing_token?: string;
+  }
   | { type: "activate_all_drafts"; session_id: string }
   // Attach/replace a future fire time on a draft (creates it if id/cmid match
   // nothing). The server auto-activates it at fire_at_ms — fires even offline.

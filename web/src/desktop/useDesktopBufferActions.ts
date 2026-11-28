@@ -13,7 +13,10 @@ import {
   reorderQueue,
   submitPrompt,
   waitForPendingEdit,
+  wrapUpPrompt,
+  wrapUpQueued,
 } from "../store";
+import { getConfirmedQueueEditHold } from "../queueEditingHold";
 import type { DesktopPendingBufferHandle } from "./DesktopPendingBufferEditor";
 import type { DesktopPromptBuffer } from "./promptBuffer";
 
@@ -337,11 +340,17 @@ function useBufferCloseActions(
   return { handleEscape, handleDiscard, handleSaveAndClose };
 }
 
+export interface PinnedDeliverySource {
+  readonly kind: DesktopPromptBuffer["kind"];
+  readonly row: QueuedMessage | null;
+}
+
 async function runDeliverBuffer({
   sessionId,
   kind,
   queue,
   row,
+  pinnedSource,
   handle,
   mode,
   target,
@@ -351,38 +360,66 @@ async function runDeliverBuffer({
   kind: DesktopPromptBuffer["kind"];
   queue: readonly QueuedMessage[];
   row: QueuedMessage | null;
+  pinnedSource: PinnedDeliverySource | null;
   handle: DesktopPendingBufferHandle;
-  mode: Delivery | "steer" | "pause";
+  mode: Delivery | "steer" | "wrap_up" | "pause";
   target?: DeliveryTarget | undefined;
   nextCheckpoint: boolean;
 }): Promise<void> {
-  if (kind !== "new-draft" && row && !(await saveAndConfirmRow(sessionId, handle, row))) return;
+  const effectiveKind = pinnedSource?.kind ?? kind;
+  const effectiveRow = effectiveKind === "new-draft"
+    ? null
+    : pinnedSource?.row
+    ? (row && row.id === pinnedSource.row.id ? row : null)
+    : row;
+  if (effectiveKind !== "new-draft" && !effectiveRow) {
+    throw new Error("This message is no longer in the queue or drafts.");
+  }
+  if (effectiveKind !== "new-draft" && effectiveRow && !(await saveAndConfirmRow(sessionId, handle, effectiveRow))) return;
   const text = handle.getText();
   const atts = [...handle.getAttachments()];
-  if (mode === "steer") {
+  if (mode === "wrap_up") {
+    const confirmedHold = getConfirmedQueueEditHold(sessionId);
+    const editingToken = effectiveRow && confirmedHold?.id === effectiveRow.id ? confirmedHold.token : undefined;
+    if (effectiveKind === "queued" && effectiveRow) {
+      const result = await wrapUpQueued(sessionId, effectiveRow.id, target, editingToken);
+      if (result.hinted) notify("Asked agent to wrap up — runs next", "info");
+    } else if (effectiveKind === "draft" && effectiveRow) {
+      await activateDraft(sessionId, effectiveRow.id, {
+        front: true,
+        wrapUp: true,
+        wrapUpTarget: target,
+        ...(editingToken ? { editingToken } : {}),
+      });
+    } else if (effectiveKind === "new-draft") {
+      await wrapUpPrompt(sessionId, text, atts, target);
+    } else {
+      throw new Error("This message is no longer in the queue or drafts.");
+    }
+  } else if (mode === "steer") {
     // Server atomically removes the source draft/queued row (cancelling any
     // schedule timer) once steer is admitted under this single operation id.
-    const consume = row
-      ? { kind: kind === "queued" ? ("queued" as const) : ("draft" as const), id: row.id }
+    const consume = effectiveRow
+      ? { kind: effectiveKind === "queued" ? ("queued" as const) : ("draft" as const), id: effectiveRow.id }
       : undefined;
     await currentTurnPrompt(sessionId, text, atts, target, nextCheckpoint, consume);
   } else if (mode === "front") {
-    if (kind === "queued" && row) {
+    if (effectiveKind === "queued" && effectiveRow) {
       // Reorder-only: respects Pause and never registers explicit_wait.
-      const order = [row.id, ...queue.filter((m) => m.id !== row.id).map((m) => m.id)];
+      const order = [effectiveRow.id, ...queue.filter((m) => m.id !== effectiveRow.id).map((m) => m.id)];
       reorderQueue(sessionId, order);
-    } else if (row) {
+    } else if (effectiveRow) {
       // Atomic server transition: removes draft, cancels timer, front-queues.
-      await activateDraft(sessionId, row.id, { front: true });
+      await activateDraft(sessionId, effectiveRow.id, { front: true });
     } else {
       await frontPrompt(sessionId, text, atts);
     }
   } else if (mode === "pause") {
     await pauseQueueConfirmed(sessionId);
-    if (row) await activateDraft(sessionId, row.id);
+    if (effectiveRow) await activateDraft(sessionId, effectiveRow.id);
     else await submitPrompt(sessionId, text, atts);
   } else {
-    if (row) await activateDraft(sessionId, row.id);
+    if (effectiveRow) await activateDraft(sessionId, effectiveRow.id);
     else await submitPrompt(sessionId, text, atts);
   }
   handle.discard();
@@ -392,7 +429,7 @@ function useHandleBufferSubmit(
   args: DesktopBufferActionsArgs,
   busy: boolean,
   closeTarget: () => { kind: "queued" | "draft"; id: string } | undefined,
-  setDeliveryAnchor: (el: HTMLElement | null) => void,
+  openDeliveryPicker: (el: HTMLElement | null, source: PinnedDeliverySource) => void,
 ): () => void {
   const {
     sessionId, queue, activeBuffer,
@@ -412,7 +449,7 @@ function useHandleBufferSubmit(
       // queued row first, then open the Delivery Picker without blind-sending.
       void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
         if (ok && !closingRef.current && pendingRef.current === handle) {
-          setDeliveryAnchor(sendButtonRef.current);
+          openDeliveryPicker(sendButtonRef.current, { kind: activeBuffer.kind, row: resolvedRow });
         }
       }).catch((e: Error) => notify(e.message, "error"));
       return;
@@ -423,7 +460,7 @@ function useHandleBufferSubmit(
         : saveAndConfirmRow(sessionId, handle, resolvedRow);
       void prep.then((ok) => {
         if (ok && !closingRef.current && pendingRef.current === handle) {
-          setDeliveryAnchor(sendButtonRef.current);
+          openDeliveryPicker(sendButtonRef.current, { kind: activeBuffer.kind, row: resolvedRow });
         }
       }).catch((e: Error) => notify(e.message, "error"));
       return;
@@ -445,7 +482,7 @@ function useHandleBufferSubmit(
   }, [
     activeBuffer.kind, bufferMeta.scheduled, busy, closeTarget, closingRef,
     isNew, newPrompt, onCloseBuffer, pendingRef, queue.length,
-    resolvedRow, sendButtonRef, sessionId, setDeliveryAnchor,
+    resolvedRow, sendButtonRef, sessionId, openDeliveryPicker,
   ]);
 }
 
@@ -455,7 +492,12 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
     sendButtonRef, newPrompt, onCloseBuffer, onOpenStop, closingRef,
   } = args;
 
-  const [deliveryAnchor, setDeliveryAnchor] = useState<HTMLElement | null>(null);
+  const [deliveryState, setDeliveryState] = useState<{ anchor: HTMLElement; source: PinnedDeliverySource } | null>(null);
+  const deliveryAnchor = deliveryState?.anchor ?? null;
+  const pinnedDeliverySource = deliveryState?.source ?? null;
+  const openDeliveryPicker = useCallback((el: HTMLElement | null, source: PinnedDeliverySource): void => {
+    setDeliveryState(el ? { anchor: el, source } : null);
+  }, []);
   const isNew = activeBuffer.kind === "new";
   const busy = status === "busy";
 
@@ -473,7 +515,7 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
 
   const transfer = useBufferTransferActions(args, closeTarget);
   const closing = useBufferCloseActions(args, closeTarget);
-  const handleSubmit = useHandleBufferSubmit(args, busy, closeTarget, setDeliveryAnchor);
+  const handleSubmit = useHandleBufferSubmit(args, busy, closeTarget, openDeliveryPicker);
 
   const handleSave = useCallback((): void => {
     if (isNew) {
@@ -506,19 +548,20 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
       : saveAndConfirmRow(sessionId, handle, resolvedRow);
     void prep.then((ok) => {
       if (ok && !closingRef.current && pendingRef.current === handle) {
-        setDeliveryAnchor(sendButtonRef.current);
+        openDeliveryPicker(sendButtonRef.current, { kind: activeBuffer.kind, row: resolvedRow });
       }
     }).catch((e: Error) => notify(e.message, "error"));
-  }, [activeBuffer.kind, isNew, newPrompt, pendingRef, resolvedRow, sendButtonRef, sessionId]);
+  }, [activeBuffer.kind, isNew, newPrompt, openDeliveryPicker, pendingRef, resolvedRow, sendButtonRef, sessionId]);
 
   const deliverBuffer = useCallback(
-    (mode: Delivery | "steer" | "pause", target?: DeliveryTarget, nextCheckpoint = false): void => {
-      setDeliveryAnchor(null);
+    (mode: Delivery | "steer" | "wrap_up" | "pause", target?: DeliveryTarget, nextCheckpoint = false): void => {
+      const pinnedSource = deliveryState?.source ?? null;
+      setDeliveryState(null);
       const handle = pendingRef.current;
       if (!handle) return;
       closingRef.current = true;
       void runDeliverBuffer({
-        sessionId, kind: activeBuffer.kind, queue, row: resolvedRow, handle,
+        sessionId, kind: activeBuffer.kind, queue, row: resolvedRow, pinnedSource, handle,
         mode, target, nextCheckpoint,
       }).then(() => onCloseBuffer())
         .catch((e: Error) => notify(e.message, "error"))
@@ -526,16 +569,17 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
           closingRef.current = false;
         });
     },
-    [activeBuffer.kind, closingRef, onCloseBuffer, pendingRef, queue, resolvedRow, sessionId],
+    [activeBuffer.kind, closingRef, deliveryState?.source, onCloseBuffer, pendingRef, queue, resolvedRow, sessionId],
   );
 
   return {
     deliveryAnchor,
-    closeDelivery: () => setDeliveryAnchor(null),
+    pinnedDeliverySource,
+    closeDelivery: () => setDeliveryState(null),
     deliverBuffer,
     onStop: () => {
       // Confirmation dialog owns cancellation; never cancel before the user confirms.
-      setDeliveryAnchor(null);
+      setDeliveryState(null);
       onOpenStop();
     },
     handleSubmit,

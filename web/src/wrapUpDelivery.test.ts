@@ -1,12 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { isCurrentContextReady, type SessionContext } from "./sessionContext";
-import { bulkActivatableDrafts, isRecoveryDraftId, resolveDeliveryPickerState, wrapUpQueueAddOptions, wrapUpSubmitFields } from "./wrapUpDelivery";
+import {
+  bulkActivatableDrafts,
+  isOwnerAuthoredRow,
+  isRecoveryDraftId,
+  resolveDeliveryPickerState,
+  wrapUpActivateFields,
+  wrapUpQueueAddOptions,
+  wrapUpSubmitFields,
+} from "./wrapUpDelivery";
 
 const baseOptions = {
   target: { worker_epoch: "w1", turn_id: "t1" },
   steer: false,
   wrap_up_steering: true,
+  wrap_up_queued_supported: true,
+  wrap_up_draft_supported: true,
   editing: false,
+  editing_id: null as string | null,
+  editing_token: null as string | null,
   controls: { version: 1, next_checkpoint: false },
   status: "busy",
   paused: false,
@@ -97,22 +109,126 @@ describe("resolveDeliveryPickerState (Antigravity R1 wrap-up)", () => {
     });
   });
 
-  test("never offers Wrap up & send next on queued rows (prevents Peer/Automation promotion)", () => {
-    const state = resolveDeliveryPickerState({
+  test("enables Wrap up & send next on Owner-authored queued rows when Controller advertises queued support", () => {
+    const owner = resolveDeliveryPickerState({
       busy: true,
       paused: false,
       queued: true,
       steerReady: false,
       wrapUpReady: true,
       contextReady: true,
+      ownerAuthored: true,
+      disallowSteer: true,
       fresh: true,
       error: null,
       options: baseOptions,
     });
-    expect(state.showWrapUp).toBe(false);
-    expect(state.wrapUp).toBe(false);
-    expect(state.steer).toBe(false);
-    expect(state.preferred).toBe("steer");
+    expect(owner.showWrapUp).toBe(true);
+    expect(owner.wrapUp).toBe(true);
+    expect(owner.steer).toBe(false);
+    expect(owner.preferred).toBe("wrap_up");
+
+    // Non-owner (Peer/Automation/legacy) queued rows stay visible as Wrap up but disabled with clear reason.
+    const nonOwner = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: true,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      ownerAuthored: false,
+      disallowSteer: true,
+      fresh: true,
+      error: null,
+      options: baseOptions,
+    });
+    expect(nonOwner.showWrapUp).toBe(true);
+    expect(nonOwner.wrapUp).toBe(false);
+    expect(nonOwner.wrapUpUnavailable).toBe("Only your own messages can request wrap-up");
+
+    // Older Controller without wrap_up_queued_supported falls back cleanly.
+    const legacy = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: true,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      ownerAuthored: true,
+      disallowSteer: true,
+      fresh: true,
+      error: null,
+      options: { ...baseOptions, wrap_up_queued_supported: false },
+    });
+    expect(legacy.showWrapUp).toBe(false);
+    expect(legacy.wrapUp).toBe(false);
+
+    // Self-editing this queued row does not block wrap-up; editing another row still blocks it.
+    const selfEditing = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: true,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      ownerAuthored: true,
+      editingRowId: "q1",
+      editingToken: "tok-q1",
+      disallowSteer: true,
+      fresh: true,
+      error: null,
+      options: { ...baseOptions, editing: true, editing_id: "q1", editing_token: "tok-q1" },
+    });
+    expect(selfEditing.wrapUp).toBe(true);
+
+    const otherEditing = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: true,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      ownerAuthored: true,
+      editingRowId: "q1",
+      disallowSteer: true,
+      fresh: true,
+      error: null,
+      options: { ...baseOptions, editing: true, editing_id: "q2" },
+    });
+    expect(otherEditing.wrapUp).toBe(false);
+    expect(otherEditing.wrapUpUnavailable).toBe("Finish editing queued message first");
+  });
+
+  test("isOwnerAuthoredRow enforces C-auth provenance on confirmed server rows", () => {
+    expect(isOwnerAuthoredRow(null)).toBe(true);
+    expect(isOwnerAuthoredRow({ serverOrigin: { kind: "owner" } })).toBe(true);
+    expect(isOwnerAuthoredRow({ serverOrigin: { kind: "peer", from_session: "s2" } })).toBe(false);
+    expect(isOwnerAuthoredRow({ serverOrigin: { kind: "automation" } })).toBe(false);
+    expect(isOwnerAuthoredRow({ serverOrigin: { kind: "cowboy", source: "schedule" } })).toBe(false);
+    // Pre-C-auth legacy server row (no serverOrigin, no local status) -> non-owner.
+    expect(isOwnerAuthoredRow({})).toBe(false);
+    // Local optimistic browser row not yet echoed by server -> owner.
+    expect(isOwnerAuthoredRow({ status: "sending" })).toBe(true);
+  });
+
+  test("wrapUpActivateFields attaches wrap-up fields only for front Owner activations on capable Controllers", () => {
+    const target = { worker_epoch: "w1", turn_id: "t1" };
+    expect(
+      wrapUpActivateFields([{ id: "s1", wrap_up_steering: true }], "s1", {
+        front: true,
+        wrapUp: true,
+        wrapUpSessionId: "s1",
+        wrapUpTarget: target,
+      }),
+    ).toEqual({ wrap_up: true, wrap_up_target: target });
+    expect(
+      wrapUpActivateFields([{ id: "s1" }], "s1", {
+        front: true,
+        wrapUp: true,
+        wrapUpSessionId: "s1",
+        wrapUpTarget: target,
+      }),
+    ).toEqual({});
   });
 
   test("keeps native Steer intact for Codex/Claude sessions", () => {
@@ -293,4 +409,72 @@ describe("bulkActivatableDrafts", () => {
     ]);
     expect(filtered.map((d) => d.id)).toEqual(["q1", "q3"]);
   });
+});
+
+test("queued row already at index 0 prefers wrap_up under next_turn policy, while native Steer keeps next_turn", () => {
+  const state = resolveDeliveryPickerState({
+    busy: true,
+    paused: false,
+    queued: true,
+    queueCount: 0,
+    steerReady: false,
+    wrapUpReady: true,
+    contextReady: true,
+    ownerAuthored: true,
+    disallowSteer: true,
+    fresh: true,
+    error: null,
+    options: {
+      ...baseOptions,
+      policy: { mode: "next_turn" as const, revision: 1 },
+    },
+  });
+  expect(state.showWrapUp).toBe(true);
+  expect(state.wrapUp).toBe(true);
+  expect(state.preferred).toBe("wrap_up");
+});
+
+test("same-row editing held by another tab (mismatched editing_token) still blocks wrap-up", () => {
+  const stolen = resolveDeliveryPickerState({
+    busy: true, paused: false, queued: true, steerReady: false, wrapUpReady: true,
+    contextReady: true, ownerAuthored: true, editingRowId: "q-self", editingToken: "tok-tab-a",
+    disallowSteer: true, fresh: true, error: null,
+    options: { ...baseOptions, editing: true, editing_id: "q-self", editing_token: "tok-tab-b" },
+  });
+  expect(stolen.wrapUp).toBe(false);
+  expect(stolen.wrapUpUnavailable).toBe("Finish editing queued message first");
+});
+
+test("staged draft wrap-up requires wrap_up_draft_supported for rollback safety", () => {
+  const rollback = resolveDeliveryPickerState({
+    busy: true, paused: false, queued: false, stagedDraft: true, steerReady: false, wrapUpReady: true,
+    contextReady: true, ownerAuthored: true, disallowSteer: true, fresh: true, error: null,
+    options: { ...baseOptions, wrap_up_draft_supported: false },
+  });
+  expect(rollback.showWrapUp).toBe(false);
+  expect(rollback.wrapUp).toBe(false);
+  expect(
+    wrapUpActivateFields(
+      [{ id: "s1", wrap_up_steering: true }], "s1",
+      { front: true, wrapUp: true, wrapUpSessionId: "s1", wrapUpTarget: { worker_epoch: "w1", turn_id: "t1" }, editingToken: "tok-1" },
+      false,
+    ),
+  ).toEqual({});
+  expect(
+    wrapUpActivateFields(
+      [{ id: "s1", wrap_up_steering: true }], "s1",
+      { front: true, wrapUp: true, wrapUpSessionId: "s1", wrapUpTarget: { worker_epoch: "w1", turn_id: "t1" }, editingToken: "tok-1" },
+      true,
+    ),
+  ).toEqual({ wrap_up: true, wrap_up_target: { worker_epoch: "w1", turn_id: "t1" }, editing_token: "tok-1" });
+});
+
+test("native Codex/Claude queued head under next_turn policy does not default focus to Steer", () => {
+  const native = resolveDeliveryPickerState({
+    busy: true, paused: false, queued: true, queueCount: 0, steerReady: true, wrapUpReady: false,
+    contextReady: true, fresh: true, error: null,
+    options: { ...baseOptions, steer: true, wrap_up_steering: false, policy: { mode: "next_turn", revision: 1 } },
+  });
+  expect(native.steer).toBe(true);
+  expect(native.preferred).toBe("front");
 });

@@ -5,6 +5,8 @@ import type { DeliveryTarget } from "./currentTurnDelivery";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { NetworkIconButton } from "./NetworkActionFeedback";
 import type { Status } from "./protocol";
+import { isCurrentContextReady } from "./sessionContext";
+import { useAnnouncedSessionContext } from "./SessionContextCue";
 import {
   cancelTurn,
   currentTurnPrompt,
@@ -15,8 +17,10 @@ import {
   setQueueEditing,
   useConnected,
   useStoreSelector,
+  wrapUpQueued,
 } from "./store";
 import { getQueueEditHoldId } from "./queueEditingHold";
+import { isOwnerAuthoredRow } from "./wrapUpDelivery";
 
 export function QueuedDeliveryAction({
   desktop,
@@ -51,7 +55,22 @@ export function QueuedDeliveryAction({
       return session?.provider !== "antigravity" && session?.supports_current_turn === true;
     },
   );
+  const queueWrapUpCapable = useStoreSelector(
+    (snapshot) =>
+      snapshot.sessions.find((candidate) => candidate.id === sessionId)?.wrap_up_steering === true,
+  );
+  const sessionContext = useAnnouncedSessionContext(sessionId);
+  const currentContextReady = isCurrentContextReady(sessionContext);
+  const ownerAuthored = isOwnerAuthoredRow(message);
   const queueConnected = useConnected();
+  const wrapUpRow = (target: DeliveryTarget | undefined): void => {
+    setDeliveryAnchor(null);
+    void wrapUpQueued(sessionId, message.id, target)
+      .then((result) => {
+        if (result.hinted) notify("Asked agent to wrap up — runs next", "info");
+      })
+      .catch((error: Error) => notify(error.message));
+  };
   const steerQueued = (target: DeliveryTarget | undefined, nextCheckpoint = false): void => {
     setDeliveryAnchor(null);
     const prevHold = getQueueEditHoldId(sessionId);
@@ -82,7 +101,11 @@ export function QueuedDeliveryAction({
       </NetworkIconButton>
     </Tooltip>
   ) : (
-    <Tooltip title="Send: Steer into the current turn, or run it first">
+    <Tooltip
+      title={queueWrapUpCapable && !queueSteerCapable
+        ? "Send: Ask agent to wrap up, or run it first"
+        : "Send: Steer into the current turn, or run it first"}
+    >
       <IconButton
         data-desktop-item-action="default"
         size="small"
@@ -106,6 +129,9 @@ export function QueuedDeliveryAction({
           anchor={deliveryAnchor}
           busy={status === "busy"}
           steerReady={queueConnected && status === "busy" && queueSteerCapable}
+          wrapUpReady={queueConnected && status === "busy" && !queueSteerCapable && queueWrapUpCapable && !queuePaused && currentContextReady}
+          contextReady={currentContextReady}
+          ownerAuthored={ownerAuthored}
           disallowSteer={disallowAntigravitySteer}
           paused={queuePaused}
           queueCount={queuedAhead}
@@ -119,6 +145,7 @@ export function QueuedDeliveryAction({
             );
           }}
           onSteer={steerQueued}
+          onWrapUp={wrapUpRow}
           onSendAndPause={(): void => setDeliveryAnchor(null)}
           onStop={(): void => {
             setDeliveryAnchor(null);

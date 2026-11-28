@@ -1072,9 +1072,67 @@ fn draft_command(
             id,
             cmid,
             front,
-        } => state
-            .hub
-            .activate_draft_with_front(&session_id, &id, cmid, front, caller),
+            wrap_up,
+            wrap_up_target,
+            editing_token,
+        } => {
+            if wrap_up {
+                let provider_key = provider_fence_key_for_session(&state.hub, &session_id);
+                let plugin_fence = state.plugin_lifecycle_fences.read();
+                if let Some(refusal) = provider_key
+                    .as_ref()
+                    .and_then(|key| plugin_fence.get(key))
+                    .and_then(|fence| provider_fence_refusal(*fence))
+                {
+                    if let Some(op) = cmid.as_deref().filter(|op| !op.is_empty()) {
+                        state.hub.command_result(
+                            &session_id,
+                            op,
+                            CommandOutcome::Rejected,
+                            refusal,
+                        );
+                    }
+                    state
+                        .hub
+                        .broadcast_error(Some(session_id.clone()), refusal.to_owned());
+                    return Err(refusal.to_owned());
+                }
+                match state.hub.activate_draft_wrap_up(
+                    &session_id,
+                    &id,
+                    cmid,
+                    caller,
+                    editing_token.as_deref(),
+                ) {
+                    crate::core::DraftWrapUpOutcome::QueuedFront { row_id } => {
+                        if let Some(target) = wrap_up_target.as_ref()
+                            && state
+                                .service_config
+                                .get(&crate::config::schema::PROVIDER_ANTIGRAVITY_WRAP_UP_STEERING)
+                        {
+                            let _ = state.supervisor.send_wrap_up_hint_for_follow_up(
+                                &session_id,
+                                target,
+                                Some(crate::core::WrapUpFollowUp::RowId(&row_id)),
+                            );
+                        }
+                        drop(plugin_fence);
+                    }
+                    crate::core::DraftWrapUpOutcome::Refused(msg) => {
+                        drop(plugin_fence);
+                        return Err(msg.to_owned());
+                    }
+                    crate::core::DraftWrapUpOutcome::DispatchedImmediately
+                    | crate::core::DraftWrapUpOutcome::QueuedFallback => {
+                        drop(plugin_fence);
+                    }
+                }
+            } else {
+                state
+                    .hub
+                    .activate_draft_with_front(&session_id, &id, cmid, front, caller);
+            }
+        }
         Inbound::ActivateAllDrafts { session_id } => {
             state.hub.activate_all_drafts(&session_id, caller);
         }

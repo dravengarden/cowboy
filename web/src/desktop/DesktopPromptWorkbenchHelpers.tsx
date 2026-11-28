@@ -23,6 +23,8 @@ import { confirmedPending, notify, type QueuedMessage, waitForPendingEdit } from
 import { useRemoteQueueEditing } from "../queueEditingHold";
 import { recoverPendingEditId } from "../pendingEditStore";
 import { setActiveVimOwner } from "../vimModeStore";
+import { useConfirmedQueueEditHold } from "../queueEditingHold";
+import { isOwnerAuthoredRow } from "../wrapUpDelivery";
 import { DesktopComposerToolbar } from "./DesktopComposerToolbar";
 import {
   DesktopPendingBufferEditor,
@@ -711,25 +713,16 @@ export function DesktopWorkbenchCanvas({
   );
 }
 
-export function DesktopWorkbenchDialogs({
-  sessionId,
-  status,
-  paused,
-  currentTurnAvailable,
-  queuedAhead,
-  activeBuffer,
-  deliveryAnchor,
-  onCloseDelivery,
-  onDeliverBuffer,
-  onStop,
-  pendingSwitch,
-  onCloseSwitch,
-  onConfirmSwitch,
-}: {
+export function DesktopWorkbenchDialogs(props: {
   sessionId: string;
   status: Status;
   paused: boolean;
   currentTurnAvailable: boolean;
+  wrapUpAvailable: boolean;
+  contextReady: boolean;
+  disallowSteer: boolean;
+  resolvedRow: QueuedMessage | null;
+  pinnedDeliverySource: { readonly kind: DesktopPromptBuffer["kind"]; readonly row: QueuedMessage | null } | null;
   queuedAhead: number;
   activeBuffer: DesktopPromptBuffer;
   deliveryAnchor: HTMLElement | null;
@@ -740,22 +733,31 @@ export function DesktopWorkbenchDialogs({
   onCloseSwitch: () => void;
   onConfirmSwitch: (resolution: "save" | "discard") => void;
 }): React.JSX.Element {
+  const {
+    sessionId, status, paused, currentTurnAvailable, wrapUpAvailable, contextReady,
+    disallowSteer, resolvedRow, pinnedDeliverySource, queuedAhead, activeBuffer, deliveryAnchor,
+    onCloseDelivery, onDeliverBuffer, onStop, pendingSwitch, onCloseSwitch, onConfirmSwitch,
+  } = props;
+  const confirmedHold = useConfirmedQueueEditHold(sessionId);
+  const srcKind = pinnedDeliverySource?.kind ?? activeBuffer.kind;
+  const srcRow = srcKind === "new-draft" ? null : (pinnedDeliverySource?.row && resolvedRow?.id === pinnedDeliverySource.row.id ? resolvedRow : null);
+  const ownHold = confirmedHold && srcRow?.id === confirmedHold.id ? confirmedHold : null;
   return (
     <>
       {deliveryAnchor && (
         <DeliveryPicker
-          sessionId={sessionId}
-          anchor={deliveryAnchor}
-          busy={status === "busy"}
-          steerReady={currentTurnAvailable}
-          paused={paused}
-          queueCount={queuedAhead}
-          queued={activeBuffer.kind === "queued"}
+          sessionId={sessionId} anchor={deliveryAnchor} busy={status === "busy"}
+          steerReady={currentTurnAvailable} wrapUpReady={wrapUpAvailable} contextReady={contextReady}
+          ownerAuthored={srcKind === "new-draft" ? true : srcRow ? isOwnerAuthoredRow(srcRow) : false}
+          editingRowId={ownHold?.id ?? null} editingToken={ownHold?.token ?? null}
+          disallowSteer={disallowSteer} paused={paused} queueCount={queuedAhead}
+          queued={srcKind === "queued"} stagedDraft={srcKind === "draft"}
           onClose={onCloseDelivery}
           onNextTurn={() => onDeliverBuffer("back")}
           onQueueFront={() => onDeliverBuffer("front")}
           onSteer={(target, nextCheckpoint) =>
             onDeliverBuffer("steer", target, nextCheckpoint)}
+          onWrapUp={(target) => onDeliverBuffer("wrap_up", target)}
           onSendAndPause={() => onDeliverBuffer("pause")}
           onStop={onStop}
         />

@@ -25,6 +25,10 @@ export interface DraftActivation<R extends QueueItem = QueueItem> {
   row?: R;
   destination?: "queue" | "transcript";
   front?: boolean;
+  wrapUp?: boolean;
+  wrapUpSessionId?: string;
+  wrapUpTarget?: { worker_epoch: string; turn_id: string };
+  editingToken?: string;
 }
 
 /** A queued row's Send now. `issuedAtMs` (absent on sends persisted before it

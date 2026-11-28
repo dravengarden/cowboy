@@ -176,6 +176,7 @@
     "send_delivery::receipt": "queue.delivery_receipt",
     "send_delivery::release": "queue.release_hold",
     "send_delivery::set_policy": "queue.policy_set",
+    "send_delivery::wrap_up_queued": "exception:human — requesting Antigravity wrap-up on an Owner-authored queued row is restricted to the human session owner under C-auth; agents observe delivery capability via queue.options.",
     "session_context::cancel": "exception:human \u2014 taking a handoff back returns its message to the Composer of the person who wrote it; an agent has no Composer to restore it into.",
     "session_context::continue_here": "exception:browser \u2014 keeping a handed-off session open only lifts a Web read-only presentation; agents and scripts were never refused writes to it.",
     "session_context::duplicate": "sessions.duplicate",

@@ -10,7 +10,11 @@ export interface DeliveryOptions {
   target: DeliveryTarget | null;
   steer: boolean;
   wrap_up_steering?: boolean;
+  wrap_up_queued_supported?: boolean;
+  wrap_up_draft_supported?: boolean;
   editing?: boolean;
+  editing_id?: string | null;
+  editing_token?: string | null;
   controls: { version: number; next_checkpoint: boolean };
   status: string;
   paused: boolean;
@@ -43,6 +47,10 @@ const optionsCache = new Map<string, DeliveryOptions>();
 
 export function cachedDeliveryOptions(session: string): DeliveryOptions | null {
   return optionsCache.get(session) ?? null;
+}
+
+export function clearDeliveryOptionsCache(): void {
+  optionsCache.clear();
 }
 
 /** A transient failure (a cold connection over a remote link, a brief

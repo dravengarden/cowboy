@@ -1150,7 +1150,7 @@ impl Hub {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn stage_regular_draft_activation(
+    pub(in crate::core) fn stage_regular_draft_activation(
         &self,
         session_id: &str,
         s: &mut Session,

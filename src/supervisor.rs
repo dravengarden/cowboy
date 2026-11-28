@@ -618,11 +618,21 @@ impl Supervisor {
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
     ) -> bool {
+        self.send_wrap_up_hint_for_follow_up(session_id, target, None)
+    }
+
+    pub fn send_wrap_up_hint_for_follow_up(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+        follow_up: Option<crate::core::WrapUpFollowUp<'_>>,
+    ) -> bool {
         if self.hub.wrap_up_hint_blocked(session_id) {
             return false;
         }
-        self.runtime_for_session(session_id)
-            .is_ok_and(|runtime| runtime.send_wrap_up_hint(session_id, target))
+        self.runtime_for_session(session_id).is_ok_and(|runtime| {
+            runtime.send_wrap_up_hint_for_follow_up(session_id, target, follow_up)
+        })
     }
 
     pub fn send_traced(

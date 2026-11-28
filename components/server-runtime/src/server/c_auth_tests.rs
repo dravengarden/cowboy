@@ -719,3 +719,36 @@ async fn steer_and_durable_retired_submit_honor_recovery_reservation_and_retirem
     assert!(confirmed.iter().any(|c| c == "op-evicted-retired"));
     assert_eq!(cold_hub.session_info("s-r2-sql").unwrap().queue_count, 0);
 }
+
+#[test]
+fn queued_wrap_up_route_requires_human_session_mutate_policy() {
+    use axum::http::Method;
+    use cowboy_server_auth::server::http_policy::{automation_route_allowed, classify_route};
+    let path = "/api/sessions/sess-1/queue/q1/wrap-up";
+    assert_eq!(
+        classify_route(&Method::POST, path),
+        RouteAuth::ProductSessionMutate
+    );
+    let automation = crate::client_auth::DeviceAccessIdentity {
+        device_id: "auto-1".into(),
+        user_id: "u1".into(),
+        principal_class: "automation".into(),
+        client_kind: "automation".into(),
+        scopes: vec!["sessions:write".into(), "api:read".into()],
+    };
+    let human = crate::client_auth::DeviceAccessIdentity {
+        device_id: "human-1".into(),
+        user_id: "u1".into(),
+        principal_class: "human".into(),
+        client_kind: "cli".into(),
+        scopes: vec![],
+    };
+    assert!(
+        !automation_route_allowed(&automation, &Method::POST, path),
+        "automation credentials must never reach queued wrap-up route"
+    );
+    assert!(
+        automation_route_allowed(&human, &Method::POST, path),
+        "human credentials remain allowed on queued wrap-up route"
+    );
+}

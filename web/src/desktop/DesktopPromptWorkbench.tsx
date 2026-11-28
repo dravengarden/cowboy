@@ -35,6 +35,9 @@ export interface DesktopPromptWorkbenchProps {
   paused: boolean;
   serverConnected: boolean;
   currentTurnAvailable: boolean;
+  wrapUpAvailable?: boolean;
+  contextReady?: boolean;
+  disallowSteer?: boolean;
   queue: readonly QueuedMessage[];
   drafts: readonly QueuedMessage[];
   nextAgentContext?: SessionContext | undefined;
@@ -57,6 +60,7 @@ export function DesktopPromptWorkbench(
 ): React.JSX.Element {
   const {
     sessionId, status, paused, serverConnected, currentTurnAvailable,
+    wrapUpAvailable = false, contextReady = true, disallowSteer = false,
     queue, drafts, nextAgentContext, commands, handedOff, overlayOpen,
     newPromptEditorRef, sendButtonRef, newPrompt, planSlot, beforeCanvas,
     newPromptCanvas, onMoveDraft, onScheduleDraft, onOpenStop,
@@ -164,6 +168,11 @@ export function DesktopPromptWorkbench(
       <DesktopWorkbenchDialogs
         sessionId={sessionId} status={status} paused={paused}
         currentTurnAvailable={currentTurnAvailable}
+        wrapUpAvailable={wrapUpAvailable}
+        contextReady={contextReady}
+        disallowSteer={disallowSteer}
+        resolvedRow={state.resolved?.row ?? null}
+        pinnedDeliverySource={actions.pinnedDeliverySource}
         queuedAhead={state.activeBuffer.kind === "queued" && state.resolved
           ? state.resolved.index
           : queue.length}

@@ -1415,6 +1415,9 @@ export function ComposerWorkspace({
             paused={paused}
             serverConnected={serverConnected}
             currentTurnAvailable={currentTurnAvailable}
+            wrapUpAvailable={wrapUpAvailable}
+            contextReady={currentContextReady}
+            disallowSteer={provider === "antigravity"}
             queue={queue}
             drafts={draftList}
             nextAgentContext={nextAgentContext}

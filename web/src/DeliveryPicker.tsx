@@ -57,14 +57,22 @@ export interface DeliveryPickerProps {
    *  move to the front; "Next turn" (it is queued) and "Send & pause" do not
    *  apply. `queueCount` is then the number of messages ahead of it. */
   queued?: boolean;
+  /** True when activating an existing staged draft (gated on wrap_up_draft_supported). */
+  stagedDraft?: boolean;
   /** The client's live view (connected, busy, current-turn capable). Steer is
    *  offered from it at once instead of waiting for the options read. */
   steerReady?: boolean;
-  /** Composer-only live readiness for Antigravity wrap-up steering. */
+  /** Live readiness for Antigravity wrap-up steering. */
   wrapUpReady?: boolean;
   /** Whether the session's current agent context has no pending/unresolved switch. */
   contextReady?: boolean;
-  /** Composer-only wrap-up action (front-queue + target-fenced wrap-up hint). */
+  /** True when the message is Owner-authored (false for Peer/Automation/legacy rows). */
+  ownerAuthored?: boolean;
+  /** Row id held for editing by this very editor so self-editing does not block wrap-up. */
+  editingRowId?: string | null;
+  /** Confirmed edit-hold lease token matching `editingRowId`. */
+  editingToken?: string | null;
+  /** Antigravity wrap-up action (front-queue + target-fenced wrap-up hint). */
   onWrapUp?: (target: DeliveryTarget | undefined) => void;
   /** Disable Steer/checkpoint regardless of legacy Controller capability flags. */
   disallowSteer?: boolean;
@@ -160,9 +168,14 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
     busy: props.busy,
     paused: props.paused,
     queued: Boolean(props.queued),
+    stagedDraft: Boolean(props.stagedDraft),
+    queueCount: props.queueCount,
     steerReady: Boolean(props.steerReady),
     wrapUpReady: Boolean(props.wrapUpReady),
     contextReady: props.contextReady ?? true,
+    ownerAuthored: props.ownerAuthored ?? true,
+    editingRowId: props.editingRowId ?? null,
+    editingToken: props.editingToken ?? null,
     disallowSteer: Boolean(props.disallowSteer),
     fresh,
     error,

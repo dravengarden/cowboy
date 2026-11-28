@@ -3,7 +3,7 @@
 import type { Attachment } from "./attachments";
 import { type DraftActivation, draftActivationSourceId } from "./queueMutators";
 import type { ContentBlock, DraftSchedule, Inbound, SessionMeta } from "./protocol";
-import { type WrapUpOutboxFields, wrapUpSubmitFields } from "./wrapUpDelivery";
+import { type WrapUpOutboxFields, wrapUpActivateFields, wrapUpSubmitFields } from "./wrapUpDelivery";
 
 export interface QueueMutationRow extends WrapUpOutboxFields {
   readonly id: string;
@@ -19,6 +19,7 @@ export function buildQueueMutationCommand(
   baseDrafts: readonly QueueMutationRow[],
   sessions: readonly SessionMeta[],
   contentOf: (text: string, attachments: readonly Attachment[]) => ContentBlock[],
+  draftWrapUpSupported = true,
 ): Inbound | null {
   const args = m.args as { id?: string; row?: QueueMutationRow; issuedAtMs?: number };
   if (m.name === "addDraft" && args.row !== undefined) {
@@ -94,6 +95,7 @@ export function buildQueueMutationCommand(
       id,
       cmid: args.row?.cmid ?? m.id,
       ...(activation.front ? { front: true } : {}),
+      ...wrapUpActivateFields(sessions, sessionId, activation, draftWrapUpSupported),
     };
   }
   if ((m.name === "sendQueued" || m.name === "forceQueued") && args.id !== undefined) {

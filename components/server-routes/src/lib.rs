@@ -413,6 +413,10 @@ pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             get(send_delivery::options),
         )
         .route(
+            "/api/sessions/{id}/queue/{row_id}/wrap-up",
+            post(send_delivery::wrap_up_queued),
+        )
+        .route(
             "/api/sessions/{id}/delivery-policy",
             put(send_delivery::set_policy),
         )

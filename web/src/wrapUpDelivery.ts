@@ -1,6 +1,6 @@
 import type { DeliveryTarget } from "./currentTurnDelivery";
 import type { DeliveryOptions } from "./deliveryPolicy";
-import type { SessionMeta } from "./protocol";
+import type { SessionMeta, WireDeliveryOrigin } from "./protocol";
 
 export interface WrapUpOutboxFields {
   wrapUp?: boolean;
@@ -8,13 +8,29 @@ export interface WrapUpOutboxFields {
   wrapUpTarget?: DeliveryTarget;
 }
 
+/** True when a staged row is Owner-authored (or freshly authored locally
+ *  before server round-trip). Confirmed server rows without C-auth `owner`
+ *  provenance (Peer, Automation, Cowboy, or legacy pre-C-auth) return false. */
+export function isOwnerAuthoredRow(
+  row: { readonly status?: unknown; readonly serverOrigin?: WireDeliveryOrigin } | null | undefined,
+): boolean {
+  if (!row) return true;
+  if (row.serverOrigin !== undefined) return row.serverOrigin.kind === "owner";
+  return row.status !== undefined;
+}
+
 export interface DeliveryPickerStateInput {
   busy: boolean;
   paused: boolean;
   queued: boolean;
+  stagedDraft?: boolean;
+  queueCount?: number;
   steerReady: boolean;
   wrapUpReady: boolean;
   contextReady: boolean;
+  ownerAuthored?: boolean;
+  editingRowId?: string | null;
+  editingToken?: string | null;
   disallowSteer?: boolean;
   fresh: boolean;
   error: string | null;
@@ -32,9 +48,10 @@ export interface DeliveryPickerState {
   preferred: "steer" | "wrap_up" | "checkpoint" | "front" | "next";
 }
 
-/** Resolve DeliveryPicker row availability and initial focus. Composer-only
- *  wrap-up steering activates exclusively when native steer is unavailable and
- *  every R1 precondition holds; queued rows never promote Peer/Automation text. */
+/** Resolve DeliveryPicker row availability and initial focus. Antigravity
+ *  wrap-up steering activates when native steer is unavailable and every
+ *  precondition holds; queued/draft rows enforce C-auth Owner provenance and
+ *  require Controller queued-wrap-up support (`wrap_up_queued_supported`). */
 export function resolveDeliveryPickerState(
   input: DeliveryPickerStateInput,
 ): DeliveryPickerState {
@@ -42,9 +59,14 @@ export function resolveDeliveryPickerState(
     busy,
     paused,
     queued,
+    stagedDraft = false,
+    queueCount,
     steerReady,
     wrapUpReady,
     contextReady,
+    ownerAuthored = true,
+    editingRowId = null,
+    editingToken = null,
     disallowSteer = false,
     fresh,
     error,
@@ -53,7 +75,12 @@ export function resolveDeliveryPickerState(
   // Use cached options only for capability hints; pause/editing flags from a
   // prior opening must never shadow live props on reopen before fresh read.
   const effectivePaused = paused || (fresh && Boolean(options?.paused));
-  const effectiveEditing = fresh && Boolean(options?.editing);
+  const selfEditing = Boolean(
+    editingRowId && editingToken &&
+      options?.editing_id === editingRowId &&
+      options?.editing_token === editingToken,
+  );
+  const effectiveEditing = fresh && Boolean(options?.editing) && !selfEditing;
   const target = fresh && busy ? options?.target ?? undefined : undefined;
   const steer = disallowSteer
     ? false
@@ -61,15 +88,23 @@ export function resolveDeliveryPickerState(
     ? Boolean(busy && options?.steer && target)
     : Boolean(busy && steerReady);
   const checkpoint = !disallowSteer && steer && Boolean(options?.controls.next_checkpoint);
-  const showWrapUp = !queued && !steer && (
+  const stagedWrapUpAvailable = queued
+    ? Boolean(options?.wrap_up_queued_supported)
+    : stagedDraft
+    ? Boolean(options?.wrap_up_draft_supported)
+    : true;
+  const showWrapUp = !steer && (
     fresh
-      ? Boolean(!options?.steer && options?.wrap_up_steering)
-      : Boolean(wrapUpReady || (!options?.steer && options?.wrap_up_steering))
+      ? Boolean(!options?.steer && options?.wrap_up_steering && stagedWrapUpAvailable)
+      : Boolean(
+        wrapUpReady ||
+          (!options?.steer && options?.wrap_up_steering && stagedWrapUpAvailable),
+      )
   );
   // Require a fresh read with an exact target before enabling wrap-up so the
   // owner never hints a later turn than the one shown when the picker opened.
-  const wrapUp = showWrapUp && busy && !effectivePaused && !effectiveEditing &&
-    contextReady && fresh && Boolean(target);
+  const wrapUp = showWrapUp && ownerAuthored && busy && !effectivePaused &&
+    !effectiveEditing && contextReady && fresh && Boolean(target);
   const unavailable = !busy
     ? "No active turn"
     : disallowSteer || (fresh && !options?.steer)
@@ -79,7 +114,9 @@ export function resolveDeliveryPickerState(
     : error
     ? "Runtime unavailable"
     : "Checking runtime…";
-  const wrapUpUnavailable = !busy
+  const wrapUpUnavailable = !ownerAuthored
+    ? "Only your own messages can request wrap-up"
+    : !busy
     ? "No active turn"
     : effectivePaused
     ? "Queue is paused"
@@ -93,9 +130,13 @@ export function resolveDeliveryPickerState(
     ? "Runtime unavailable"
     : "Checking runtime…";
   const mode = options?.policy.mode ?? "steer";
+  const frontAlreadyFirst = queued && queueCount === 0;
+  // Only Antigravity wrap-up overrides an already-first disabled Queue first
+  // row under non-steer policies; native Codex/Claude Steer keeps respecting
+  // next_turn so Enter never injects unexpectedly into an active turn.
   const preferred = mode === "tool_boundary"
     ? "checkpoint"
-    : mode === "steer"
+    : mode === "steer" || (frontAlreadyFirst && showWrapUp)
     ? (showWrapUp ? "wrap_up" : "steer")
     : queued
     ? "front"
@@ -135,6 +176,36 @@ export function wrapUpSubmitFields(
   return { wrap_up: true, wrap_up_target: row.wrapUpTarget };
 }
 
+/** Rollback-safe wire encoding for activating an Owner draft with Antigravity
+ *  wrap-up steering; omits wrap-up fields on Controllers without support. */
+export function wrapUpActivateFields(
+  sessions: readonly Pick<SessionMeta, "id" | "wrap_up_steering">[],
+  sessionId: string,
+  activation: WrapUpOutboxFields & { readonly front?: boolean; readonly editingToken?: string },
+  draftWrapUpSupported = true,
+): { wrap_up?: true; wrap_up_target?: DeliveryTarget; editing_token?: string } {
+  if (
+    !draftWrapUpSupported ||
+    !activation.front ||
+    activation.wrapUp !== true ||
+    !activation.wrapUpTarget
+  ) {
+    return {};
+  }
+  if (activation.wrapUpSessionId !== undefined && activation.wrapUpSessionId !== sessionId) {
+    return {};
+  }
+  const session = sessions.find((candidate) => candidate.id === sessionId);
+  if (session?.wrap_up_steering !== true) {
+    return {};
+  }
+  return {
+    wrap_up: true,
+    wrap_up_target: activation.wrapUpTarget,
+    ...(activation.editingToken ? { editing_token: activation.editingToken } : {}),
+  };
+}
+
 export function wrapUpOutboxPatch(opts: WrapUpOutboxFields): WrapUpOutboxFields {
   if (opts.wrapUp !== true) return {};
   return {
@@ -165,6 +236,36 @@ export function wrapUpQueueAddOptions(
 
 export function isRecoveryDraftId(id: string): boolean {
   return id.startsWith("recovery-");
+}
+
+export async function postWrapUpQueued(
+  sessionId: string,
+  rowId: string,
+  target?: DeliveryTarget,
+  editingToken?: string,
+): Promise<{ status: "queued" | "dispatched"; hinted: boolean }> {
+  const payload = {
+    ...(target ? { target } : {}),
+    ...(editingToken ? { editing_token: editingToken } : {}),
+  };
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(rowId)}/wrap-up`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
+    },
+  );
+  if (!response.ok) {
+    const message = (await response.text()).trim();
+    throw new Error(message || "Could not request wrap-up for this message.");
+  }
+  const body = await response.json() as { status?: string; hinted?: boolean };
+  return {
+    status: body.status === "dispatched" ? "dispatched" : "queued",
+    hinted: body.hinted === true,
+  };
 }
 
 export function bulkActivatableDrafts<T extends { readonly id: string }>(

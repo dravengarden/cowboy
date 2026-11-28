@@ -199,6 +199,7 @@ impl WrapUpState {
         shared: &Shared,
         session_id: &str,
         target: &DeliveryTarget,
+        follow_up: Option<crate::core::WrapUpFollowUp<'_>>,
     ) -> bool {
         let runtime_protocol = shared.protocol.load(Ordering::Acquire);
         if !shared.connected.load(Ordering::Acquire)
@@ -241,12 +242,18 @@ impl WrapUpState {
         if last_hinted.get(session_id) == Some(target) {
             return false;
         }
-        match tx.try_send(text) {
-            Ok(()) => {
-                last_hinted.insert(session_id.to_owned(), target.clone());
-                true
-            }
-            Err(_) => false,
+        let sent = if follow_up.is_some() {
+            shared
+                .hub
+                .try_enqueue_wrap_up_hint(session_id, follow_up, || tx.try_send(text).is_ok())
+        } else {
+            tx.try_send(text).is_ok()
+        };
+        if sent {
+            last_hinted.insert(session_id.to_owned(), target.clone());
+            true
+        } else {
+            false
         }
     }
 }
@@ -281,9 +288,18 @@ impl super::RemoteRuntime {
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
     ) -> bool {
+        self.send_wrap_up_hint_for_follow_up(session_id, target, None)
+    }
+
+    pub fn send_wrap_up_hint_for_follow_up(
+        &self,
+        session_id: &str,
+        target: &crate::send_delivery::DeliveryTarget,
+        follow_up: Option<crate::core::WrapUpFollowUp<'_>>,
+    ) -> bool {
         self.shared
             .wrap_up
-            .send_hint(&self.shared, session_id, target)
+            .send_hint(&self.shared, session_id, target, follow_up)
     }
 }
 

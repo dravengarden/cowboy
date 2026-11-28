@@ -19,6 +19,159 @@ import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvide
 
 /** The live session view offers Steer at once: a slow or failing options
  *  read never shows it as unavailable. */
+
+/** Antigravity queued rows offer Wrap up & send next for Owner rows (including
+ *  while self-editing that exact row), while blocking non-Owner rows and
+ *  unrelated edit holds. */
+async function checkQueuedAntigravityWrapUp(
+  root: ReturnType<typeof createRoot>,
+  check: (value: unknown, message: string) => void,
+  key: (key: string, extra?: KeyboardEventInit) => void,
+): Promise<void> {
+  const wrapped: string[] = [];
+  let editing = false;
+  let editingId: string | null = null;
+  let editingToken: string | null = null;
+  globalThis.fetch = async () =>
+    Response.json({
+      target: { worker_epoch: "w-agy", turn_id: "t-agy" },
+      steer: false,
+      wrap_up_steering: true,
+      wrap_up_queued_supported: true,
+      wrap_up_draft_supported: true,
+      controls: { version: 1, next_checkpoint: false },
+      status: "busy",
+      paused: false,
+      editing,
+      editing_id: editingId,
+      editing_token: editingToken,
+      hold: null,
+      policy: { mode: "next_turn", revision: 0 },
+    });
+  const open = (opts: {
+    session: string;
+    ownerAuthored: boolean;
+    editingRowId?: string | null;
+    editingToken?: string | null;
+  }): void => {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    flushSync(() =>
+      root.render(
+        <SurfaceContext.Provider value={DESKTOP}>
+          <DesktopWorkspaceProvider>
+            <DesktopCommandProvider>
+              <BrowserProductTheme>
+                <DeliveryPicker
+                  sessionId={opts.session}
+                  anchor={anchor}
+                  busy
+                  steerReady={false}
+                  wrapUpReady
+                  contextReady
+                  ownerAuthored={opts.ownerAuthored}
+                  editingRowId={opts.editingRowId ?? null}
+                  editingToken={opts.editingToken ?? null}
+                  disallowSteer
+                  paused={false}
+                  queueCount={0}
+                  queued
+                  onClose={() => {}}
+                  onNextTurn={() => {}}
+                  onQueueFront={() => {}}
+                  onSteer={() => {}}
+                  onWrapUp={(target) => wrapped.push(target?.turn_id ?? "none")}
+                  onSendAndPause={() => {}}
+                  onStop={() => {}}
+                />
+              </BrowserProductTheme>
+            </DesktopCommandProvider>
+          </DesktopWorkspaceProvider>
+        </SurfaceContext.Provider>,
+      )
+    );
+  };
+  const wrapRow = () =>
+    document.querySelector<HTMLElement>('[data-delivery-command="wrap_up"]');
+  const frontRow = () =>
+    document.querySelector<HTMLElement>('[data-delivery-command="front"]');
+
+  // 1. Owner queued row at index 0: Wrap up is enabled and focused once fresh target arrives while Queue first is Already first.
+  open({ session: "agy-owner-q0", ownerAuthored: true });
+  for (
+    let i = 0;
+    i < 60 &&
+      (document.activeElement !== wrapRow() ||
+        wrapRow()?.getAttribute("aria-disabled") === "true");
+    i++
+  ) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  check(
+    wrapRow()?.getAttribute("aria-disabled") !== "true" &&
+      document.activeElement === wrapRow(),
+    `Antigravity Owner queued row offers and focuses Wrap up & send next (ariaDisabled=${wrapRow()?.getAttribute("aria-disabled")}, active=${document.activeElement?.getAttribute("data-delivery-command") ?? document.activeElement?.tagName}, picker=${document.querySelector("[data-delivery-picker]")?.textContent})`,
+  );
+  check(
+    frontRow()?.getAttribute("aria-disabled") === "true" &&
+      frontRow()?.textContent?.includes("Already first"),
+    "Queued row at index 0 still marks Queue first as Already first",
+  );
+  key("Enter");
+  check(
+    wrapped.at(-1) === "t-agy",
+    "Activating Wrap up on an Antigravity queued row forwards the captured turn target",
+  );
+  flushSync(() => root.render(<></>));
+
+  // 2. Non-Owner queued row: disabled with provenance explanation.
+  open({ session: "agy-peer-q0", ownerAuthored: false });
+  for (let i = 0; i < 60 && !wrapRow(); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await new Promise((r) => setTimeout(r, 80));
+  check(
+    wrapRow()?.getAttribute("aria-disabled") === "true" &&
+      wrapRow()?.textContent?.includes("Only your own messages can request wrap-up"),
+    "Non-Owner queued row disables Wrap up with provenance explanation",
+  );
+  flushSync(() => root.render(<></>));
+
+  // 3. Self-editing the same row keeps Wrap up enabled; editing another row blocks it.
+  editing = true;
+  editingId = "q-self";
+  editingToken = "tok-self";
+  open({ session: "agy-self-edit", ownerAuthored: true, editingRowId: "q-self", editingToken: "tok-self" });
+  for (
+    let i = 0;
+    i < 60 &&
+      (document.activeElement !== wrapRow() ||
+        wrapRow()?.getAttribute("aria-disabled") === "true");
+    i++
+  ) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await new Promise((r) => setTimeout(r, 80));
+  check(
+    wrapRow()?.getAttribute("aria-disabled") !== "true",
+    "Self-editing a queued row keeps Wrap up enabled",
+  );
+  flushSync(() => root.render(<></>));
+
+  editingId = "q-self";
+  editingToken = "tok-other-tab";
+  open({ session: "agy-other-edit", ownerAuthored: true, editingRowId: "q-self", editingToken: "tok-self" });
+  for (let i = 0; i < 60 && !wrapRow()?.textContent?.includes("Finish editing"); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  check(
+    wrapRow()?.getAttribute("aria-disabled") === "true" &&
+      wrapRow()?.textContent?.includes("Finish editing queued message first"),
+    "Editing a different queued row still blocks Wrap up",
+  );
+  flushSync(() => root.render(<></>));
+}
+
 async function checkLiveSteer(
   root: ReturnType<typeof createRoot>,
   check: (value: unknown, message: string) => void,
@@ -458,6 +611,7 @@ export async function checkDeliveryPicker(): Promise<string> {
     check(calls.at(-1) === "pause", "l activates the focused delivery");
     await checkMenuGrammar(root, check, key);
     await checkLiveSteer(root, check, key);
+    await checkQueuedAntigravityWrapUp(root, check, key);
     return "Delivery picker preserves exact target, IME/repeat exclusion, disabled focus, explicit next-turn selection and the Desktop Vim menu grammar";
   } finally {
     flushSync(() => root.unmount());

@@ -14,5 +14,6 @@ export function fromWire(list: WireQueued[]): QueuedMessage[] {
     // id. `?? undefined` keeps `exactOptionalPropertyTypes` happy.
     ...(m.cmid !== undefined && { cmid: m.cmid }),
     ...(m.schedule !== undefined && { schedule: m.schedule }),
+    ...(m.origin !== undefined && { serverOrigin: m.origin }),
   }));
 }

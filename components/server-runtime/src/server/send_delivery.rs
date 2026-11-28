@@ -591,6 +591,15 @@ pub fn try_wrap_up_hint(
     session_id: &str,
     target: Option<&crate::send_delivery::DeliveryTarget>,
 ) -> bool {
+    try_wrap_up_hint_for_follow_up(state, session_id, target, None)
+}
+
+pub fn try_wrap_up_hint_for_follow_up(
+    state: &AppState,
+    session_id: &str,
+    target: Option<&crate::send_delivery::DeliveryTarget>,
+    follow_up: Option<crate::core::WrapUpFollowUp<'_>>,
+) -> bool {
     let Some(target) = target else {
         return false;
     };
@@ -600,7 +609,159 @@ pub fn try_wrap_up_hint(
     {
         return false;
     }
-    state.supervisor.send_wrap_up_hint(session_id, target)
+    let provider_key = provider_fence_key_for_session(&state.hub, session_id);
+    let plugin_fence = state.plugin_lifecycle_fences.read();
+    if provider_key
+        .as_ref()
+        .and_then(|key| plugin_fence.get(key))
+        .and_then(|fence| provider_fence_refusal(*fence))
+        .is_some()
+    {
+        return false;
+    }
+    state
+        .supervisor
+        .send_wrap_up_hint_for_follow_up(session_id, target, follow_up)
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct WrapUpQueuedRequest {
+    #[serde(default)]
+    pub target: Option<crate::send_delivery::DeliveryTarget>,
+    #[serde(default)]
+    pub editing_token: Option<String>,
+}
+
+/// Promote an already-queued Owner-authored row to the front and emit a
+/// target-fenced Antigravity wrap-up hint without creating a duplicate prompt
+/// or elevating Peer/Automation content.
+pub async fn wrap_up_queued(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path((session_id, row_id)): Path<(String, String)>,
+    Json(req): Json<WrapUpQueuedRequest>,
+) -> Response {
+    let caller = authenticated.caller;
+    if !caller.is_person() {
+        return (
+            StatusCode::FORBIDDEN,
+            "wrap_up delivery is restricted to the session owner",
+        )
+            .into_response();
+    }
+    if crate::session_context::pending(&state.hub, &session_id) {
+        return (
+            StatusCode::CONFLICT,
+            "Context changes are pending; send from the Composer or cancel the switch.",
+        )
+            .into_response();
+    }
+    let provider_key = provider_fence_key_for_session(&state.hub, &session_id);
+    let plugin_fence = state.plugin_lifecycle_fences.read();
+    if let Some(refusal) = provider_key
+        .as_ref()
+        .and_then(|key| plugin_fence.get(key))
+        .and_then(|fence| provider_fence_refusal(*fence))
+    {
+        return (StatusCode::CONFLICT, refusal).into_response();
+    }
+    let Some(info) = state.hub.session_info(&session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if info.meta.trashed_at_ms.is_some() {
+        return (StatusCode::CONFLICT, session_trash::TRASHED_REFUSAL).into_response();
+    }
+    if info
+        .meta
+        .execution_binding
+        .as_ref()
+        .is_some_and(|binding| binding.managed().is_some())
+    {
+        return (
+            StatusCode::CONFLICT,
+            "this child conversation is controlled by its parent's managed call",
+        )
+            .into_response();
+    }
+    if let Some(reason) = provider_accounts::controls::parked_reason(&state.accounts, &info.meta) {
+        return (StatusCode::CONFLICT, reason).into_response();
+    }
+    if !session_maintenance::execution_target_connected(&state, &info.meta) {
+        return (
+            StatusCode::CONFLICT,
+            session_maintenance::TARGET_WAIT_REASON,
+        )
+            .into_response();
+    }
+    match state
+        .hub
+        .wrap_up_queued_row(&session_id, &row_id, &caller, req.editing_token.as_deref())
+    {
+        crate::core::QueuedWrapUpOutcome::SessionNotFound => {
+            (StatusCode::NOT_FOUND, "unknown session").into_response()
+        }
+        crate::core::QueuedWrapUpOutcome::RowNotFound => {
+            (StatusCode::NOT_FOUND, "queued message no longer exists").into_response()
+        }
+        crate::core::QueuedWrapUpOutcome::ForbiddenOrigin => (
+            StatusCode::FORBIDDEN,
+            "Only your own messages can request wrap-up",
+        )
+            .into_response(),
+        crate::core::QueuedWrapUpOutcome::Reserved => (
+            StatusCode::CONFLICT,
+            "This message is already being delivered",
+        )
+            .into_response(),
+        crate::core::QueuedWrapUpOutcome::EmptyContent => (
+            StatusCode::BAD_REQUEST,
+            "empty prompt: no substantive text or content",
+        )
+            .into_response(),
+        crate::core::QueuedWrapUpOutcome::Blocked(reason) => {
+            (StatusCode::CONFLICT, reason).into_response()
+        }
+        crate::core::QueuedWrapUpOutcome::DispatchedImmediately => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "dispatched",
+                "delivery": "wrap_up",
+                "hinted": false,
+            })),
+        )
+            .into_response(),
+        crate::core::QueuedWrapUpOutcome::QueuedFallback => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "queued",
+                "delivery": "wrap_up",
+                "hinted": false,
+            })),
+        )
+            .into_response(),
+        crate::core::QueuedWrapUpOutcome::QueuedFront => {
+            let hinted = req.target.as_ref().is_some_and(|target| {
+                state
+                    .service_config
+                    .get(&crate::config::schema::PROVIDER_ANTIGRAVITY_WRAP_UP_STEERING)
+                    && state.supervisor.send_wrap_up_hint_for_follow_up(
+                        &session_id,
+                        target,
+                        Some(crate::core::WrapUpFollowUp::RowId(&row_id)),
+                    )
+            });
+            drop(plugin_fence);
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "queued",
+                    "delivery": "wrap_up",
+                    "hinted": hinted,
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub async fn options(State(state): State<Arc<AppState>>, Path(session): Path<String>) -> Response {
@@ -613,7 +774,11 @@ pub async fn options(State(state): State<Arc<AppState>>, Path(session): Path<Str
         "controls": state.supervisor.delivery_controls(&session),
         "steer": info.meta.supports_current_turn,
         "wrap_up_steering": info.meta.wrap_up_steering,
+        "wrap_up_queued_supported": true,
+        "wrap_up_draft_supported": true,
         "editing": state.hub.is_editing(&session),
+        "editing_id": state.hub.editing_id(&session),
+        "editing_token": state.hub.editing_token(&session),
         "status": info.meta.status,
         "paused": info.meta.paused,
         "hold": state.hub.delivery_hold(&session),

@@ -1054,6 +1054,38 @@ pub async fn check_durably_retired_submit(
 /// Atomically reserve the fresh client operation ID, check durable history,
 /// serialize against per-session pending commits (`pending_commit_lock`), and
 /// durably commit a `recovery-*` draft activation before mutating Hub.
+fn admit_recovery_wrap_up(
+    state: &AppState,
+    session_id: &str,
+    draft_id: &str,
+    op: &str,
+    editing_token: Option<&str>,
+) -> bool {
+    let provider_key = provider_fence_key_for_session(&state.hub, session_id);
+    let fences = state.plugin_lifecycle_fences.read();
+    let fence_refusal = provider_key
+        .as_ref()
+        .and_then(|key| fences.get(key))
+        .and_then(|fence| provider_fence_refusal(*fence));
+    drop(fences);
+    let err = fence_refusal.or_else(|| {
+        state
+            .hub
+            .validate_recovery_draft_for_wrap_up(session_id, draft_id, editing_token)
+            .err()
+    });
+    if let Some(msg) = err {
+        state
+            .hub
+            .command_result(session_id, op, CommandOutcome::Rejected, msg);
+        state
+            .hub
+            .broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+        return false;
+    }
+    true
+}
+
 async fn try_commit_recovery_draft_activation(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
@@ -1064,12 +1096,24 @@ async fn try_commit_recovery_draft_activation(
         id,
         cmid,
         front,
+        wrap_up,
+        wrap_up_target,
+        editing_token,
     } = cmd
     else {
         return None;
     };
     if !id.starts_with("recovery-") {
         return None;
+    }
+    if *wrap_up && !caller.is_person() {
+        let msg = "wrap_up delivery is restricted to the session owner";
+        if let Some(raw) = cmid.as_deref().filter(|op| !op.is_empty()) {
+            state
+                .hub
+                .command_result(session_id, raw, CommandOutcome::Rejected, msg);
+        }
+        return Some(false);
     }
     let Some(op) = cmid
         .as_deref()
@@ -1133,28 +1177,50 @@ async fn try_commit_recovery_draft_activation(
         }
     }
     let _guard = state.hub.pending_commit_lock(session_id).await;
-    let (mut commit, rx) =
-        match state
-            .hub
-            .begin_durable_recovery_draft_activation(reservation, *front, caller)
-        {
-            Ok(crate::core::RecoveryActivationCommitStep::CommittedSync) => return Some(true),
-            Ok(crate::core::RecoveryActivationCommitStep::Pending(commit, rx)) => (commit, rx),
-            Err(msg) => {
-                state
-                    .hub
-                    .command_result(session_id, op, CommandOutcome::Rejected, msg);
-                state
-                    .hub
-                    .broadcast_error(Some(session_id.clone()), msg.to_owned());
-                return Some(false);
+    if *wrap_up && !admit_recovery_wrap_up(state, session_id, id, op, editing_token.as_deref()) {
+        return Some(false);
+    }
+    let effective_front = *front || *wrap_up;
+    let (mut commit, rx) = match state.hub.begin_durable_recovery_draft_activation(
+        reservation,
+        effective_front,
+        caller,
+    ) {
+        Ok(crate::core::RecoveryActivationCommitStep::CommittedSync) => {
+            if *wrap_up {
+                let _ = send_delivery::try_wrap_up_hint_for_follow_up(
+                    state,
+                    session_id,
+                    wrap_up_target.as_ref(),
+                    Some(crate::core::WrapUpFollowUp::Cmid(op)),
+                );
             }
-        };
+            return Some(true);
+        }
+        Ok(crate::core::RecoveryActivationCommitStep::Pending(commit, rx)) => (commit, rx),
+        Err(msg) => {
+            state
+                .hub
+                .command_result(session_id, op, CommandOutcome::Rejected, msg);
+            state
+                .hub
+                .broadcast_error(Some(session_id.clone()), msg.to_owned());
+            return Some(false);
+        }
+    };
     match rx.await {
         Ok(Ok(true)) => {
             state
                 .hub
                 .commit_recovery_draft_activation(&mut commit, caller);
+            if *wrap_up {
+                let _ = send_delivery::try_wrap_up_hint_for_follow_up(
+                    state,
+                    session_id,
+                    wrap_up_target.as_ref(),
+                    Some(crate::core::WrapUpFollowUp::Cmid(op)),
+                );
+            }
             Some(true)
         }
         _ => {

@@ -2152,11 +2152,16 @@ async fn legacy_draft_activation_keeps_the_source_identity_when_available() {
             id,
             cmid: send_cmid,
             front,
+            wrap_up,
+            wrap_up_target,
+            editing_token: _,
         } = request
         else {
             panic!("expected draft activation");
         };
         assert!(!front);
+        assert!(!wrap_up);
+        assert!(wrap_up_target.is_none());
         assert!(send_cmid.is_none());
         hub.activate_draft(
             &session_id,

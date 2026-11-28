@@ -459,6 +459,7 @@ fn human_only_session_route(path: &str) -> bool {
         parts.as_slice(),
         ["", "api", "sessions", _, "widgets", _, "interactions"]
             | ["", "api", "sessions", _, "mcp-apps", ..]
+            | ["", "api", "sessions", _, "queue", _, "wrap-up"]
             | [
                 "",
                 "api",
