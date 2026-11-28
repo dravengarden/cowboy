@@ -10,8 +10,20 @@
 // is refused; there is no local fallback.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants, readdirSync } from "node:fs";
-import { access, lstat, mkdtemp, readFile } from "node:fs/promises";
+import { constants, existsSync, readdirSync } from "node:fs";
+import {
+  access,
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -55,38 +67,76 @@ const EXPECTED_TOOLS = [
 ];
 const MAX_FRAME = 32 * 1024 * 1024;
 
-/** Paths inside the runtime archive, from this module's `proxy/app`. */
+/**
+ * Paths of the Antigravity runtime components. Detects both the legacy
+ * account-sandbox archive layout (`proxy/app` under `<archive>`) and the
+ * direct installed Cowboy plugin layout (`provider_adapter-antigravity-proxy/content/app`).
+ */
 export function runtimePaths(appDirectory) {
   const archive = resolve(appDirectory, "..", "..");
+  const isArchive =
+    existsSync(join(archive, "cowboy-runtime.json")) || existsSync(join(archive, "bin", "agy"));
+  if (isArchive) {
+    return {
+      direct: false,
+      archive,
+      agy: join(archive, "bin", "agy"),
+      hook: join(archive, "bin", "agy-hook"),
+      hooks: join(archive, "policy", "hooks.json"),
+      settings: join(archive, "policy", "settings.json"),
+      relay: join(appDirectory, "facade-relay.mjs"),
+    };
+  }
+  const contentRoot = resolve(appDirectory, "..");
   return {
-    archive,
-    agy: join(archive, "bin", "agy"),
-    hook: join(archive, "bin", "agy-hook"),
-    hooks: join(archive, "policy", "hooks.json"),
-    settings: join(archive, "policy", "settings.json"),
+    direct: true,
+    archive: contentRoot,
+    agy: resolve(contentRoot, "..", "..", "provider_cli-antigravity", "content", "antigravity"),
+    hook: join(appDirectory, "hook.mjs"),
+    hooks: join(appDirectory, "hooks.json"),
+    settings: join(appDirectory, "settings.json"),
     relay: join(appDirectory, "facade-relay.mjs"),
   };
 }
 
-/** The per-unit execution descriptor the daemon passes as a credential. */
-export async function readDescriptor(credentials) {
-  if (typeof credentials !== "string" || !isAbsolute(credentials)) {
-    throw new Error("no execution descriptor credential");
+function validEndpoint(endpoint, direct) {
+  if (typeof endpoint !== "string") return false;
+  if (endpoint.startsWith("unix:/")) return true;
+  if (direct && /^ws:\/\/127\.0\.0\.1:\d+$/.test(endpoint)) return true;
+  return false;
+}
+
+/**
+ * Read and validate the execution descriptor passed either directly via
+ * `COWBOY_EXECUTION_DESCRIPTOR` (loopback TCP or Unix socket, 0600 file) or
+ * via `CREDENTIALS_DIRECTORY/descriptor` (legacy account-sandbox credential).
+ */
+export async function readDescriptor(credentials, descriptorPath) {
+  const direct = typeof descriptorPath === "string" && descriptorPath.length > 0;
+  let path;
+  if (direct) {
+    if (!isAbsolute(descriptorPath)) {
+      throw new Error("no execution descriptor credential");
+    }
+    path = descriptorPath;
+  } else {
+    if (typeof credentials !== "string" || !isAbsolute(credentials)) {
+      throw new Error("no execution descriptor credential");
+    }
+    path = join(credentials, "descriptor");
   }
-  const path = join(credentials, "descriptor");
   const stat = await lstat(path);
-  // systemd hands a LoadCredential file over as root:root 0440 with an ACL
-  // for the unit's user, inside a directory only that unit can reach: group
-  // read is systemd's own convention, any other access is refused.
-  if (!stat.isFile() || stat.size > 32768 || stat.mode & 0o027) {
+  // Direct worker descriptors are strictly 0600; systemd LoadCredential files
+  // are root:root 0440 with an ACL for the unit's user.
+  const forbiddenMode = direct ? 0o077 : 0o027;
+  if (!stat.isFile() || stat.size > 32768 || stat.mode & forbiddenMode) {
     throw new Error("execution descriptor must be a private regular file");
   }
   const descriptor = JSON.parse(await readFile(path, "utf8"));
   if (
     descriptor?.schema !== 1 ||
     descriptor.binding?.schema !== 1 ||
-    typeof descriptor.endpoint !== "string" ||
-    !descriptor.endpoint.startsWith("unix:/") ||
+    !validEndpoint(descriptor.endpoint, direct) ||
     !/^[a-f0-9]{64}$/.test(descriptor.bearer_token ?? "") ||
     !/^[a-zA-Z0-9_-]{1,128}$/.test(descriptor.binding.environment?.id ?? "") ||
     !isAbsolute(descriptor.binding.workspace?.cwd ?? "")
@@ -106,15 +156,48 @@ export async function readDescriptor(credentials) {
   return descriptor;
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+async function atomicInstallPolicy(target, source) {
+  const bytes = await readFile(source);
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+  const temp = `${target}.cowboy.${process.pid}.${randomUUID().slice(0, 8)}`;
+  await writeFile(temp, bytes, { mode: 0o600 });
+  try {
+    await rename(temp, target);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+}
+
 /**
- * The daemon binds Cowboy's hooks and settings read-only over the home;
- * both must be present, identical to the runtime's and not writable.
+ * Validate Cowboy's hooks and settings policy files. In sandbox mode they are
+ * bind-mounted read-only over `$HOME`; in direct worker-unit mode they are
+ * atomically installed (0600) into `$HOME`.
  */
 export async function checkPolicy(home, paths) {
+  // `agy` silently runs without hooks when hooks.json does not parse, so the
+  // gate's exact shape is checked before anything runs.
+  const gate = JSON.parse(await readFile(paths.hooks, "utf8"))?.["cowboy-facade-gate"];
+  const hook = gate?.PreToolUse?.[0]?.hooks?.[0];
+  if (gate?.PreToolUse?.[0]?.matcher !== "*" || hook?.command !== "agy-hook") {
+    throw new Error("the PreToolUse gate is not Cowboy's");
+  }
+  JSON.parse(await readFile(paths.settings, "utf8"));
   const installed = [
     [join(home, ".gemini", "config", "hooks.json"), paths.hooks],
     [join(home, ".gemini", "antigravity-cli", "settings.json"), paths.settings],
   ];
+  if (paths.direct) {
+    for (const [target, source] of installed) {
+      await atomicInstallPolicy(target, source);
+    }
+    await access(paths.hook, constants.R_OK);
+    return;
+  }
   for (const [path, source] of installed) {
     const stat = await lstat(path).catch(() => undefined);
     if (!stat?.isFile()) throw new Error(`policy file ${path} is missing`);
@@ -130,15 +213,25 @@ export async function checkPolicy(home, paths) {
       throw new Error(`policy file ${path} is writable`);
     }
   }
-  // `agy` silently runs without hooks when hooks.json does not parse, so the
-  // gate's exact shape is part of readiness.
-  const gate = JSON.parse(await readFile(paths.hooks, "utf8"))?.["cowboy-facade-gate"];
-  const hook = gate?.PreToolUse?.[0]?.hooks?.[0];
-  if (gate?.PreToolUse?.[0]?.matcher !== "*" || hook?.command !== "agy-hook") {
-    throw new Error("the PreToolUse gate is not Cowboy's");
-  }
-  JSON.parse(await readFile(paths.settings, "utf8"));
   await access(paths.hook, constants.X_OK);
+}
+
+/**
+ * Best-effort retention sweep for old `acp-server-*.log` files (>14 days) in
+ * direct mode's persistent `$HOME/.gemini/antigravity-cli/log`.
+ */
+async function sweepOldLogs(home, maxAgeMs = 14 * 24 * 60 * 60 * 1000) {
+  const dir = join(home, ".gemini", "antigravity-cli", "log");
+  const names = await readdir(dir).catch(() => []);
+  const cutoff = Date.now() - maxAgeMs;
+  for (const name of names) {
+    if (!/^acp-server-.*\.log$/.test(name)) continue;
+    const full = join(dir, name);
+    const info = await lstat(full).catch(() => undefined);
+    if (info?.isFile() && info.mtimeMs < cutoff) {
+      await unlink(full).catch(() => {});
+    }
+  }
 }
 
 /**
@@ -237,6 +330,7 @@ export async function prepareRuntime({
   home,
   temporary,
   credentials,
+  descriptorPath,
   connect,
   agyPid,
   node,
@@ -249,7 +343,7 @@ export async function prepareRuntime({
   await checkPolicy(home, paths);
   // `runProxy` validates the descriptor before it starts `agy`; the same
   // bytes then decide the hook policy and this runtime.
-  const descriptor = validated ?? (await readDescriptor(credentials));
+  const descriptor = validated ?? (await readDescriptor(credentials, descriptorPath));
   const connection = await connect(descriptor);
   // A refused runtime never keeps its execution connection open.
   try {
@@ -440,10 +534,10 @@ function frames(stream, onMessage, onEnd) {
  * The closed environment `agy` runs with: nothing else is inherited. A
  * managed child's carries the marker its `PreToolUse` hook reads.
  */
-export function agyEnvironment(environment, archive, { managed = false } = {}) {
+export function agyEnvironment(environment, archive, { managed = false, pathPrefix } = {}) {
   const closed = {
     HOME: environment.HOME,
-    PATH: `${join(archive, "bin")}:/usr/bin:/bin`,
+    PATH: `${pathPrefix ?? join(archive, "bin")}:/usr/bin:/bin`,
     LANG: environment.LANG ?? "C.UTF-8",
     TZ: environment.TZ ?? "UTC",
     TMPDIR: environment.TMPDIR ?? "/tmp",
@@ -492,16 +586,40 @@ export async function runProxy({
   let launchManaged;
   let hookManaged;
   try {
-    // The daemon fixes a runtime unit's command line, so the profile flag
-    // is normally absent; when present it must name the one supported
-    // profile and agree with the binding.
     launchManaged = managedArguments(args).managed;
-    descriptor = await readDescriptor(environment.CREDENTIALS_DIRECTORY);
+    descriptor = await readDescriptor(
+      environment.CREDENTIALS_DIRECTORY,
+      environment.COWBOY_EXECUTION_DESCRIPTOR,
+    );
     hookManaged = launchManagedMode(descriptor.binding, launchManaged);
   } catch (error) {
     return await refuseAll({ input, output, error });
   }
-  const env = agyEnvironment(environment, paths.archive, { managed: hookManaged });
+  let hookBin;
+  if (paths.direct) {
+    try {
+      if (!environment.HOME || !isAbsolute(environment.HOME)) {
+        throw new Error("HOME is required");
+      }
+      await checkPolicy(environment.HOME, paths);
+      hookBin = await mkdtemp(join(environment.TMPDIR ?? "/tmp", "cowboy-agy-bin-"));
+      await chmod(hookBin, 0o700);
+      const shim = join(hookBin, "agy-hook");
+      await writeFile(
+        shim,
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(paths.hook)}\n`,
+        { mode: 0o700 },
+      );
+      sweepOldLogs(environment.HOME).catch(() => {});
+    } catch (error) {
+      if (hookBin) await rm(hookBin, { recursive: true, force: true }).catch(() => {});
+      return await refuseAll({ input, output, error });
+    }
+  }
+  const env = agyEnvironment(environment, paths.archive, {
+    managed: hookManaged,
+    pathPrefix: hookBin,
+  });
   const temporary = await mkdtemp(join(env.TMPDIR, "cowboy-agy-"));
   const agy = spawn(paths.agy, AGY_ARGUMENTS, {
     cwd: temporary,
@@ -537,6 +655,7 @@ export async function runProxy({
     home: env.HOME,
     temporary,
     credentials: environment.CREDENTIALS_DIRECTORY,
+    descriptorPath: environment.COWBOY_EXECUTION_DESCRIPTOR,
     connect,
     agyPid: agy.pid,
     node: process.execPath,
@@ -650,6 +769,8 @@ export async function runProxy({
     });
   }
   ready?.connection.close();
+  await rm(temporary, { recursive: true, force: true }).catch(() => {});
+  if (hookBin) await rm(hookBin, { recursive: true, force: true }).catch(() => {});
   return signal ? 1 : (code ?? 1);
 }
 

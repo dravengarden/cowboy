@@ -78,17 +78,19 @@ pub(super) async fn prepare(
             marker,
         });
     }
-    if spec.account_sandbox.is_some() {
+    if spec.account_sandbox.is_some() || args.provider == "antigravity" {
         let path = std::env::var_os(LEDGER_ENV)
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute());
-        anyhow::ensure!(
-            path.is_some(),
-            "a sandboxed execution binding requires the Machine's process ledger"
-        );
+        if spec.account_sandbox.is_some() {
+            anyhow::ensure!(
+                path.is_some(),
+                "a sandboxed execution binding requires the Machine's process ledger"
+            );
+        }
         client.set_ledger(Ledger::open(&args.session_id, path)?);
         // One read of the verified extension descriptor serves both what the
-        // worker runs and what the unit learns.
+        // worker runs and what the proxy learns.
         // The frozen copy exists only when the launch carried an MCP plan.
         let frozen = args
             .mcp_plan
@@ -115,9 +117,21 @@ pub(super) async fn prepare(
                 .or(launch.agent_session_id.as_deref())
                 .filter(|id| !id.trim().is_empty())
         });
-        let (endpoint, bridge) =
-            Endpoint::start_unix(Arc::clone(&client), summary, managed_resume)?;
-        spec.execution_bridge = Some(bridge);
+        if spec.account_sandbox.is_some() {
+            let (endpoint, bridge) =
+                Endpoint::start_unix(Arc::clone(&client), summary, managed_resume)?;
+            spec.execution_bridge = Some(bridge);
+            return Ok((Some(endpoint), managed_round));
+        }
+        let endpoint =
+            Endpoint::start_with_options(Arc::clone(&client), &args.cwd, summary, managed_resume)
+                .await?;
+        if let Some(descriptor) = endpoint.descriptor() {
+            spec.env.insert(
+                crate::worker_execution::DESCRIPTOR_ENV.to_owned(),
+                descriptor.display().to_string(),
+            );
+        }
         return Ok((Some(endpoint), managed_round));
     }
     let endpoint = Endpoint::start(client, &args.cwd).await?;

@@ -745,6 +745,18 @@ impl Admission {
 
 impl Endpoint {
     pub async fn start(client: Arc<Client>, directory: &Path) -> Result<Self> {
+        Self::start_with_options(client, directory, None, None).await
+    }
+
+    /// Start a loopback execution endpoint with optional extension summary and
+    /// managed-continuation session binding (used by non-sandboxed Antigravity
+    /// proxies as well as standard loopback clients).
+    pub async fn start_with_options(
+        client: Arc<Client>,
+        directory: &Path,
+        extensions: Option<Value>,
+        managed_session_id: Option<&str>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
         let token = bearer_token();
@@ -758,6 +770,11 @@ impl Endpoint {
             "endpoint": format!("ws://{address}"), "bearer_token": token});
         if client.binding.managed.is_none() {
             descriptor_value["diagnostics"] = json!({"schema": 1, "path": DIAGNOSTICS_PATH});
+        } else if let Some(native_id) = managed_session_id.filter(|id| !id.trim().is_empty()) {
+            descriptor_value["managed_session_id"] = json!(native_id);
+        }
+        if let Some(extensions) = extensions {
+            descriptor_value["extensions"] = extensions;
         }
         // The Machine's file-buffer settings; absent on older Machines.
         if let Some(policy) = std::env::var_os(crate::config::file_buffers::POLICY_ENV)
@@ -768,6 +785,14 @@ impl Endpoint {
         }
         serde_json::to_writer(&file, &descriptor_value)?;
         file.sync_all()?;
+        if client.ledger().is_some() {
+            let weak = Arc::downgrade(&client);
+            client.relays.set_recorder(Box::new(move |effects| {
+                if let Some(client) = weak.upgrade() {
+                    client.unread(effects);
+                }
+            }));
+        }
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
             loop {

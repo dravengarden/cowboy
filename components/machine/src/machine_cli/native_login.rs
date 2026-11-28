@@ -113,12 +113,13 @@ async fn run(
                 environment.entry(key.clone()).or_insert(value);
             }
         }
-        let mut process = authentication_process(
+        let (mut process, mut unit_guard) = network_policy::authentication_process_with_network(
             &prepared.command,
             &arguments,
             &environment,
             &terminal,
             &prepared.home,
+            prepared.network,
         );
         process
             .stdin(std::process::Stdio::piped())
@@ -133,7 +134,7 @@ async fn run(
             .map_err(|_| "native login process ownership persistence failed".to_owned())?;
         let child = login.spawn(request, deadline, &mut process)?;
         relay.starting();
-        login_process::run_contained(
+        let outcome = login_process::run_contained(
             child,
             &mut login.cancel,
             &mut login.input,
@@ -141,7 +142,11 @@ async fn run(
             |line| relay.line(&line),
             containment,
         )
-        .await
+        .await;
+        if outcome.is_ok() {
+            unit_guard.disarm();
+        }
+        outcome
     };
     // run() returns Cleanup whenever the leader's wait is unconfirmed. All
     // other returned outcomes have reaped the leader, including cancellation.

@@ -15,6 +15,29 @@ pub struct PreparedNativeLogin {
     /// The generation digest whose runtime the account-sandbox daemon runs
     /// this login or logout in; `None` for a local native process.
     pub sandbox_generation: Option<String>,
+    /// Closed runtime network policy (e.g., `ipv4_only_v1`) to enforce on
+    /// local native login/logout commands.
+    pub network: Option<cowboy_provider_sdk::RuntimeNetworkPolicy>,
+}
+
+/// Non-sandboxed named-only Providers (Antigravity) keep one persistent home
+/// (`<root>/home`) across login generations so conversations and installation
+/// state survive logout and re-login; full account revocation removes it.
+pub(super) fn uses_persistent_account_home(provider: &str, account_sandbox: bool) -> bool {
+    !account_sandbox && crate::provider_account::named_only(provider)
+}
+
+pub(super) fn profile_home_path(
+    root: &Path,
+    generation_dir: &Path,
+    provider: &str,
+    account_sandbox: bool,
+) -> PathBuf {
+    if uses_persistent_account_home(provider, account_sandbox) {
+        root.join("home")
+    } else {
+        generation_dir.join("home")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,8 +131,9 @@ impl MachinePluginStore {
                 );
                 let home = generations.join(name).join("home");
                 if profile.revoked
-                    && matches!(fs::symlink_metadata(&home),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+                    && (uses_persistent_account_home(provider, profile.account_sandbox)
+                        || matches!(fs::symlink_metadata(&home),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound))
                 {
                     continue;
                 }
@@ -196,6 +220,7 @@ impl MachinePluginStore {
             remove_projection::remove(&directory.join("home"))?;
             fs::File::open(&directory)?.sync_all()?;
         }
+        remove_projection::remove(&root.join("home"))?;
         fs::remove_file(root.join("revoking"))?;
         fs::File::open(&root)?.sync_all()?;
         Ok(())
@@ -354,7 +379,7 @@ impl MachinePluginStore {
             &serde_json::to_vec(&profile)?,
             0o600,
         )?;
-        let home = directory.join("home");
+        let home = profile_home_path(&root, &directory, provider, profile.account_sandbox);
         prepare_private_directory(&home)?;
         fs::File::open(&directory)?.sync_all()?;
         fs::File::open(root.join("generations"))?.sync_all()?;
@@ -363,6 +388,7 @@ impl MachinePluginStore {
             command,
             method: auth.clone(),
             sandbox_generation: profile.account_sandbox.then(|| profile.digest.clone()),
+            network: package.manifest.runtime.network,
         })
     }
 
@@ -406,8 +432,9 @@ impl MachinePluginStore {
             .native_identity
             .as_ref()
             .context("native identity verification unavailable")?;
-        let identity = native_identity::read(&directory.join("home"), recipe, &self.account_id)?;
         let root = self.native_profile_root(provider);
+        let home = profile_home_path(&root, &directory, provider, profile.account_sandbox);
+        let identity = native_identity::read(&home, recipe, &self.account_id)?;
         match native_identity::read_login_file(&root, "identity.json", 4096) {
             Ok(bytes) => {
                 let bound: NativeIdentity = serde_json::from_slice(&bytes)?;
@@ -644,7 +671,8 @@ impl MachinePluginStore {
         )?)?;
         ensure!(identity == bound, "native profile identity mismatch");
         if verify_sandbox_daemon || !profile.account_sandbox {
-            let home = directory.join("home");
+            let root = self.native_profile_root(provider);
+            let home = profile_home_path(&root, &directory, provider, profile.account_sandbox);
             self.native_home_evidence(profile.account_sandbox, generation, &home)?;
         }
         Ok(NativeProfileCarryEvidence {
@@ -739,10 +767,47 @@ impl MachinePluginStore {
             4096,
         )?)?;
         ensure!(identity == bound, "native profile identity mismatch");
-        let home = directory.join("home");
+        let root = self.native_profile_root(&package.manifest.id);
+        let home = profile_home_path(
+            &root,
+            &directory,
+            &package.manifest.id,
+            profile.account_sandbox,
+        );
         self.native_home_evidence(profile.account_sandbox, generation, &home)?;
         prepare_private_directory(&home)?;
         Ok(home)
+    }
+
+    /// Best-effort cleanup of one deleted Antigravity conversation's local
+    /// artifacts (`conversations/<uuid>.db*`, `brain/<uuid>`,
+    /// `annotations/<uuid>.pbtxt`) in this account's persistent `native/home`.
+    pub fn cleanup_antigravity_conversation(&self, native_session_id: &str) {
+        if self.account_id.is_default() || uuid::Uuid::parse_str(native_session_id).is_err() {
+            return;
+        }
+        let base = self
+            .native_profile_root("antigravity")
+            .join("home")
+            .join(".gemini")
+            .join("antigravity-cli");
+        if !base.is_dir() {
+            return;
+        }
+        for suffix in [".db", ".db-wal", ".db-shm"] {
+            let _ = fs::remove_file(
+                base.join("conversations")
+                    .join(format!("{native_session_id}{suffix}")),
+            );
+        }
+        let _ = fs::remove_file(
+            base.join("annotations")
+                .join(format!("{native_session_id}.pbtxt")),
+        );
+        let brain = base.join("brain").join(native_session_id);
+        if fs::symlink_metadata(&brain).is_ok_and(|meta| meta.is_dir()) {
+            let _ = fs::remove_dir_all(&brain);
+        }
     }
 
     /// A local native home must exist; a sandboxed Provider's home lives in
@@ -2076,5 +2141,83 @@ pub(in crate::machine_plugins) mod tests {
         )
         .unwrap();
         assert!(scoped.native_profile_home(&package, 1).is_err());
+    }
+
+    #[test]
+    fn non_sandbox_antigravity_keeps_persistent_home_across_logout_and_cleans_conversations() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(
+            temp.path(),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".into(),
+        )
+        .unwrap();
+        let account: crate::provider_account::ProviderAccountId =
+            uuid::Uuid::new_v4().to_string().try_into().unwrap();
+        let scoped = store.for_account(&account).unwrap();
+        assert!(uses_persistent_account_home("antigravity", false));
+        assert!(!uses_persistent_account_home("antigravity", true));
+        assert!(!uses_persistent_account_home("claude-code", false));
+
+        let home = scoped.native_profile_root("antigravity").join("home");
+        let conv_id = uuid::Uuid::new_v4().to_string();
+        let base = home.join(".gemini/antigravity-cli");
+        fs::create_dir_all(base.join("conversations")).unwrap();
+        fs::create_dir_all(base.join("annotations")).unwrap();
+        fs::create_dir_all(base.join("brain").join(&conv_id)).unwrap();
+        fs::write(
+            base.join("conversations").join(format!("{conv_id}.db")),
+            b"db",
+        )
+        .unwrap();
+        fs::write(
+            base.join("conversations").join(format!("{conv_id}.db-wal")),
+            b"wal",
+        )
+        .unwrap();
+        fs::write(
+            base.join("annotations").join(format!("{conv_id}.pbtxt")),
+            b"ann",
+        )
+        .unwrap();
+        fs::write(base.join("brain").join(&conv_id).join("note.md"), b"hi").unwrap();
+        fs::write(base.join("installation_id"), b"keep-me").unwrap();
+
+        // Invalid non-UUID ids are ignored safely.
+        scoped.cleanup_antigravity_conversation("../installation_id");
+        assert!(base.join("installation_id").exists());
+
+        // Valid UUID deletes only that conversation's artifacts.
+        scoped.cleanup_antigravity_conversation(&conv_id);
+        assert!(
+            !base
+                .join("conversations")
+                .join(format!("{conv_id}.db"))
+                .exists()
+        );
+        assert!(
+            !base
+                .join("conversations")
+                .join(format!("{conv_id}.db-wal"))
+                .exists()
+        );
+        assert!(
+            !base
+                .join("annotations")
+                .join(format!("{conv_id}.pbtxt"))
+                .exists()
+        );
+        assert!(!base.join("brain").join(&conv_id).exists());
+        assert!(base.join("installation_id").exists());
+
+        // Full account revocation removes persistent native/home completely.
+        fs::create_dir_all(
+            scoped
+                .native_profile_root("antigravity")
+                .join("generations"),
+        )
+        .unwrap();
+        scoped.revoke_native_profiles("antigravity").unwrap();
+        assert!(!home.exists());
     }
 }

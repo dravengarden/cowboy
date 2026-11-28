@@ -196,6 +196,21 @@ impl MachinePluginStore {
                 && crate::provider_account::named_only(&request.provider_id),
             "account fences apply only to named accounts of account-sandbox Providers"
         );
+        if self
+            .account_sandbox
+            .get()
+            .is_none_or(|host| !host.socket.exists())
+            && !self
+                .for_account(&request.account_id)?
+                .has_sandboxed_native_profile(&request.provider_id)?
+        {
+            return Ok(AccountFenceObservation {
+                request: request.clone(),
+                fence_epoch: Some(0),
+                fenced: request.action == AccountFenceAction::Stop,
+                stopped: Vec::new(),
+            });
+        }
         let (socket, service) = self.sandbox_host()?;
         let key = daemon::account_key(service, request.account_id.as_str());
         let mut client = daemon::Client::connect(socket)?;

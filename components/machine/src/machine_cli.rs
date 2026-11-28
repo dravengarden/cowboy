@@ -49,6 +49,7 @@ pub(crate) use login_sessions::{LoginSession, LoginSessions};
 mod native_login;
 mod native_logout;
 mod native_sandbox;
+mod network_policy;
 #[cfg(target_os = "linux")]
 mod observation;
 mod projects;

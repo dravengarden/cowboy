@@ -11,6 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -541,4 +542,85 @@ test("runProxy rejects missing --canary-nonce value when followed by another fla
   const traceFlag = server.args.indexOf("--canary-trace-file");
   assert.ok(traceFlag >= 0 && server.args[traceFlag + 1] === traceFile);
   assert.equal(server.args.includes("--canary-nonce"), false);
+});
+
+test("direct mode validates 0600 loopback descriptors, installs policy atomically, and delegates from launch.sh", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-agy-direct-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const home = join(dir, "home");
+  mkdirSync(home, { mode: 0o700 });
+  const descPath = join(dir, "exec.json");
+  const validDesc = {
+    schema: 1,
+    endpoint: "ws://127.0.0.1:41234",
+    bearer_token: "b".repeat(64),
+    binding: { schema: 1, environment: { id: "env-1" }, workspace: { cwd: "/work" } },
+  };
+  writeFileSync(descPath, JSON.stringify(validDesc), { mode: 0o600 });
+  const parsed = await readDescriptor(undefined, descPath);
+  assert.equal(parsed.endpoint, "ws://127.0.0.1:41234");
+  chmodSync(descPath, 0o644);
+  await assert.rejects(readDescriptor(undefined, descPath), /private regular file/);
+  chmodSync(descPath, 0o600);
+  writeFileSync(descPath, JSON.stringify({ ...validDesc, endpoint: "ws://192.168.1.5:41234" }), {
+    mode: 0o600,
+  });
+  await assert.rejects(readDescriptor(undefined, descPath), /unsupported execution descriptor/);
+
+  const directPaths = {
+    direct: true,
+    archive: dir,
+    agy: join(dir, "agy"),
+    hook: join(here, "hook.mjs"),
+    hooks: join(here, "hooks.json"),
+    settings: join(here, "settings.json"),
+    relay: join(here, "facade-relay.mjs"),
+  };
+  await checkPolicy(home, directPaths);
+  assert.deepEqual(
+    readFileSync(join(home, ".gemini", "config", "hooks.json")),
+    readFileSync(join(here, "hooks.json")),
+  );
+  assert.deepEqual(
+    readFileSync(join(home, ".gemini", "antigravity-cli", "settings.json")),
+    readFileSync(join(here, "settings.json")),
+  );
+
+  // launch.sh delegates `acp` with COWBOY_EXECUTION_DESCRIPTOR (including managed profile) to sibling agy-proxy
+  const runtime = join(dir, "runtime");
+  const launchDir = join(runtime, "provider_adapter-antigravity", "content");
+  const proxyDir = join(runtime, "provider_adapter-antigravity-proxy", "content");
+  mkdirSync(join(launchDir, "bin"), { recursive: true });
+  mkdirSync(join(launchDir, "share"), { recursive: true });
+  mkdirSync(join(proxyDir, "bin"), { recursive: true });
+  copyFileSync(
+    join(here, "..", "antigravity-launch", "launch.sh"),
+    join(launchDir, "bin", "agy-launch"),
+  );
+  chmodSync(join(launchDir, "bin", "agy-launch"), 0o755);
+  copyFileSync(
+    join(here, "..", "antigravity-launch", "hooks.json"),
+    join(launchDir, "share", "hooks.json"),
+  );
+  writeFileSync(join(proxyDir, "bin", "agy-proxy"), '#!/bin/sh\nprintf "PROXY:%s\n" "$*"\n', {
+    mode: 0o755,
+  });
+  const delegated = spawnSync(
+    "/bin/sh",
+    [
+      join(launchDir, "bin", "agy-launch"),
+      "acp",
+      "--disable-telemetry",
+      "--cowboy-managed-profile=read-only-v1",
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, COWBOY_EXECUTION_DESCRIPTOR: descPath },
+    },
+  );
+  assert.equal(delegated.status, 0, delegated.stderr);
+  assert.equal(
+    delegated.stdout.trim(),
+    "PROXY:acp --disable-telemetry --cowboy-managed-profile=read-only-v1",
+  );
 });

@@ -366,11 +366,11 @@ fn choose_usage_provider(
     resolve_installed: impl FnOnce() -> Result<(), String>,
     signed_in_usage: impl FnOnce() -> Option<String>,
 ) -> Result<String, UsageGeneration> {
-    let sandboxed = installed_package.is_some_and(|package| {
+    let use_active_release = installed_package.is_some_and(|package| {
         package.manifest.runtime.isolation
             == Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1)
-    });
-    if !sandboxed {
+    }) || crate::provider_account::named_only(&profile.provider_id);
+    if !use_active_release {
         resolve_login().map_err(|error| {
             if error == "native_provider_generation_mismatch" {
                 UsageGeneration::Outdated

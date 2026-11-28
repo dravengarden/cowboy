@@ -26,6 +26,9 @@ pub(super) async fn observe(
     .ok()?;
     let succeeded = outcome.succeeded;
     let receipt = outcome.sandbox.as_ref();
+    let persistent_local = receipt.is_none()
+        && succeeded == Some(true)
+        && crate::provider_account::named_only(&logout.provider_id);
     Some(crate::provider_account::NativeLogoutObservation {
         process_trees_exited: succeeded.is_some()
             && store
@@ -39,8 +42,12 @@ pub(super) async fn observe(
         request: logout,
         succeeded,
         profile_cleaned: succeeded == Some(true),
-        credential_cleared: receipt.map(|receipt| receipt.credential_cleared),
-        history_retained: receipt.map(|receipt| receipt.history_retained),
+        credential_cleared: receipt
+            .map(|receipt| receipt.credential_cleared)
+            .or(persistent_local.then_some(true)),
+        history_retained: receipt
+            .map(|receipt| receipt.history_retained)
+            .or(persistent_local.then_some(true)),
     })
 }
 
@@ -114,12 +121,13 @@ pub(super) async fn run(
     else {
         return Err("native logout command required".into());
     };
-    let mut command = authentication_process(
+    let (mut command, mut unit_guard) = network_policy::authentication_process_with_network(
         &prepared.command,
         &arguments,
         &environment,
         &cowboy_provider_sdk::AuthTerminal::Pipes,
         &prepared.home,
+        prepared.network,
     );
     command
         .stdin(Stdio::piped())
@@ -146,6 +154,7 @@ pub(super) async fn run(
     )
     .await
     .map_err(|_| "native logout outcome unconfirmed".to_owned())?;
+    unit_guard.disarm();
     providers
         .record_native_logout_tree_exit(provider, generation, operation, status.success())
         .map_err(|_| "native logout outcome persistence failed".to_owned())?;

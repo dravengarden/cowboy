@@ -37,7 +37,9 @@ impl MachinePluginStore {
             // partially deleted failed generation finishes the same cleanup.
             profile.revoked = true;
             logout::persist(&directory, &profile)?;
-            remove_projection::remove(&directory.join("home"))?;
+            if !uses_persistent_account_home(provider, profile.account_sandbox) {
+                remove_projection::remove(&directory.join("home"))?;
+            }
             fs::File::open(&directory)?.sync_all()?;
         }
         Ok(())

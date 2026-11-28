@@ -4749,8 +4749,8 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             let cleanup_command_id = command_id.clone();
             let cleanup_session = broker.sessions.lock().get(&session_id).cloned();
             let cleanup_cwd = cleanup_session.as_ref().map(|session| session.cwd.clone());
-            if let Some(session) = cleanup_session {
-                broker.revoke_cache_protection(&session, &session_id, "session_deleted");
+            if let Some(session) = &cleanup_session {
+                broker.revoke_cache_protection(session, &session_id, "session_deleted");
             }
             broker.resetting_sessions.lock().remove(&session_id);
             {
@@ -4770,6 +4770,9 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 broker.pending_commands.lock().remove(&session_id);
                 broker.startup_failures.lock().remove(&session_id);
                 broker.unpin_fallback(&session_id);
+            }
+            if let Some(session) = cleanup_session {
+                worker_launch::cleanup_deleted_antigravity_session(broker, &session);
             }
             if let Some(cwd) = cleanup_cwd {
                 match crate::session_workspace::capture_cleanup_workspace(

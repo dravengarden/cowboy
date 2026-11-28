@@ -60,6 +60,12 @@ enum PreparedNativeUsage {
     Sandboxed {
         active_digest: String,
     },
+    DirectAntigravity {
+        active_digest: String,
+        proxy_command: PathBuf,
+        home: PathBuf,
+        network: Option<cowboy_provider_sdk::RuntimeNetworkPolicy>,
+    },
     Direct {
         active_digest: String,
         resolved: Box<ResolvedPluginHostInvocation>,
@@ -81,6 +87,31 @@ impl MachinePluginStore {
             .context("native_usage_collector_unavailable")?;
         if account_sandbox::sandboxed(&active) {
             return Ok(PreparedNativeUsage::Sandboxed { active_digest });
+        }
+        if profile.provider_id == "antigravity" {
+            let (_, package_path) = self
+                .package_for_generation(&profile.provider_id, &active_digest)
+                .context("native_usage_collector_unavailable")?;
+            let platform = matching_payload(&active, &self.platform, &self.architecture)
+                .context("native_usage_collector_unavailable")?;
+            let proxy_component = platform
+                .private_components
+                .iter()
+                .find(|component| component.command == "agy-proxy")
+                .context("native_usage_collector_unavailable")?;
+            let proxy_command = runtime_command(&package_path, &proxy_component.command)
+                .context("native_usage_collector_unavailable")?;
+            let home = self
+                .for_account(&profile.account_id)
+                .context("native_usage_profile_changed")?
+                .native_profile_home(&active, profile.generation)
+                .context("native_usage_profile_changed")?;
+            return Ok(PreparedNativeUsage::DirectAntigravity {
+                active_digest,
+                proxy_command,
+                home,
+                network: active.manifest.runtime.network,
+            });
         }
         let resolved = self
             .resolve_host_invocation(
@@ -140,29 +171,29 @@ impl MachinePluginStore {
                 let usage = self
                     .collect_sandbox_usage(&invocation, &active_digest, owned_obs)
                     .await?;
-                let owned_life =
-                    tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
-                        .await
-                        .context("native_usage_busy")?;
-                invocation.remaining()?;
-                let store = self.clone();
-                let profile_owned = profile.clone();
-                let digest_check = active_digest.clone();
-                tokio::task::spawn_blocking(move || -> Result<()> {
-                    let _lifecycle = owned_life;
-                    store
-                        .validate_native_usage(&profile_owned)
-                        .context("native_usage_profile_changed")?;
-                    ensure!(
-                        store
-                            .active_package(&profile_owned.provider_id)?
-                            .is_some_and(|(_, digest)| digest == digest_check),
-                        "native_usage_installation_changed"
-                    );
-                    Ok(())
-                })
-                .await
-                .context("native_usage_installation_changed")??;
+                self.verify_post_usage_active(&invocation, &active_digest)
+                    .await?;
+                return Ok(usage);
+            }
+            PreparedNativeUsage::DirectAntigravity {
+                active_digest,
+                proxy_command,
+                home,
+                network,
+            } => {
+                drop(lifecycle.take());
+                let owned_obs = observation.take().context("native_usage_busy")?;
+                let usage = self
+                    .collect_direct_antigravity_usage(
+                        &invocation,
+                        &proxy_command,
+                        &home,
+                        network,
+                        owned_obs,
+                    )
+                    .await?;
+                self.verify_post_usage_active(&invocation, &active_digest)
+                    .await?;
                 return Ok(usage);
             }
             PreparedNativeUsage::Direct {
@@ -456,6 +487,36 @@ impl MachinePluginStore {
             )? == *profile,
             "native usage profile changed"
         );
+        Ok(())
+    }
+
+    async fn verify_post_usage_active(
+        &self,
+        invocation: &Invocation,
+        active_digest: &str,
+    ) -> Result<()> {
+        let owned_life = tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
+            .await
+            .context("native_usage_busy")?;
+        invocation.remaining()?;
+        let store = self.clone();
+        let profile_owned = invocation.profile.clone();
+        let digest_check = active_digest.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let _lifecycle = owned_life;
+            store
+                .validate_native_usage(&profile_owned)
+                .context("native_usage_profile_changed")?;
+            ensure!(
+                store
+                    .active_package(&profile_owned.provider_id)?
+                    .is_some_and(|(_, digest)| digest == digest_check),
+                "native_usage_installation_changed"
+            );
+            Ok(())
+        })
+        .await
+        .context("native_usage_installation_changed")??;
         Ok(())
     }
 

@@ -212,14 +212,16 @@ impl Broker {
                     crate::account_sandbox::LAUNCH_ENV,
                     serde_json::to_string(launch)?,
                 ));
-                if session.execution_binding.is_some() {
-                    session_environment.push((
-                        crate::account_sandbox::EXECUTION_LEDGER_ENV,
-                        self.execution_ledger(&session.session_id)?
-                            .display()
-                            .to_string(),
-                    ));
-                }
+            }
+            if session.execution_binding.is_some()
+                && (provider.account_sandbox.is_some() || session.provider == "antigravity")
+            {
+                session_environment.push((
+                    crate::account_sandbox::EXECUTION_LEDGER_ENV,
+                    self.execution_ledger(&session.session_id)?
+                        .display()
+                        .to_string(),
+                ));
             }
         }
         Ok(session_environment)
@@ -360,6 +362,30 @@ pub(super) fn validate_launch_placement(
         );
     }
     Ok(())
+}
+
+/// Best-effort cleanup of a deleted Antigravity session's local conversation
+/// artifacts when no other live session on the same account references it.
+pub(super) fn cleanup_deleted_antigravity_session(broker: &Broker, deleted: &StartSession) {
+    if deleted.provider != "antigravity" || deleted.provider_account_id.is_default() {
+        return;
+    }
+    let Some(native_id) = deleted.agent_session_id.as_deref() else {
+        return;
+    };
+    let referenced_elsewhere = broker.sessions.lock().values().any(|other| {
+        other.provider == "antigravity"
+            && other.provider_account_id == deleted.provider_account_id
+            && other.agent_session_id.as_deref() == Some(native_id)
+    });
+    if !referenced_elsewhere
+        && let Ok(scoped) = broker
+            .args
+            .provider_store
+            .for_account(&deleted.provider_account_id)
+    {
+        scoped.cleanup_antigravity_conversation(native_id);
+    }
 }
 
 /// The `systemd-run` property enforcing a signed Provider network policy on

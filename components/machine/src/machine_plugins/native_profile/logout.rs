@@ -103,7 +103,8 @@ impl MachinePluginStore {
             .find(|candidate| candidate.kind == component.kind && candidate.slot == component.slot)
             .context("native logout component missing")?;
         let command = runtime_command(&path, &requirement.command)?;
-        let home = directory.join("home");
+        let root = self.native_profile_root(provider);
+        let home = profile_home_path(&root, &directory, provider, profile.account_sandbox);
         ensure!(
             fs::symlink_metadata(&home)?.is_dir(),
             "native logout home missing or linked"
@@ -120,6 +121,7 @@ impl MachinePluginStore {
             command,
             method,
             sandbox_generation: profile.account_sandbox.then(|| profile.digest.clone()),
+            network: package.manifest.runtime.network,
         })))
     }
 
@@ -242,7 +244,9 @@ impl MachinePluginStore {
         );
         profile.revoked = true;
         persist(&directory, &profile)?;
-        remove_projection::remove(&directory.join("home"))?;
+        if !uses_persistent_account_home(provider, profile.account_sandbox) {
+            remove_projection::remove(&directory.join("home"))?;
+        }
         fs::File::open(&directory)?.sync_all()?;
         Ok(())
     }
@@ -256,6 +260,9 @@ fn retired_failed_login(directory: &Path, profile: &Profile) -> Result<bool> {
         && profile.process_tree_exited)
     {
         return Ok(false);
+    }
+    if uses_persistent_account_home(&profile.provider, profile.account_sandbox) {
+        return Ok(true);
     }
     match fs::symlink_metadata(directory.join("home")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),

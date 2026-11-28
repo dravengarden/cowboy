@@ -23,19 +23,6 @@ if [ "${1-}" = "--cowboy-probe" ]; then
   [ -f "$hooks" ] && exit 0
   exit 1
 fi
-# A managed read-only call (`--cowboy-managed-profile=read-only-v1` in its
-# signed profile) runs only in the account-sandbox runtime unit, whose
-# `agy-proxy` learns the profile from its execution binding and enforces it.
-# This launcher would start `agy` without Cowboy's facade and gate, so it
-# refuses every managed profile instead of passing one to `agy`.
-for argument in "$@"; do
-  case "$argument" in
-    --cowboy-managed-profile*)
-      echo "cowboy: a managed Antigravity call runs only in its account-sandbox runtime unit" >&2
-      exit 64
-      ;;
-  esac
-done
 # In an account-sandbox runtime archive (`cowboy-runtime.json` at its root)
 # the vendor binary is `bin/agy`; this launcher serves only login, logout and
 # probe units there (runtime units start the `agy-proxy` Node proxy), and the
@@ -47,6 +34,26 @@ if [ -f "$cowboy_root/cowboy-runtime.json" ]; then
 else
   agy="$cowboy_root/../../provider_cli-antigravity/content/antigravity"
 fi
+# In direct (non-sandboxed) split-execution mode, ACP runtime sessions run
+# through the sibling `agy-proxy` component, which enforces Cowboy's facade,
+# hooks, and managed-call profile against `COWBOY_EXECUTION_DESCRIPTOR`.
+if [ "$sandboxed" = false ] && [ "${1-}" = "acp" ] && [ -n "${COWBOY_EXECUTION_DESCRIPTOR-}" ]; then
+  proxy="$cowboy_root/../../provider_adapter-antigravity-proxy/content/bin/agy-proxy"
+  [ -x "$proxy" ] || { echo "cowboy: Antigravity proxy component is missing" >&2; exit 127; }
+  exec "$proxy" "$@"
+fi
+# A managed read-only call (`--cowboy-managed-profile=read-only-v1` in its
+# signed profile) runs only through `agy-proxy` with an execution binding.
+# Without an execution descriptor this launcher would start bare `agy`
+# without Cowboy's facade and gate, so refuse every managed profile here.
+for argument in "$@"; do
+  case "$argument" in
+    --cowboy-managed-profile*)
+      echo "cowboy: a managed Antigravity call runs only in its account-sandbox runtime unit" >&2
+      exit 64
+      ;;
+  esac
+done
 [ -x "$agy" ] || { echo "cowboy: Antigravity CLI component is missing" >&2; exit 127; }
 : "${HOME:?HOME is required}"
 umask 077

@@ -70,6 +70,333 @@ impl MachinePluginStore {
         let quota = report.quota.context("native_usage_collector_failed")?;
         Ok(json!({"status": "available", "rate_limits": rate_limits(&quota)}))
     }
+
+    /// Collect Antigravity quota directly via `agy-proxy --cowboy-usage`
+    /// inside the account's persistent `native/home`, enforcing `ipv4_only_v1`
+    /// on Linux via a transient `systemd-run --user` unit.
+    pub(super) async fn collect_direct_antigravity_usage(
+        &self,
+        invocation: &Invocation,
+        proxy_command: &Path,
+        home: &Path,
+        network: Option<cowboy_provider_sdk::RuntimeNetworkPolicy>,
+        observation: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<Value> {
+        let _observation = observation;
+        let remaining = invocation.remaining()?.min(Duration::from_secs(25));
+        let (mut cmd, mut unit_guard) =
+            direct_antigravity_usage_command(proxy_command, home, network);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().context("native_usage_collector_unavailable")?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .context("native_usage_collector_failed")?;
+        let read_task = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt as _;
+            let mut buf = Vec::new();
+            let limit = 256 * 1024_u64;
+            let n = (&mut stdout).take(limit + 1).read_to_end(&mut buf).await?;
+            ensure!(n as u64 <= limit, "usage report exceeded output limit");
+            Ok::<Vec<u8>, anyhow::Error>(buf)
+        });
+        let status = tokio::time::timeout(remaining, child.wait())
+            .await
+            .map_err(|_| anyhow::anyhow!("native_usage_busy"))?
+            .context("native_usage_collector_failed")?;
+        unit_guard.disarm();
+        let output = tokio::time::timeout(Duration::from_secs(2), read_task)
+            .await
+            .context("native_usage_collector_failed")?
+            .context("native_usage_collector_failed")?
+            .context("native_usage_collector_failed")?;
+        match interpret_antigravity_usage(status.code(), &output)? {
+            DirectUsageOutcome::AuthenticationRequired => {
+                bail!("native_usage_authentication_required");
+            }
+            DirectUsageOutcome::LocationUnsupported => {
+                bail!("native_usage_location_unsupported");
+            }
+            DirectUsageOutcome::Available(quota) => {
+                Ok(json!({"status": "available", "rate_limits": rate_limits(&quota)}))
+            }
+        }
+    }
+}
+
+struct UsageUnitGuard(Option<String>);
+
+impl UsageUnitGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for UsageUnitGuard {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(unit) = self.0.take() {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "stop", "--no-block", &unit])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+fn direct_antigravity_usage_command(
+    proxy_command: &Path,
+    home: &Path,
+    network: Option<cowboy_provider_sdk::RuntimeNetworkPolicy>,
+) -> (tokio::process::Command, UsageUnitGuard) {
+    #[cfg(target_os = "linux")]
+    if let Some(cowboy_provider_sdk::RuntimeNetworkPolicy::Ipv4OnlyV1) = network {
+        let unit = format!("cowboy-usage-{}.service", uuid::Uuid::new_v4().simple());
+        let mut cmd = tokio::process::Command::new("systemd-run");
+        cmd.env_clear();
+        for outer in ["PATH", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+            if let Some(value) = std::env::var_os(outer) {
+                cmd.env(outer, value);
+            }
+        }
+        cmd.args([
+            "--user",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            "--service-type=exec",
+            "--property=KillMode=control-group",
+            "--property=Restart=no",
+            "--property=RuntimeMaxSec=30s",
+            "--property=TimeoutStopSec=5s",
+            "--property=RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK",
+            &format!("--unit={unit}"),
+            &format!("--working-directory={}", home.display()),
+            &format!("--setenv=HOME={}", home.display()),
+            "--setenv=AGY_CLI_DISABLE_AUTO_UPDATE=true",
+            "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/cowboy-antigravity-no-bus",
+            "--setenv=LANG=C.UTF-8",
+            "--setenv=TZ=UTC",
+        ]);
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.arg(format!("--setenv=PATH={path}"));
+        }
+        for proxy_var in [
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "NIX_SSL_CERT_FILE",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+        ] {
+            if let Ok(value) = std::env::var(proxy_var) {
+                cmd.arg(format!("--setenv={proxy_var}={value}"));
+            }
+        }
+        cmd.arg("--").arg(proxy_command).arg("--cowboy-usage");
+        return (cmd, UsageUnitGuard(Some(unit)));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = network;
+    let mut cmd = tokio::process::Command::new(proxy_command);
+    cmd.arg("--cowboy-usage")
+        .env_clear()
+        .env("HOME", home)
+        .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true")
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/cowboy-antigravity-no-bus",
+        )
+        .env("LANG", "C.UTF-8")
+        .env("TZ", "UTC")
+        .current_dir(home);
+    for keep in [
+        "PATH",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NIX_SSL_CERT_FILE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ] {
+        if let Some(value) = std::env::var_os(keep) {
+            cmd.env(keep, value);
+        }
+    }
+    (cmd, UsageUnitGuard(None))
+}
+
+#[derive(Debug, PartialEq)]
+enum DirectUsageOutcome {
+    Available(Value),
+    AuthenticationRequired,
+    LocationUnsupported,
+}
+
+fn interpret_antigravity_usage(exit: Option<i32>, output: &[u8]) -> Result<DirectUsageOutcome> {
+    let text = String::from_utf8_lossy(output);
+    let envelope = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| line.starts_with('{'))
+        .find_map(|line| serde_json::from_str::<serde_json::Map<String, Value>>(line).ok());
+    let Some(envelope) = envelope else {
+        if text.contains("Authentication required") || text.contains("not logged in") {
+            return Ok(DirectUsageOutcome::AuthenticationRequired);
+        }
+        bail!("native_usage_collector_failed");
+    };
+    let succeeded = exit == Some(0)
+        && envelope
+            .get("status")
+            .is_none_or(|status| status == "SUCCESS");
+    if !succeeded {
+        let error = envelope
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [
+            "log in",
+            "logged in",
+            "authenticat",
+            "sign in",
+            "credential",
+        ]
+        .iter()
+        .any(|needle| error.contains(needle))
+        {
+            return Ok(DirectUsageOutcome::AuthenticationRequired);
+        }
+        if error.contains("location") {
+            return Ok(DirectUsageOutcome::LocationUnsupported);
+        }
+        bail!("native_usage_collector_failed");
+    }
+    if envelope
+        .get("num_turns")
+        .is_some_and(|turns| turns.as_u64() != Some(0))
+    {
+        bail!("native_usage_collector_failed");
+    }
+    let command = envelope
+        .get("command")
+        .and_then(Value::as_object)
+        .context("native_usage_collector_failed")?;
+    if command
+        .get("name")
+        .and_then(Value::as_str)
+        .map(|name| name.trim_start_matches('/'))
+        != Some("usage")
+    {
+        bail!("native_usage_collector_failed");
+    }
+    let document = match command
+        .get("data")
+        .context("native_usage_collector_failed")?
+    {
+        Value::Object(_) => command["data"].clone(),
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(Value::is_object)
+            .context("native_usage_collector_failed")?,
+        _ => bail!("native_usage_collector_failed"),
+    };
+    let quota = project_antigravity_quota(&document).context("native_usage_collector_failed")?;
+    Ok(DirectUsageOutcome::Available(quota))
+}
+
+fn project_antigravity_quota(document: &Value) -> Result<Value> {
+    const MAX_GROUPS: usize = 32;
+    const MAX_BUCKETS: usize = 128;
+    const MAX_LABEL: usize = 80;
+    let groups = document
+        .get("groups")
+        .and_then(Value::as_array)
+        .context("missing quota groups")?;
+    ensure!(groups.len() <= MAX_GROUPS, "too many quota groups");
+    let mut bucket_count = 0_usize;
+    let mut projected = Vec::with_capacity(groups.len());
+    for group in groups {
+        let name =
+            clean_quota_label(group.get("name"), MAX_LABEL)?.context("missing group name")?;
+        let raw_buckets = match group.get("buckets") {
+            None | Some(Value::Null) => &[][..],
+            Some(Value::Array(items)) => items.as_slice(),
+            Some(_) => bail!("invalid buckets"),
+        };
+        let mut buckets = Vec::with_capacity(raw_buckets.len());
+        for bucket in raw_buckets {
+            bucket_count += 1;
+            ensure!(bucket_count <= MAX_BUCKETS, "too many quota buckets");
+            let bucket_name =
+                clean_quota_label(bucket.get("name"), MAX_LABEL)?.context("missing bucket name")?;
+            let mut out = json!({"name": bucket_name});
+            if let Some(window) = clean_quota_label(bucket.get("window"), 32)? {
+                out["window"] = json!(window);
+            }
+            if let Some(disabled) = bucket.get("disabled") {
+                out["disabled"] = json!(disabled.as_bool().context("invalid disabled flag")?);
+            }
+            if let Some(fraction) = bucket.get("remaining_fraction").filter(|v| !v.is_null()) {
+                let value = fraction.as_f64().context("invalid remaining_fraction")?;
+                ensure!(
+                    value.is_finite() && (0.0..=1.0).contains(&value),
+                    "remaining_fraction out of range"
+                );
+                out["remaining_fraction"] = json!(value);
+            }
+            if let Some(time) = bucket.get("reset_time").filter(|v| !v.is_null()) {
+                let text = time.as_str().context("invalid reset_time")?;
+                if !text.is_empty() {
+                    let parsed = chrono::DateTime::parse_from_rfc3339(text)
+                        .context("invalid RFC 3339 reset_time")?;
+                    out["reset_at"] = json!(parsed.timestamp());
+                }
+            }
+            buckets.push(out);
+        }
+        projected.push(json!({"name": name, "buckets": buckets}));
+    }
+    Ok(json!({"groups": projected}))
+}
+
+fn clean_quota_label(value: Option<&Value>, limit: usize) -> Result<Option<String>> {
+    let text = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(text)) => text.trim(),
+        Some(_) => bail!("quota label is not a string"),
+    };
+    ensure!(
+        !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')),
+        "quota label has control characters"
+    );
+    Ok((!text.is_empty()).then(|| {
+        text.chars()
+            .take(limit)
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    }))
 }
 
 /// The closed native usage code of a daemon failure.
@@ -321,5 +648,52 @@ mod tests {
             sandbox_error_code(&refusal("limit").context("collecting")),
             "native_usage_busy"
         );
+    }
+
+    #[test]
+    fn direct_antigravity_usage_interprets_quota_auth_and_location() {
+        let ok = serde_json::json!({
+            "status": "SUCCESS",
+            "num_turns": 0,
+            "command": {
+                "name": "/usage",
+                "data": {
+                    "groups": [{
+                        "name": "Gemini Pro",
+                        "buckets": [{
+                            "name": "Gemini 4 Neon",
+                            "window": "5h",
+                            "remaining_fraction": 0.75,
+                            "reset_time": "2026-11-28T15:00:00Z",
+                        }]
+                    }]
+                }
+            }
+        });
+        let DirectUsageOutcome::Available(quota) =
+            interpret_antigravity_usage(Some(0), format!("banner\n{ok}\n").as_bytes()).unwrap()
+        else {
+            panic!("expected available quota");
+        };
+        let limits = rate_limits(&quota);
+        assert_eq!(
+            limits["rateLimitsByLimitId"]["0000-gemini-pro"]["primary"]["usedPercent"],
+            25.0
+        );
+        assert_eq!(
+            limits["rateLimitsByLimitId"]["0000-gemini-pro"]["primary"]["windowDurationMins"],
+            300
+        );
+        let auth = serde_json::json!({"status": "ERROR", "error": "Please log in again"});
+        assert_eq!(
+            interpret_antigravity_usage(Some(1), auth.to_string().as_bytes()).unwrap(),
+            DirectUsageOutcome::AuthenticationRequired
+        );
+        let loc = serde_json::json!({"status": "ERROR", "error": "Unsupported location"});
+        assert_eq!(
+            interpret_antigravity_usage(Some(1), loc.to_string().as_bytes()).unwrap(),
+            DirectUsageOutcome::LocationUnsupported
+        );
+        assert!(interpret_antigravity_usage(Some(0), b"{}").is_err());
     }
 }
