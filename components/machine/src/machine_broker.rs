@@ -105,6 +105,12 @@ fn launch_headroom() -> Option<u64> {
 const PROVIDER_INSTALL_LAUNCH_POLL: Duration = Duration::from_millis(250);
 
 fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
+    if error
+        .downcast_ref::<crashed_drain::DrainContentionError>()
+        .is_some()
+    {
+        return false;
+    }
     let detail = format!("{error:#}");
     // Auth, missing native threads, and restore timeouts are session-local.
     // Retrying a previous worker generation hydrates the same thread and hides the real
@@ -2445,10 +2451,8 @@ impl Broker {
         }
         self.awaiting_reconnect.lock().remove(&session_id);
         self.pending_commands.lock().remove(&session_id);
-        self.session_states
-            .lock()
-            .insert(session_id.clone(), WorkerState::Exited);
-        self.invalidate_recently_drained(&session_id);
+        let (prev_state, had_recently_drained) =
+            self.mark_dormant_exited_and_invalidate_drain(&session_id);
         if let Some(mut snapshot) = snapshot {
             snapshot.state = WorkerState::Exited;
             snapshot.current_turn_id = None;
@@ -2462,6 +2466,10 @@ impl Broker {
             self.send_controller(Frame::Snapshot {
                 worker: Box::new(snapshot),
             });
+        } else if session.is_some()
+            && (had_recently_drained || prev_state == Some(WorkerState::Crashed))
+        {
+            self.publish_ownerless_crashed_snapshot(&session_id);
         }
         // Retain the declaration, native thread and launch fence. The account
         // lifecycle must separately authorize any future resume.
@@ -2512,10 +2520,7 @@ impl Broker {
         self.sessions.lock().insert(id.clone(), session.clone());
         self.pending_commands.lock().remove(id);
         self.awaiting_reconnect.lock().remove(id);
-        self.session_states
-            .lock()
-            .insert(id.clone(), WorkerState::Exited);
-        self.invalidate_recently_drained(id);
+        let _ = self.mark_dormant_exited_and_invalidate_drain(id);
         self.account_quiesced_sessions.lock().remove(id);
         self.cancelled_sessions.lock().remove(id);
         Ok(())
@@ -2734,11 +2739,9 @@ impl Broker {
         if self.cancelled_sessions.lock().contains(&session.session_id) {
             anyhow::bail!("session {} was deleted during launch", session.session_id);
         }
-        self.startup_failures.lock().remove(&session.session_id);
-        self.session_states
-            .lock()
-            .insert(session.session_id.clone(), WorkerState::Starting);
         let _admission = self.admit_launch(&session.session_id).await?;
+        self.wait_for_returning_crashed_drain(&session.session_id)
+            .await?;
         let (mut worker_exit, _spawned_launch_guard) = self.spawn_worker(session).await?;
         let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
         loop {
@@ -3366,8 +3369,6 @@ impl Broker {
         oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>,
         crashed_drain::SpawnedLaunchGuard<'_>,
     )> {
-        self.wait_for_returning_crashed_drain(&session.session_id)
-            .await?;
         let provider = self.resolve_launch_provider(session).await?;
         let session_environment = self.prepare_launch_environment(session, &provider).await?;
         let worker_command = self.launch_worker_command(session).await?;
@@ -3413,8 +3414,9 @@ impl Broker {
             }
             SpawnMode::SystemdUser => {
                 let mut command = Command::new("systemd-run");
-                let unit = worker_unit_name(&self.args.socket, &session.session_id);
-                prepare_transient_unit(&unit).await?;
+                let unit = self
+                    .prepare_session_transient_unit(&session.session_id)
+                    .await?;
                 if !session.provider_account_id.is_default() {
                     // The stable unit is collected: prove the previous named
                     // incarnation's tree exit before the journal admits this
@@ -3745,72 +3747,7 @@ fn session_context_environment(
 /// unit to disappear before either the desired generation or its fallback is
 /// launched. A brand-new session returns `not-found` immediately.
 async fn prepare_transient_unit(unit: &str) -> Result<()> {
-    let started = tokio::time::Instant::now();
-    let deadline = started + TRANSIENT_UNIT_COLLECT_TIMEOUT;
-    let mut stopped_orphan = false;
-    loop {
-        let output = Command::new("systemctl")
-            .args([
-                "--user",
-                "show",
-                unit,
-                "--property=LoadState",
-                "--property=ActiveState",
-            ])
-            .output()
-            .await
-            .with_context(|| format!("checking transient worker unit {unit}"))?;
-        let fields = String::from_utf8_lossy(&output.stdout);
-        let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
-        let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
-        if transient_unit_collected(&load_state) {
-            return Ok(());
-        }
-        // Reaching spawn_worker means this broker has no attached peer and no
-        // launch owner for the session. An active same-name transient unit is
-        // therefore an orphan from the retired broker socket, not a worker we
-        // can safely adopt. Stop that exact per-session unit once, then wait for
-        // --collect to remove it before reusing the stable name.
-        if !stopped_orphan
-            && matches!(active_state.as_str(), "active" | "activating")
-            && started.elapsed() >= ORPHAN_EXIT_GRACE
-        {
-            tracing::warn!(%unit, %active_state, "recycling orphaned transient worker unit");
-            let status = Command::new("systemctl")
-                .args(["--user", "stop", unit])
-                .status()
-                .await
-                .with_context(|| format!("stopping orphaned transient worker unit {unit}"))?;
-            if !status.success() {
-                // `show` and `stop` are necessarily separate systemd calls. A
-                // transient unit can finish and be collected between them, in
-                // which case `stop` returns "unit not loaded" even though the
-                // state we need has already been reached. Re-check before
-                // treating the stop status as a launch failure.
-                let output = Command::new("systemctl")
-                    .args(["--user", "show", unit, "--property=LoadState"])
-                    .output()
-                    .await
-                    .with_context(|| {
-                        format!("rechecking transient worker unit {unit} after stop")
-                    })?;
-                let fields = String::from_utf8_lossy(&output.stdout);
-                let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
-                if transient_unit_collected(&load_state) {
-                    return Ok(());
-                }
-                anyhow::bail!("systemctl stop {unit} exited {status} (LoadState={load_state})");
-            }
-            stopped_orphan = true;
-            continue;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "transient worker unit {unit} was not collected (LoadState={load_state}, ActiveState={active_state})"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crashed_drain::prepare_transient_unit_with_owner_check(None, unit).await
 }
 
 fn transient_unit_collected(load_state: &str) -> bool {

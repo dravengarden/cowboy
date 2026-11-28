@@ -6,8 +6,11 @@
 //! `crashed_drains`) and never held across `.await` or `send_controller`.
 //! Lifecycle mutations serialize on the broker's `session_lifecycle_gate`.
 
+mod launch_gate;
 mod teardown;
-pub(super) use teardown::SpawnedLaunchGuard;
+pub(super) use launch_gate::{
+    DrainContentionError, SpawnedLaunchGuard, prepare_transient_unit_with_owner_check,
+};
 
 use super::*;
 use crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION;
@@ -1031,12 +1034,15 @@ impl Broker {
             let deleted = self.permanently_deleted_sessions.lock();
             let sessions = self.sessions.lock();
             let workers = self.workers.lock();
+            let mut session_states = self.session_states.lock();
+            let spawned = self.spawned_launches.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
 
             let valid = !cancelled.contains(session_id)
                 && !deleted.contains(session_id)
+                && !spawned.contains(session_id)
                 && !workers.contains_key(session_id)
                 && state.active.get(session_id).is_some_and(|active| {
                     active.epoch == peer.epoch && active.connection_id == peer.connection_id
@@ -1055,6 +1061,10 @@ impl Broker {
                 );
                 (false, None, orphaned, Vec::new(), None)
             } else {
+                // Write Crashed BEFORE releasing `state.active` so a waiting
+                // replacement launch in `acquire_spawned_launch_slot` always
+                // initializes Starting strictly after this write (R21-M1).
+                session_states.insert(session_id.to_owned(), WorkerState::Crashed);
                 state.active.remove(session_id);
                 let orphaned = drain_pending_for_connection(
                     &mut state.pending,
@@ -1104,9 +1114,6 @@ impl Broker {
         if !commit {
             return;
         }
-        self.session_states
-            .lock()
-            .insert(session_id.to_owned(), WorkerState::Crashed);
         self.awaiting_reconnect.lock().remove(session_id);
         self.replacing.lock().remove(session_id);
         if let Some(entry) = retry_entry {
@@ -2957,5 +2964,65 @@ mod tests {
                 .recently_drained
                 .contains_key("s-m4")
         );
+    }
+
+    #[tokio::test]
+    async fn returning_drainer_disables_orphan_stop_and_drain_contention_skips_generation_fallback()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        assert!(broker.should_stop_orphan_unit("s-r21-h2"));
+
+        let (w_tx, _w_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker_inner(
+                WorkerRegistration {
+                    session_id: "s-r21-h2".into(),
+                    epoch: "ep-draining".into(),
+                    generation: "gen-1".into(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id: 91,
+                    tx: w_tx,
+                },
+                true,
+                Some(("dc-h2".into(), RetiredLaunch::VerifiedNone)),
+            )
+            .unwrap();
+        assert!(
+            !broker.should_stop_orphan_unit("s-r21-h2"),
+            "attached returning drainer must prevent orphan unit force-stop (R21-H2)"
+        );
+
+        let err = anyhow::Error::new(DrainContentionError("drain wait timed out".into()));
+        assert!(
+            !worker_generation_failure_allows_fallback(&err),
+            "drain contention/timeout must not quarantine or fall back worker generations (R21-M6)"
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_spawned_launch_slot_initializes_starting_strictly_after_drain_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        broker
+            .session_states
+            .lock()
+            .insert("s-r21-m1".into(), WorkerState::Crashed);
+        broker
+            .startup_failures
+            .lock()
+            .insert("s-r21-m1".into(), "old crash".into());
+        let guard = broker
+            .acquire_spawned_launch_slot("s-r21-m1")
+            .await
+            .unwrap();
+        assert_eq!(
+            broker.session_states.lock().get("s-r21-m1"),
+            Some(&WorkerState::Starting),
+            "acquire_spawned_launch_slot must set Starting after drain settles (R21-M1)"
+        );
+        assert!(broker.startup_failures.lock().get("s-r21-m1").is_none());
+        drop(guard);
     }
 }

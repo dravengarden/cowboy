@@ -3,19 +3,6 @@
 
 use super::*;
 
-const RETURNING_DRAIN_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
-
-pub(in crate::machine_broker) struct SpawnedLaunchGuard<'a> {
-    broker: &'a Broker,
-    session_id: String,
-}
-
-impl Drop for SpawnedLaunchGuard<'_> {
-    fn drop(&mut self) {
-        self.broker.spawned_launches.lock().remove(&self.session_id);
-    }
-}
-
 impl Broker {
     pub(in crate::machine_broker) async fn handle_crashed_drain_worker_frame(
         &self,
@@ -263,76 +250,6 @@ impl Broker {
                 Ok((None, !adopt_only))
             }
         }
-    }
-
-    pub(in crate::machine_broker) async fn wait_for_returning_crashed_drain(
-        &self,
-        session_id: &str,
-    ) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + RETURNING_DRAIN_WAIT_TIMEOUT;
-        loop {
-            if self.cancelled_sessions.lock().contains(session_id) {
-                anyhow::bail!("session {session_id} was deleted during launch");
-            }
-            let notified = self.crashed_drains.settled.notified();
-            let (has_fence, has_live_worker) = {
-                let workers = self.workers.lock();
-                (
-                    self.has_any_crashed_drain_fence_locked(&workers, session_id),
-                    workers.contains_key(session_id),
-                )
-            };
-            if !has_fence {
-                if has_live_worker {
-                    anyhow::bail!(
-                        "crashed worker drain did not retire existing worker for session {session_id}"
-                    );
-                }
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                anyhow::bail!(
-                    "timed out waiting for returning crashed worker drain on session {session_id}"
-                );
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let _ = tokio::time::timeout(remaining, notified).await;
-        }
-    }
-
-    pub(in crate::machine_broker) async fn acquire_spawned_launch_slot(
-        &self,
-        session_id: &str,
-    ) -> Result<SpawnedLaunchGuard<'_>> {
-        loop {
-            self.wait_for_returning_crashed_drain(session_id).await?;
-            let workers = self.workers.lock();
-            if self.has_any_crashed_drain_fence_locked(&workers, session_id) {
-                drop(workers);
-                continue;
-            }
-            if workers.contains_key(session_id) {
-                anyhow::bail!("worker for session {session_id} is already attached");
-            }
-            self.spawned_launches.lock().insert(session_id.to_owned());
-            self.crashed_drains
-                .inner
-                .lock()
-                .recently_drained
-                .remove(session_id);
-            return Ok(SpawnedLaunchGuard {
-                broker: self,
-                session_id: session_id.to_owned(),
-            });
-        }
-    }
-
-    pub(in crate::machine_broker) fn invalidate_recently_drained(&self, session_id: &str) {
-        self.crashed_drains
-            .inner
-            .lock()
-            .recently_drained
-            .remove(session_id);
     }
 
     pub(in crate::machine_broker) fn has_any_crashed_drain_fence_locked(
@@ -1270,7 +1187,7 @@ impl Broker {
         );
     }
 
-    pub(super) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
+    pub(in crate::machine_broker) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
         let snapshot = {
             let sessions = self.sessions.lock();
             let Some(session) = sessions.get(session_id).cloned() else {
