@@ -2874,8 +2874,9 @@ mod tests {
         // Replacement spawn must wait while the returning draining worker finishes replay.
         let broker_for_spawn = Arc::clone(&broker);
         let acquire_task = tokio::spawn(async move {
+            let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-h2","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
             let guard = broker_for_spawn
-                .acquire_spawned_launch_slot("s-h2")
+                .acquire_spawned_launch_slot(&session)
                 .await
                 .unwrap();
             assert!(broker_for_spawn.spawned_launches.lock().contains("s-h2"));
@@ -3033,10 +3034,8 @@ mod tests {
             .startup_failures
             .lock()
             .insert("s-r21-m1".into(), "old crash".into());
-        let guard = broker
-            .acquire_spawned_launch_slot("s-r21-m1")
-            .await
-            .unwrap();
+        let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-r21-m1","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
+        let guard = broker.acquire_spawned_launch_slot(&session).await.unwrap();
         assert_eq!(
             broker.session_states.lock().get("s-r21-m1"),
             Some(&WorkerState::Starting),
@@ -3051,7 +3050,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let broker = test_broker(dir.path());
         let guard = broker
-            .try_reserve_orphan_stop("s-r22-h1")
+            .try_reserve_orphan_stop("s-r22-h1", false)
             .expect("unowned session admits orphan stop reservation");
 
         let (w_tx, _w_rx) = mpsc::unbounded_channel();
@@ -3093,8 +3092,56 @@ mod tests {
             )
             .unwrap();
         assert!(
-            broker.try_reserve_orphan_stop("s-r22-h1").is_none(),
+            broker.try_reserve_orphan_stop("s-r22-h1", false).is_none(),
             "attached draining worker must block orphan stop reservation (R22-H1)"
         );
+    }
+    #[tokio::test]
+    async fn orphan_stop_reservation_blocks_spawn_admission_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let guard = broker
+            .try_reserve_orphan_stop("s-r23-h1", false)
+            .expect("orphan stop reservation");
+
+        let broker_spawn = Arc::clone(&broker);
+        let spawn_task = tokio::spawn(async move {
+            let session: StartSession = serde_json::from_value(serde_json::json!({
+                "session_id": "s-r23-h1",
+                "provider": "codex",
+                "cwd": "/tmp",
+                "generation": "gen-fallback",
+                "fallback_for": "gen-bad"
+            }))
+            .unwrap();
+            let slot = broker_spawn
+                .acquire_spawned_launch_slot(&session)
+                .await
+                .unwrap();
+            assert_eq!(
+                broker_spawn
+                    .fallback_pins
+                    .lock()
+                    .get("s-r23-h1")
+                    .map(String::as_str),
+                Some("gen-fallback"),
+                "fallback pin must be applied only after acquiring the spawn slot (R23-M5)"
+            );
+            drop(slot);
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !spawn_task.is_finished(),
+            "acquire_spawned_launch_slot must wait while orphan stop reservation is held (R23-H1)"
+        );
+        assert!(
+            broker.fallback_pins.lock().get("s-r23-h1").is_none(),
+            "fallback pin must remain unset before spawn slot is acquired (R23-M5)"
+        );
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(2), spawn_task)
+            .await
+            .expect("spawn admission must unblock once orphan stop guard drops")
+            .unwrap();
     }
 }

@@ -791,43 +791,11 @@ impl Broker {
                 );
                 return;
             }
-            let (cleared, rejections) = {
-                let workers = broker.workers.lock();
-                let mut pending_cmds = broker.pending_commands.lock();
-                let mut dispatched = broker.dispatched_prompts.lock();
-                let mut state = broker.crashed_drains.inner.lock();
-                if workers.contains_key(&session_id) {
-                    (false, Vec::new())
-                } else if state
-                    .unconfirmed_teardown
-                    .get(&session_id)
-                    .is_some_and(|recorded| recorded.epoch == entry.epoch)
-                {
-                    state.unconfirmed_teardown.remove(&session_id);
-                    state.trusted_epoch_pids.remove(&session_id);
-                    let rejections = classify_and_drain_queued_commands(
-                        &mut pending_cmds,
-                        &mut dispatched,
-                        &session_id,
-                    );
-                    (true, rejections)
-                } else {
-                    (false, Vec::new())
-                }
-            };
-            for (cid, reason) in rejections {
-                broker.command_rejected(&session_id, cid, reason);
-            }
-            if cleared {
-                broker.send_controller(Frame::CommandAck {
-                    session_id: session_id.clone(),
-                    command_id,
-                    accepted: true,
-                    reason: None,
-                });
-                broker.send_crashed_worker_drained(&session_id, &entry.epoch);
-                broker.crashed_drains.settled.notify_waiters();
-            } else {
+            if !broker.finalize_unconfirmed_teardown_retry(
+                &session_id,
+                &entry.epoch,
+                Some(command_id.clone()),
+            ) {
                 broker.command_rejected(
                     &session_id,
                     command_id,
@@ -835,6 +803,60 @@ impl Broker {
                 );
             }
         });
+    }
+
+    /// Shared finalization for both Controller-triggered and background
+    /// unconfirmed-teardown retries so cache protection is always revoked
+    /// alongside retirement receipt emission (R23-M4).
+    fn finalize_unconfirmed_teardown_retry(
+        &self,
+        session_id: &str,
+        worker_epoch: &str,
+        ack_command_id: Option<String>,
+    ) -> bool {
+        let (cleared, session_for_cache, rejections) = {
+            let sessions = self.sessions.lock();
+            let workers = self.workers.lock();
+            let mut pending_cmds = self.pending_commands.lock();
+            let mut dispatched = self.dispatched_prompts.lock();
+            let mut state = self.crashed_drains.inner.lock();
+            if !workers.contains_key(session_id)
+                && state
+                    .unconfirmed_teardown
+                    .get(session_id)
+                    .is_some_and(|recorded| recorded.epoch == worker_epoch)
+            {
+                state.unconfirmed_teardown.remove(session_id);
+                state.trusted_epoch_pids.remove(session_id);
+                let rejections = classify_and_drain_queued_commands(
+                    &mut pending_cmds,
+                    &mut dispatched,
+                    session_id,
+                );
+                (true, sessions.get(session_id).cloned(), rejections)
+            } else {
+                (false, None, Vec::new())
+            }
+        };
+        for (cid, reason) in rejections {
+            self.command_rejected(session_id, cid, reason);
+        }
+        if cleared {
+            if let Some(session) = session_for_cache {
+                self.revoke_cache_protection(&session, session_id, "crashed_worker_drained");
+            }
+            if let Some(command_id) = ack_command_id {
+                self.send_controller(Frame::CommandAck {
+                    session_id: session_id.to_owned(),
+                    command_id,
+                    accepted: true,
+                    reason: None,
+                });
+            }
+            self.send_crashed_worker_drained(session_id, worker_epoch);
+            self.crashed_drains.settled.notify_waiters();
+        }
+        cleared
     }
 
     pub(super) fn teardown_retry_still_valid(&self, session_id: &str, worker_epoch: &str) -> bool {
@@ -887,44 +909,7 @@ impl Broker {
                 {
                     continue;
                 }
-                let (cleared, session_for_cache, rejections) = {
-                    let sessions = broker.sessions.lock();
-                    let workers = broker.workers.lock();
-                    let mut pending_cmds = broker.pending_commands.lock();
-                    let mut dispatched = broker.dispatched_prompts.lock();
-                    let mut state = broker.crashed_drains.inner.lock();
-                    if !workers.contains_key(&session_id)
-                        && state
-                            .unconfirmed_teardown
-                            .get(&session_id)
-                            .is_some_and(|recorded| recorded.epoch == entry.epoch)
-                    {
-                        state.unconfirmed_teardown.remove(&session_id);
-                        state.trusted_epoch_pids.remove(&session_id);
-                        let rejections = classify_and_drain_queued_commands(
-                            &mut pending_cmds,
-                            &mut dispatched,
-                            &session_id,
-                        );
-                        (true, sessions.get(&session_id).cloned(), rejections)
-                    } else {
-                        (false, None, Vec::new())
-                    }
-                };
-                for (cid, reason) in rejections {
-                    broker.command_rejected(&session_id, cid, reason);
-                }
-                if cleared {
-                    if let Some(session) = session_for_cache {
-                        broker.revoke_cache_protection(
-                            &session,
-                            &session_id,
-                            "crashed_worker_drained",
-                        );
-                    }
-                    broker.send_crashed_worker_drained(&session_id, &entry.epoch);
-                    broker.crashed_drains.settled.notify_waiters();
-                }
+                let _ = broker.finalize_unconfirmed_teardown_retry(&session_id, &entry.epoch, None);
                 return;
             }
         });

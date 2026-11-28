@@ -231,34 +231,41 @@ pub(super) fn acknowledge(
     {
         // Dormant quiesce during account revocation cannot project through
         // named-account snapshot admission once credentials are disabled;
-        // project `Exited` directly from the correlated, authorized stop
-        // confirmation after rechecking Machine ownership and binding (R22-M4).
+        // recheck Machine and account scope BEFORE touching bookkeeping, then
+        // retire any stale cached worker for that quiesced account and project
+        // `Exited` while preserving any verified newer owner (R22-M4, R23-M3).
         let fence = shared.projection_fence.lock();
         if !*fence {
-            shared.crashed_worker_sightings.lock().remove(session_id);
-            shared.draining_crashed_epochs.lock().remove(session_id);
-            let has_live_worker = shared
-                .workers
-                .lock()
-                .get(session_id)
-                .is_some_and(crate::runtime_wire::WorkerSnapshot::has_connected_owner);
-            if !has_live_worker {
-                let _proj = shared.hub.runtime_projection_guard();
-                if shared.hub.accepts_runtime_projection(session_id)
-                    && shared.hub.session_info(session_id).is_some_and(|info| {
-                        info.meta.status == crate::core::Status::Crashed
-                            && info.meta.provider_account_id == *account_id
-                            && shared
-                                .machine_id
-                                .as_deref()
-                                .is_none_or(|machine| info.meta.machine_id == machine)
-                    })
-                {
-                    shared.hub.set_status(
-                        session_id,
-                        crate::core::Status::Exited,
-                        Some("account worker stopped".to_owned()),
-                    );
+            let _proj = shared.hub.runtime_projection_guard();
+            if shared.hub.accepts_runtime_projection(session_id)
+                && let Some(info) = shared.hub.session_info(session_id)
+                && info.meta.provider_account_id == *account_id
+                && shared
+                    .machine_id
+                    .as_deref()
+                    .is_none_or(|machine| info.meta.machine_id == machine)
+            {
+                let mut workers = shared.workers.lock();
+                let has_verified_newer_owner = workers.get(session_id).is_some_and(|worker| {
+                    worker.has_connected_owner()
+                        && worker.launch.as_ref().is_some_and(|launch| {
+                            launch.provider_account_id != *account_id
+                                || launch.provider_auth_generation
+                                    != info.meta.provider_auth_generation
+                        })
+                });
+                if !has_verified_newer_owner {
+                    workers.remove(session_id);
+                    drop(workers);
+                    shared.crashed_worker_sightings.lock().remove(session_id);
+                    shared.draining_crashed_epochs.lock().remove(session_id);
+                    if info.meta.status == crate::core::Status::Crashed {
+                        shared.hub.set_status(
+                            session_id,
+                            crate::core::Status::Exited,
+                            Some("account worker stopped".to_owned()),
+                        );
+                    }
                 }
             }
         }
@@ -433,5 +440,69 @@ mod tests {
             pending.wait(Duration::ZERO).await,
             Outcome::Refused(_)
         ));
+    }
+    #[tokio::test]
+    async fn accepted_quiesce_ack_retires_stale_cached_worker_and_projects_exited() {
+        let id = account();
+        let mut meta: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+            "id": "s-quiesce-stale",
+            "provider": "claude-code",
+            "machine_id": "hawk",
+            "workspace_id": "project",
+            "cwd": "/tmp",
+            "title": "named",
+            "status": "crashed",
+            "owner_user_id": "0123456789abcdef0123456789abcdef",
+            "provider_account_id": id,
+            "provider_auth_generation": 1,
+            "provider_version": "1.0.0",
+            "provider_generation_digest": "sha256:fixture"
+        }))
+        .unwrap();
+        meta.provider_behavior = Some(crate::provider::legacy_behavior("claude-code"));
+        let hub = Hub::new();
+        hub.project_persisted_session(meta);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.connect_for_test();
+        let stale: crate::runtime_wire::WorkerSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s-quiesce-stale",
+                "worker_epoch": "101-stale",
+                "generation": "gen-1",
+                "state": "crashed",
+                "launch": {
+                    "session_id": "s-quiesce-stale",
+                    "provider": "claude-code",
+                    "cwd": "/tmp",
+                    "generation": "gen-1",
+                    "provider_account_id": id,
+                    "provider_auth_generation": 1
+                }
+            }))
+            .unwrap();
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s-quiesce-stale".into(), stale);
+        let pending = runtime
+            .quiesce_account_session("revoke-r23", "s-quiesce-stale", &id)
+            .unwrap();
+        let cmd_id = pending.command_id.clone();
+        ack(&runtime, &cmd_id, "s-quiesce-stale", true).await;
+        assert_eq!(pending.wait(Duration::from_secs(1)).await, Outcome::Stopped);
+        assert!(
+            !runtime
+                .shared
+                .workers
+                .lock()
+                .contains_key("s-quiesce-stale"),
+            "confirmed quiesce must retire stale cached worker for the quiesced account (R23-M3)"
+        );
+        assert_eq!(
+            hub.session_info("s-quiesce-stale").unwrap().meta.status,
+            crate::core::Status::Exited,
+            "confirmed quiesce must project Exited even when disabled account filters snapshots (R23-M3)"
+        );
     }
 }

@@ -2504,36 +2504,7 @@ impl Broker {
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(WORKER_HEARTBEAT_TIMEOUT).await;
-            if !broker.awaiting_reconnect.lock().remove(&session_id)
-                || broker.workers.lock().contains_key(&session_id)
-                || !broker.sessions.lock().contains_key(&session_id)
-            {
-                return;
-            }
-            let unit = worker_unit_name(&broker.args.socket, &session_id);
-            // A Controller re-declares every known session after each
-            // reconnect, including one whose worker already crashed during
-            // startup. With no unit left nothing can reconnect, so report the
-            // terminal state without an extreme recovery or a futile stop.
-            let active = Command::new("systemctl")
-                .args(["--user", "is-active", &unit])
-                .output();
-            if let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(10), active).await
-                && worker_unit_gone(&String::from_utf8_lossy(&output.stdout))
-            {
-                tracing::info!(
-                    session = %session_id,
-                    "declared worker has no running unit; reporting it stopped"
-                );
-                broker.publish_session_state(&session_id, WorkerState::Crashed);
-                return;
-            }
-            if broker
-                .stop_unreconnected_unit_if_unowned(&session_id, &unit)
-                .await
-            {
-                broker.publish_session_state(&session_id, WorkerState::Crashed);
-            }
+            broker.reap_unreconnected_worker_unit(&session_id).await;
         });
     }
 
@@ -2570,11 +2541,6 @@ impl Broker {
         {
             selected.generation = previous;
             selected.fallback_for = Some(session.generation.clone());
-            self.pin_fallback(
-                &selected.session_id,
-                &selected.generation,
-                &session.generation,
-            );
         }
         match self.spawn_and_wait_ready(&selected).await {
             Ok(()) => {
@@ -2611,6 +2577,13 @@ impl Broker {
                         &selected.session_id,
                     );
                 }
+                if let Some(failed_generation) = selected.fallback_for.as_deref() {
+                    self.pin_fallback(
+                        &selected.session_id,
+                        &selected.generation,
+                        failed_generation,
+                    );
+                }
                 let fallback = session_fallback.clone().or(machine_previous);
                 if let Some(previous) = fallback.filter(|previous| *previous != selected.generation)
                 {
@@ -2623,14 +2596,32 @@ impl Broker {
                     );
                     selected.generation = previous;
                     selected.fallback_for = Some(session.generation.clone());
-                    self.pin_fallback(
-                        &selected.session_id,
-                        &selected.generation,
-                        &session.generation,
-                    );
-                    self.spawn_and_wait_ready(&selected).await.with_context(|| {
-                        format!("fallback after generation launch failed: {error}")
-                    })
+                    match self.spawn_and_wait_ready(&selected).await {
+                        Ok(()) => Ok(()),
+                        Err(fallback_error)
+                            if fallback_error
+                                .downcast_ref::<crashed_drain::DrainContentionError>()
+                                .is_some() =>
+                        {
+                            Err(fallback_error)
+                        }
+                        Err(fallback_error) => {
+                            if !self
+                                .cancelled_sessions
+                                .lock()
+                                .contains(&selected.session_id)
+                            {
+                                self.pin_fallback(
+                                    &selected.session_id,
+                                    &selected.generation,
+                                    &session.generation,
+                                );
+                            }
+                            Err(fallback_error).with_context(|| {
+                                format!("fallback after generation launch failed: {error}")
+                            })
+                        }
+                    }
                 } else {
                     Err(error)
                 }
@@ -3510,9 +3501,7 @@ impl Broker {
         // await point. Pre-verify any carried release off Tokio before taking locks.
         let carry_proof =
             account_worker::prepare_carry_async(&self.args.provider_store, session).await?;
-        let spawned_guard = self
-            .acquire_spawned_launch_slot(&session.session_id)
-            .await?;
+        let spawned_guard = self.acquire_spawned_launch_slot(session).await?;
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
@@ -3727,6 +3716,7 @@ fn systemd_show_value(output: &str, key: &str) -> Option<String> {
 
 /// `systemctl is-active` reports a unit that has no process: unloaded units
 /// read as `inactive`. Transitional or unknown states keep extreme recovery.
+#[cfg(test)]
 fn worker_unit_gone(is_active: &str) -> bool {
     matches!(is_active.trim(), "inactive" | "failed")
 }
