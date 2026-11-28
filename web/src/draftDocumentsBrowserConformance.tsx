@@ -1663,7 +1663,12 @@ export async function runDraftDocumentsBrowserConformance(
             focusedAll.length === 1 && focusedAll[0] === targetEl,
             `strict single-focus invariant on ${targetRegion} (count=${String(focusedAll.length)})`,
           );
-          const after = getComputedStyle(targetEl, "::after");
+          const promotedHost = targetRegion === "prompt.composer"
+            ? container.querySelector<HTMLElement>('[data-desktop-pane="prompt"]')!
+            : targetRegion === "conversation.transcript"
+            ? container.querySelector<HTMLElement>('[data-desktop-pane="conversation"]')!
+            : targetEl;
+          const after = getComputedStyle(promotedHost, "::after");
           const sameBorderWidths =
             after.borderTopWidth === "1px" &&
             after.borderRightWidth === "1px" &&
@@ -1676,15 +1681,29 @@ export async function runDraftDocumentsBrowserConformance(
             after.borderLeftColor !== "rgba(0, 0, 0, 0)";
           check(
             sameBorderWidths && sameBorderColors && after.boxShadow !== "none" && after.boxShadow.includes("inset") && after.pointerEvents === "none",
-            `${targetRegion} paints a symmetrical 1px ::after perimeter border + soft inset glow (widths=${after.borderTopWidth}/${after.borderRightWidth}/${after.borderBottomWidth}/${after.borderLeftWidth}, color=${after.borderLeftColor}, shadow=${after.boxShadow})`,
+            `${targetRegion} paints a symmetrical 1px ::after perimeter border + soft inset glow on ${promotedHost === targetEl ? "region" : "promoted pane"} (widths=${after.borderTopWidth}/${after.borderRightWidth}/${after.borderBottomWidth}/${after.borderLeftWidth}, color=${after.borderLeftColor}, shadow=${after.boxShadow})`,
           );
+          if (promotedHost !== targetEl) {
+            const innerAfter = getComputedStyle(targetEl, "::after");
+            check(
+              innerAfter.boxShadow === "none" && innerAfter.borderLeftColor === "rgba(0, 0, 0, 0)",
+              `promoted ${targetRegion} clears inner ::after so no double seam sits under PaneHeader`,
+            );
+          }
           for (const other of regions) {
             if (other === targetRegion) continue;
             const otherEl = container.querySelector<HTMLElement>(`[data-desktop-region="${other}"]`)!;
+            const otherHost = other === "prompt.composer"
+              ? container.querySelector<HTMLElement>('[data-desktop-pane="prompt"]')!
+              : other === "conversation.transcript"
+              ? container.querySelector<HTMLElement>('[data-desktop-pane="conversation"]')!
+              : otherEl;
             await until(
               () => {
                 const cs = getComputedStyle(otherEl, "::after");
-                return cs.boxShadow === "none" && cs.borderLeftColor === "rgba(0, 0, 0, 0)";
+                const hs = getComputedStyle(otherHost, "::after");
+                return cs.boxShadow === "none" && cs.borderLeftColor === "rgba(0, 0, 0, 0)" &&
+                  hs.boxShadow === "none" && hs.borderLeftColor === "rgba(0, 0, 0, 0)";
               },
               `unfocused ${other} clears its perimeter frame when ${targetRegion} owns focus`,
             );
@@ -1704,6 +1723,28 @@ export async function runDraftDocumentsBrowserConformance(
         await assertFocusInvariant("conversation.transcript");
         await assertFocusInvariant("topbar.controls");
         await assertFocusInvariant("prompt.composer");
+        // Multi-region demotion: mounting a visible sibling region inside Prompt
+        // immediately tightens the perimeter onto the focused sub-region (`prompt.composer`)
+        // and clears the outer pane frame; removing it promotes the pane frame back.
+        if (promptPaneEl && composerEl) {
+          const sibling = document.createElement("div");
+          sibling.dataset.desktopRegion = "prompt.plan";
+          sibling.textContent = "plan";
+          composerEl.parentElement!.insertBefore(sibling, composerEl);
+          await until(() => {
+            const paneAfter = getComputedStyle(promptPaneEl, "::after");
+            const compAfter = getComputedStyle(composerEl, "::after");
+            return paneAfter.boxShadow === "none" && paneAfter.borderLeftColor === "rgba(0, 0, 0, 0)" &&
+              compAfter.boxShadow !== "none" && compAfter.borderLeftColor !== "rgba(0, 0, 0, 0)";
+          }, "multi-region Prompt demotes perimeter from outer pane to focused sub-region");
+          sibling.remove();
+          await until(() => {
+            const paneAfter = getComputedStyle(promptPaneEl, "::after");
+            const compAfter = getComputedStyle(composerEl, "::after");
+            return paneAfter.boxShadow !== "none" && paneAfter.borderLeftColor !== "rgba(0, 0, 0, 0)" &&
+              compAfter.boxShadow === "none" && compAfter.borderLeftColor === "rgba(0, 0, 0, 0)";
+          }, "removing sibling region promotes perimeter back onto Prompt pane");
+        }
       }
       // `␣SZ` presses the Sessions fold button from any focus.
       {

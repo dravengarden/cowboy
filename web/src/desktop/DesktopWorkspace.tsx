@@ -439,6 +439,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
           data-desktop-region="conversation.transcript"
           data-desktop-navigation="scroll"
           data-desktop-focus-default
+          hidden={!conversationShown}
           tabIndex={-1}
           sx={{ flex: 1, minHeight: 0, display: conversationShown ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}
         >

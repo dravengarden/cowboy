@@ -1107,7 +1107,13 @@ Every Desktop workspace region (`sessions.list`, `sessions.rail`,
 `review.inspector`, `tasks.roster`, and `tasks.reader`) uses the single
 paint-only perimeter focus primitive from `desktopFocusPrimitives.ts` (`::after`
 `inset: 0; box-sizing: border-box; pointer-events: none` with a hardware-snapped 1px restrained primary-mixed border and subtle feathered inner
-halo). Focus never alters layout geometry, never tints the main reading or
+halo). When a focused pane (`Prompt`, `Conversation`, or the collapsed `Sessions`
+rail) contains only one visible region, the perimeter promotes seamlessly onto
+the outer `[data-desktop-pane]` host to enclose its `PaneHeader` (and suppresses
+the inner region overlay so no double seam forms below the header divider); when
+multiple sub-regions are visible (split `Review`, split `Tasks`, or `Prompt`
+with `Plan`/`Queue`/`Drafts`), the perimeter stays tightly on the focused
+sub-region. Focus never alters layout geometry, never tints the main reading or
 writing canvases, and stays pinned to non-scrolling region hosts while inner
 content scrolls. Pane switching and header clicks always resolve to a visible
 region (preserving each pane's last visible sub-region across hops) so focus is

@@ -55,6 +55,45 @@ export function desktopControlFocusRing(theme: Theme): string {
   return `0 0 0 2px ${desktopFocusHaloColor(theme)}`;
 }
 
+// Option A single-region pane perimeter promotion:
+// When a pane with a PaneHeader (Prompt, Conversation) or rail header
+// (collapsed Sessions rail) owns focus AND contains only ONE visible region
+// (not `[hidden]`, not inside `[hidden]`, and not `:empty`), promote the
+// shared paint-only `::after` frame onto the outer `[data-desktop-pane]` so
+// the header sits seamlessly inside the highlight with zero double seam below
+// it. Multi-region panes (Review split, Tasks split, Prompt with Plan/Queue/
+// Drafts) keep the perimeter tightly on the focused sub-region.
+const VISIBLE_FOCUSED_REGION =
+  "[data-desktop-region][data-desktop-focused='true']:not([hidden]):not([hidden] *):not(:empty)";
+const VISIBLE_UNFOCUSED_REGION =
+  "[data-desktop-region]:not([data-desktop-focused='true']):not([hidden]):not([hidden] *):not(:empty)";
+export const PROMOTABLE_DESKTOP_PANE_SELECTOR =
+  "& [data-desktop-pane]:not([data-desktop-region]):has(> [data-desktop-pane-header], > [data-desktop-sessions-rail-head])";
+export const PROMOTED_DESKTOP_PANE_SELECTOR =
+  `${PROMOTABLE_DESKTOP_PANE_SELECTOR}[data-desktop-pane-focused='true']:has(${VISIBLE_FOCUSED_REGION}):not(:has(${VISIBLE_UNFOCUSED_REGION}))`;
+
+const PERIMETER_AFTER_BASE = {
+  content: '""',
+  position: "absolute",
+  inset: 0,
+  boxSizing: "border-box",
+  border: "1px solid transparent",
+  borderRadius: "inherit",
+  pointerEvents: "none",
+  zIndex: 3,
+  boxShadow: "none",
+  transition: "border-color 140ms ease, box-shadow 140ms ease",
+};
+
+const PERIMETER_AFTER_FOCUSED = {
+  borderColor: desktopFocusEdgeColor,
+  boxShadow: desktopRegionFocusBoxShadow,
+  "@media (forced-colors: active)": {
+    boxShadow: "none",
+    border: "2px solid Highlight",
+  },
+};
+
 /** Root Desktop focus stylesheet mounted on the main Session workspace
  *  (`App.tsx`), standalone Draft workspace (`DraftWorkspace.tsx`), and
  *  portaled modal workspaces (`DesktopModal.tsx`). */
@@ -70,25 +109,23 @@ export function desktopFocusRootSx(currentRowFill = 0.07): Record<string, unknow
       "&[data-desktop-region-position='absolute']": {
         position: "absolute",
       },
-      "&::after": {
-        content: '""',
-        position: "absolute",
-        inset: 0,
-        boxSizing: "border-box",
-        border: "1px solid transparent",
-        borderRadius: "inherit",
-        pointerEvents: "none",
-        zIndex: 3,
-        boxShadow: "none",
-        transition: "border-color 140ms ease, box-shadow 140ms ease",
-      },
+      "&::after": PERIMETER_AFTER_BASE,
     },
-    "& [data-desktop-region][data-desktop-focused='true']::after": {
-      borderColor: desktopFocusEdgeColor,
-      boxShadow: desktopRegionFocusBoxShadow,
+    "& [data-desktop-region][data-desktop-focused='true']::after": PERIMETER_AFTER_FOCUSED,
+    // Single-region panes promote the identical paint-only `::after` perimeter
+    // onto the outer pane (enclosing its PaneHeader) and clear the inner region
+    // overlay so no double seam forms directly below the header divider.
+    [PROMOTABLE_DESKTOP_PANE_SELECTOR]: {
+      position: "relative",
+      "&::after": PERIMETER_AFTER_BASE,
+    },
+    [`${PROMOTED_DESKTOP_PANE_SELECTOR}::after`]: PERIMETER_AFTER_FOCUSED,
+    [`${PROMOTED_DESKTOP_PANE_SELECTOR} [data-desktop-region][data-desktop-focused='true']::after`]: {
+      borderColor: "transparent",
+      boxShadow: "none",
       "@media (forced-colors: active)": {
+        border: "1px solid transparent",
         boxShadow: "none",
-        border: "2px solid Highlight",
       },
     },
     // Bounded Prompt auxiliary docks add a calm surface lift beneath the

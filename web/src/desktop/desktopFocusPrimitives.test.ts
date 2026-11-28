@@ -8,6 +8,8 @@ import {
   desktopFocusHaloColor,
   desktopFocusRootSx,
   desktopRegionFocusBoxShadow,
+  PROMOTABLE_DESKTOP_PANE_SELECTOR,
+  PROMOTED_DESKTOP_PANE_SELECTOR,
 } from "./desktopFocusPrimitives.ts";
 import {
   isDesktopRegionVisible,
@@ -49,6 +51,20 @@ test("desktopFocusPrimitives applies one paint-only perimeter frame to every Des
   const focusedAfter = root["& [data-desktop-region][data-desktop-focused='true']::after"] as Record<string, unknown>;
   expect(focusedAfter.borderColor).toBe(desktopFocusEdgeColor);
   expect(focusedAfter.boxShadow).toBe(desktopRegionFocusBoxShadow);
+
+  // Single-region panes promote the identical paint-only perimeter frame onto
+  // the outer pane (enclosing PaneHeader) and suppress the inner region frame.
+  const promotablePane = root[PROMOTABLE_DESKTOP_PANE_SELECTOR] as Record<string, unknown>;
+  expect(promotablePane.position).toBe("relative");
+  expect(promotablePane["&::after"]).toEqual(afterRule);
+  const promotedAfter = root[`${PROMOTED_DESKTOP_PANE_SELECTOR}::after`] as Record<string, unknown>;
+  expect(promotedAfter.borderColor).toBe(desktopFocusEdgeColor);
+  expect(promotedAfter.boxShadow).toBe(desktopRegionFocusBoxShadow);
+  const suppressedInner = root[
+    `${PROMOTED_DESKTOP_PANE_SELECTOR} [data-desktop-region][data-desktop-focused='true']::after`
+  ] as Record<string, unknown>;
+  expect(suppressedInner.borderColor).toBe("transparent");
+  expect(suppressedInner.boxShadow).toBe("none");
 });
 
 test("all Desktop workspaces mount desktopFocusRootSx, avoid duplicate DraftEditor regions, and keep scrollable regions wrapped cleanly", async () => {
@@ -85,6 +101,10 @@ test("all Desktop workspaces mount desktopFocusRootSx, avoid duplicate DraftEdit
     readFile(new URL("./review/useDesktopWorkView.ts", import.meta.url), "utf8"),
   ]);
   expect(modalSrc).toContain("desktopFocusRootSx()");
+  // Hidden mounted views carry the native `hidden` attribute so pure-CSS
+  // single-region pane promotion accurately ignores hidden siblings.
+  expect(wsSrc).toMatch(/data-desktop-region="conversation\.transcript"[\s\S]*?hidden=\{!conversationShown\}/);
+  expect(reviewSrc).toMatch(/data-desktop-region=\{REVIEW_INSPECTOR_REGION\}[\s\S]*?hidden=\{!panel\.shown\}/);
   // Inset Inspector keeps position:absolute via host attribute without losing ::after frame
   expect(reviewSrc).toContain('data-desktop-region-position={panel.beside ? undefined : "absolute"}');
   const root = desktopFocusRootSx();

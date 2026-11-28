@@ -93,6 +93,7 @@ function InspectorRegion({ review, panel, language, findings }: {
       data-desktop-region={REVIEW_INSPECTOR_REGION}
       data-desktop-region-position={panel.beside ? undefined : "absolute"}
       data-review-inspector-placement={panel.beside ? "beside" : "inset"}
+      hidden={!panel.shown}
       tabIndex={-1}
       sx={{
         display: panel.shown ? "flex" : "none",
