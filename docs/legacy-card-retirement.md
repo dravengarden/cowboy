@@ -244,6 +244,10 @@ wipe). When the recorded admission still matches, startup can settle empty
 system registrations left by the old enrolled-Machine External Intake path.
 That path registered a session before the retired-account launch gate
 rejected it. The live-session check still runs for every other session.
+Delivery acknowledgements are recorded under exactly the enrollment
+key the envelope was sealed to. A reconnecting Machine only wakes the
+reconciler for itself; there is no fleet-wide redelivery on reconnect, and
+failed-session recovery follows each successful root delivery.
 
 Because the live-session check runs on every start and its refusal is
 fatal, a session row that a serving Controller leaves on a retired
@@ -255,24 +259,21 @@ target (when it carries the same check) and an ordinary reboot. On
 serving Controller: it opens the database read-only (`SQLITE_OPEN_READONLY`,
 never created; PostgreSQL read-only transactions with a statement timeout),
 runs no migration, takes no vault or instance lock and binds nothing. Like
-any SQLite reader it shares the live WAL index. It discounts the
-registrations startup settles only when the vault's recorded admission names
-this Service dataset, read without opening the vault; it cannot compare the
-wipe generations, which only change under a Controller from before the
-retirement. It prints one `startup-admission-preflight/v1` report:
-`admissible`, `refused` (exit status non-zero) or `unverified` when it could
-not read the state (a missing database, a schema older than its migrations,
-a 30 s timeout). The component activator runs it for the candidate before
+any SQLite reader it shares the live WAL index. It prints one
+`startup-admission-preflight/v1` report: `admissible`, `refused` (exit
+status non-zero) or `unverified` when the answer cannot be established
+read-only. That covers state it could not read (a missing database, a
+schema older than its migrations, a 30 s timeout) and live sessions that
+startup settles only on an admitted dataset: whether it does depends on
+the vault's current wipe generations, which only the serving Controller
+can read. Without a recorded admission for this Service dataset those
+sessions are refused. The component activator runs it for the candidate before
 stopping anything and for the rollback target, so a refused release never
 stops the serving Controller, nor does a release whose rollback could not
 start. It does not check the vault credentials or Machine wipe
 acknowledgements, which need the vault the serving Controller owns, and a
 session the serving Controller registers between the check and its stop is
 not seen.
-Delivery acknowledgements are recorded under exactly the enrollment
-key the envelope was sealed to. A reconnecting Machine only wakes the
-reconciler for itself; there is no fleet-wide redelivery on reconnect, and
-failed-session recovery follows each successful root delivery.
 
 Known gap (follow-up): the envelope is sealed to the enrollment key read
 from the store, but the connection that carries it is not bound to that

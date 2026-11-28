@@ -140,66 +140,124 @@ pub struct Persistence {
 /// listener). A component activator runs it for a candidate before stopping
 /// anything, and for its rollback target to learn whether that one could
 /// start. Prints one JSON report: `admissible`, `refused` (also the error,
-/// so the exit status fails) or `unverified` when the state could not be
-/// read (a missing database, a schema older than this binary's migrations,
-/// a timeout); startup would migrate or create that state, so it is no
-/// refusal.
+/// so the exit status fails) or `unverified` when the answer cannot be
+/// established read-only: the state could not be read (a missing database,
+/// a schema older than this binary's migrations, a timeout), or only rows
+/// startup settles on an admitted dataset stand in the way, which needs the
+/// vault's wipe generations.
 pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
-    // Startup settles rejected intake registrations only on a dataset whose
-    // admission is recorded (`retirement::admit_store`).
-    let settles =
-        crate::provider_service::recorded_admission(&args.data_dir).is_some_and(|admitted| {
-            crate::service_identity::inspect(&args.data_dir).is_ok_and(|id| admitted.dataset == id)
-        });
     let read = async {
         let Some(url) = args.database_url() else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         };
         let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
             .await
             .context("opening the database read-only")?;
-        store
-            .retired_default_sessions_refusing_startup(settles)
+        // Refusing whether or not startup settles rejected intake rows, and
+        // refusing only without that settlement.
+        let always = store
+            .retired_default_sessions_refusing_startup(true)
             .await
-            .context("reading live sessions on retired legacy default accounts")
+            .context("reading live sessions on retired legacy default accounts")?;
+        let unsettled = store
+            .retired_default_sessions_refusing_startup(false)
+            .await
+            .context("reading live sessions on retired legacy default accounts")?;
+        anyhow::Ok((always, unsettled))
     };
-    let (status, refusing, refusal, unverified) =
-        match tokio::time::timeout(std::time::Duration::from_secs(30), read).await {
-            Ok(Ok(refusing)) => {
-                let refusal = provider_accounts::retirement::refuse_live_sessions(&refusing).err();
-                let status = if refusal.is_some() {
-                    "refused"
-                } else {
-                    "admissible"
-                };
-                (status, refusing, refusal, None)
-            }
-            Ok(Err(error)) => ("unverified", Vec::new(), None, Some(format!("{error:#}"))),
-            Err(_) => (
-                "unverified",
-                Vec::new(),
-                None,
-                Some("timed out after 30s".to_owned()),
-            ),
-        };
+    let report = match tokio::time::timeout(std::time::Duration::from_secs(30), read).await {
+        Ok(Ok((always, unsettled))) => admission_report(
+            always,
+            unsettled,
+            crate::provider_service::recorded_admission(&args.data_dir),
+            crate::service_identity::inspect(&args.data_dir),
+        ),
+        Ok(Err(error)) => AdmissionReport::unverified(format!("{error:#}")),
+        Err(_) => AdmissionReport::unverified("timed out after 30s".to_owned()),
+    };
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "schema": "dravengarden.cowboy.startup-admission-preflight/v1",
-            "status": status,
-            "retired_default_sessions": refusing,
-            "admission_recorded": settles,
-            "unverified": unverified,
+            "status": report.status,
+            "retired_default_sessions": report.sessions,
+            "unverified": report.unverified,
             "not_checked": [
                 "provider_credentials",
                 "machine_wipe_acknowledgements",
-                "admission_wipe_generations",
                 "database_migrations",
                 "configuration",
             ],
         }))?
     );
-    refusal.map_or(Ok(()), Err)
+    match report.status {
+        "refused" => provider_accounts::retirement::refuse_live_sessions(&report.sessions),
+        _ => Ok(()),
+    }
+}
+
+struct AdmissionReport {
+    status: &'static str,
+    sessions: Vec<String>,
+    unverified: Option<String>,
+}
+
+impl AdmissionReport {
+    fn unverified(reason: String) -> Self {
+        Self {
+            status: "unverified",
+            sessions: Vec::new(),
+            unverified: Some(reason),
+        }
+    }
+}
+
+/// `always` refuse startup in every case; the rest of `unsettled` only when
+/// startup does not settle them, which it does when the vault's recorded
+/// admission matches this dataset and its current wipe generations
+/// (`retirement::admit_store`). The generations need the vault, so a
+/// recorded admission for this dataset leaves the answer unverified.
+fn admission_report(
+    always: Vec<String>,
+    unsettled: Vec<String>,
+    admitted: Option<crate::provider_service::AdmittedRetirement>,
+    identity: anyhow::Result<String>,
+) -> AdmissionReport {
+    if !always.is_empty() {
+        return AdmissionReport {
+            status: "refused",
+            sessions: always,
+            unverified: None,
+        };
+    }
+    if unsettled.is_empty() {
+        return AdmissionReport {
+            status: "admissible",
+            sessions: Vec::new(),
+            unverified: None,
+        };
+    }
+    let refused = AdmissionReport {
+        status: "refused",
+        sessions: unsettled.clone(),
+        unverified: None,
+    };
+    let Some(admitted) = admitted else {
+        return refused;
+    };
+    match identity {
+        Ok(id) if id != admitted.dataset => refused,
+        Ok(_) => AdmissionReport {
+            sessions: unsettled,
+            ..AdmissionReport::unverified(
+                "startup settles these only if the vault's wipe generations still match its recorded admission".to_owned(),
+            )
+        },
+        Err(error) => AdmissionReport {
+            sessions: unsettled,
+            ..AdmissionReport::unverified(format!("reading the Service identity: {error:#}"))
+        },
+    }
 }
 
 /// Phase 2: when --database-url is supplied, hook in the persistent store.
@@ -329,5 +387,59 @@ pub async fn open_persistence(
             telemetry_binding_fence,
             managed_export_activation,
         })
+    }
+}
+
+#[cfg(test)]
+mod admission_report_tests {
+    use super::admission_report;
+    use crate::provider_service::AdmittedRetirement;
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn admitted(dataset: &str) -> Option<AdmittedRetirement> {
+        Some(AdmittedRetirement {
+            dataset: dataset.to_owned(),
+            wipes: std::collections::BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn only_settlement_independent_answers_are_definitive() {
+        let report = |always: &[&str], unsettled: &[&str], admission, identity| {
+            let report = admission_report(ids(always), ids(unsettled), admission, identity);
+            (report.status, report.sessions)
+        };
+        let ok = || anyhow::Ok("svc".to_owned());
+        assert_eq!(report(&[], &[], None, ok()), ("admissible", ids(&[])));
+        assert_eq!(
+            report(&["live"], &["intake", "live"], admitted("svc"), ok()),
+            ("refused", ids(&["live"]))
+        );
+        // Settled only on a recorded admission of this dataset whose wipe
+        // generations still match, which needs the vault.
+        assert_eq!(
+            report(&[], &["intake"], admitted("svc"), ok()),
+            ("unverified", ids(&["intake"]))
+        );
+        assert_eq!(
+            report(&[], &["intake"], None, ok()),
+            ("refused", ids(&["intake"]))
+        );
+        assert_eq!(
+            report(&[], &["intake"], admitted("other"), ok()),
+            ("refused", ids(&["intake"]))
+        );
+        assert_eq!(
+            report(
+                &[],
+                &["intake"],
+                admitted("svc"),
+                Err(anyhow::anyhow!("symlinked"))
+            ),
+            ("unverified", ids(&["intake"]))
+        );
     }
 }
