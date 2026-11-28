@@ -42,6 +42,12 @@ impl ArtifactStore {
         Ok(Self { root })
     }
 
+    /// A store over `root` that never creates it, for a read-only `Store`
+    /// that only inspects rows and never writes an artifact.
+    pub(crate) fn unopened(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     /// Replace embedded ACP image data with a stable HTTP reference. Live ACP
     /// traffic remains inline; this runs only on the copy written to history.
     pub fn externalize_images(&self, value: &mut serde_json::Value) -> Result<()> {

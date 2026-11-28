@@ -134,6 +134,43 @@ pub struct Persistence {
     pub managed_export_activation: Option<crate::telemetry_plugin::background_policy::Activation>,
 }
 
+/// `--check-startup-admission`: whether the startup gates that depend on
+/// durable session state would admit this Controller, checked read-only
+/// beside the serving one (no instance lock, migration, write or listener).
+/// A component activator runs it for a candidate before stopping anything,
+/// and for its rollback target to learn whether that one could start. Prints
+/// one JSON report; a refusal is also the error, so the exit status fails.
+pub async fn check_startup_admission(args: &ServeArgs) -> anyhow::Result<()> {
+    let refusing = match args.database_url() {
+        Some(url) => {
+            let store = Store::connect_read_only(url, args.data_dir.join("artifacts"))
+                .await
+                .context("opening the database read-only")?;
+            store
+                .retired_default_sessions_refusing_startup()
+                .await
+                .context("reading live sessions on retired legacy default accounts")?
+        }
+        None => Vec::new(),
+    };
+    let refusal = provider_accounts::retirement::refuse_live_sessions(&refusing).err();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema": "dravengarden.cowboy.startup-admission-preflight/v1",
+            "status": if refusal.is_some() { "refused" } else { "admissible" },
+            "retired_default_sessions": refusing,
+            "not_checked": [
+                "provider_credentials",
+                "machine_wipe_acknowledgements",
+                "database_migrations",
+                "configuration",
+            ],
+        }))?
+    );
+    refusal.map_or(Ok(()), Err)
+}
+
 /// Phase 2: when --database-url is supplied, hook in the persistent store.
 /// Migrations run on every start (sqlx tracks applied versions, so it's
 /// idempotent); the in-memory Hub is then warmed from the DB before WS

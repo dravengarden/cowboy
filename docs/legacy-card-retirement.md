@@ -244,6 +244,23 @@ wipe). When the recorded admission still matches, startup can settle empty
 system registrations left by the old enrolled-Machine External Intake path.
 That path registered a session before the retired-account launch gate
 rejected it. The live-session check still runs for every other session.
+
+Because the live-session check runs on every start and its refusal is
+fatal, a session row that a serving Controller leaves on a retired
+`default` account stops every later start: the candidate, the rollback
+target (when it carries the same check) and an ordinary reboot. On
+2026-11-28 two such intake registrations kept Hawk's Controller down for
+85 minutes. `cowboy serve --check-startup-admission --data-dir <dir>
+--database-url <url>` runs exactly this session check read-only beside the
+serving Controller (it opens the database with `SQLITE_OPEN_READONLY`,
+takes no vault or instance lock, runs no migration and binds nothing),
+discounting the registrations an admitted dataset would settle. It prints
+one `startup-admission-preflight/v1` report and exits non-zero when
+startup would be refused. The component activator runs it for the
+candidate before stopping anything and for the rollback target, so a
+refused release never stops the serving Controller. It does not check the
+vault credentials or Machine wipe acknowledgements, which need the vault
+the serving Controller owns.
 Delivery acknowledgements are recorded under exactly the enrollment
 key the envelope was sealed to. A reconnecting Machine only wakes the
 reconciler for itself; there is no fleet-wide redelivery on reconnect, and

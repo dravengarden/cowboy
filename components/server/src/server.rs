@@ -13,6 +13,9 @@ use cowboy_server_agent_api::server::agent_api;
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    if args.check_startup_admission {
+        return check_startup_admission(&args).await;
+    }
     let runtime_restrictions = Arc::new(crate::project_placement::RuntimeRestrictions::parse(
         &args.provider_runtime_machines,
     )?);

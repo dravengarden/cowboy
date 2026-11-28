@@ -68,6 +68,7 @@ pub use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;
 mod provider_action_reads;
+mod read_only;
 mod sqlite;
 pub mod task_notifications;
 mod telemetry_bindings;

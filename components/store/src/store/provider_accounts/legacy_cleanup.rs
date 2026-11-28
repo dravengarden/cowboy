@@ -17,6 +17,28 @@ use super::super::{StorageBackend, Store};
 use super::Registry;
 use anyhow::{Context as _, Result};
 
+/// The rows `settle_retired_intake_registrations` settles (one retired
+/// Provider bound as `$1`), shared with the read-only startup preflight so
+/// both always agree.
+macro_rules! rejected_intake_registration {
+    ($deleted:literal, $empty_queue:literal) => {
+        concat!(
+            "provider=$1 AND provider_account_id='default' AND ",
+            $deleted,
+            " IS NULL AND status='starting' ",
+            "AND origin='api' AND system=TRUE AND machine_id<>'local' ",
+            "AND owner_user_id IS NULL AND execution_binding IS NULL ",
+            "AND workspace_id IS NULL AND agent_session_id IS NULL ",
+            "AND provider_version='' AND provider_generation_digest='' ",
+            "AND provider_auth_generation IS NULL AND provider_behavior IS NULL ",
+            "AND next_seq=0 AND ",
+            $empty_queue,
+            " AND NOT EXISTS (SELECT 1 FROM events WHERE session_id=sessions.id) ",
+            "AND NOT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id=sessions.id) ",
+        )
+    };
+}
+
 macro_rules! retire_rows {
     ($db:expr) => {{
         let mut tx = $db.pool.begin().await?;
@@ -176,17 +198,10 @@ impl Store {
                 let mut settled = Vec::new();
                 for provider in super::legacy_cards::retired_providers() {
                     let ids = sqlx::query_scalar::<_, String>(concat!(
-                        "UPDATE sessions SET status='crashed', ", $updated,
-                        " WHERE provider=$1 AND provider_account_id='default' AND ",
-                        $deleted, " IS NULL AND status='starting' ",
-                        "AND origin='api' AND system=TRUE AND machine_id<>'local' ",
-                        "AND owner_user_id IS NULL AND execution_binding IS NULL ",
-                        "AND workspace_id IS NULL AND agent_session_id IS NULL ",
-                        "AND provider_version='' AND provider_generation_digest='' ",
-                        "AND provider_auth_generation IS NULL AND provider_behavior IS NULL ",
-                        "AND next_seq=0 AND ", $empty_queue,
-                        " AND NOT EXISTS (SELECT 1 FROM events WHERE session_id=sessions.id) ",
-                        "AND NOT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id=sessions.id) ",
+                        "UPDATE sessions SET status='crashed', ",
+                        $updated,
+                        " WHERE ",
+                        rejected_intake_registration!($deleted, $empty_queue),
                         "RETURNING id",
                     ))
                     .bind(provider)
@@ -209,6 +224,37 @@ impl Store {
                 "json(queue)='[]'"
             ),
         })
+    }
+
+    /// Read-only: the live retired-default sessions that would still refuse
+    /// startup on an admitted dataset, i.e. `live_retired_default_sessions`
+    /// minus what `settle_retired_intake_registrations` would settle. The
+    /// startup admission preflight runs it beside the serving Controller.
+    pub async fn retired_default_sessions_refusing_startup(&self) -> Result<Vec<String>> {
+        macro_rules! settleable {
+            ($db:expr, $deleted:literal, $empty_queue:literal) => {{
+                let mut ids = Vec::new();
+                for provider in super::legacy_cards::retired_providers() {
+                    ids.extend(
+                        sqlx::query_scalar::<_, String>(concat!(
+                            "SELECT id FROM sessions WHERE ",
+                            rejected_intake_registration!($deleted, $empty_queue),
+                        ))
+                        .bind(provider)
+                        .fetch_all(&$db.pool)
+                        .await?,
+                    );
+                }
+                ids
+            }};
+        }
+        let settleable = match &self.backend {
+            StorageBackend::Postgres(db) => settleable!(db, "deleted_at", "queue='[]'::jsonb"),
+            StorageBackend::Sqlite(db) => settleable!(db, "deleted_at_ms", "json(queue)='[]'"),
+        };
+        let mut live = self.live_retired_default_sessions().await?;
+        live.retain(|id| !settleable.contains(id));
+        Ok(live)
     }
 
     /// Live sessions (starting, running or busy) on a retired card's

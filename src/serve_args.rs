@@ -150,6 +150,13 @@ pub struct ServeArgs {
     #[arg(long, conflicts_with = "check_plugin_hosts")]
     pub check_plugin_catalog: bool,
 
+    /// Check read-only whether this Controller's startup admission would
+    /// accept the durable session state, beside a serving Controller: no
+    /// instance lock, migration, write or listener. Prints one JSON report
+    /// and exits non-zero when startup would be refused.
+    #[arg(long, conflicts_with_all = ["check_plugin_hosts", "check_plugin_catalog"])]
+    pub check_startup_admission: bool,
+
     /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
     /// daemon runs in pure in-memory mode without restart recovery.
     #[arg(long, env = "COWBOY_DATABASE_URL")]

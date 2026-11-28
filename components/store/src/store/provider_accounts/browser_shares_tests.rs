@@ -1689,6 +1689,16 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     .execute(&db.pool)
     .await
     .unwrap();
+    // The read-only preflight predicts exactly what startup still refuses
+    // after settling, and settles nothing itself.
+    let refusing = ["dispatched", "logged", "ordinary", "ran", "web"];
+    assert_eq!(
+        store
+            .retired_default_sessions_refusing_startup()
+            .await
+            .unwrap(),
+        refusing
+    );
     assert_eq!(
         store.settle_retired_intake_registrations().await.unwrap(),
         ["intake"]
@@ -1702,6 +1712,13 @@ async fn retirement_settles_only_rejected_enrolled_intake_registrations() {
     );
     assert_eq!(
         store.live_retired_default_sessions().await.unwrap(),
-        ["dispatched", "logged", "ordinary", "ran", "web"]
+        refusing
+    );
+    assert_eq!(
+        store
+            .retired_default_sessions_refusing_startup()
+            .await
+            .unwrap(),
+        refusing
     );
 }

@@ -16,7 +16,7 @@ const SQLITE_MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("../../migrati
 pub(super) struct SqliteStorage {
     pub(super) pool: SqlitePool,
     pub(super) artifacts: crate::artifacts::ArtifactStore,
-    database_path: Option<std::path::PathBuf>,
+    pub(super) database_path: Option<std::path::PathBuf>,
 }
 
 fn now_ms() -> i64 {

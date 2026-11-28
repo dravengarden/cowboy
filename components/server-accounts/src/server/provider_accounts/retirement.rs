@@ -132,11 +132,7 @@ fn admit(
     recipients: Option<&[crate::provider_service::Recipient]>,
     sessions: &[String],
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        sessions.is_empty(),
-        "sessions on retired legacy default accounts are still live ({}): stop them with the previous Controller before installing this release",
-        sessions.join(", ")
-    );
+    refuse_live_sessions(sessions)?;
     let Some(recipients) = recipients else {
         return Ok(());
     };
@@ -147,6 +143,17 @@ fn admit(
         missing.join("; ")
     );
     auth.record_admitted_retirement(admitted)
+}
+
+/// The store gate's session refusal, shared with the read-only startup
+/// admission preflight (`cowboy serve --check-startup-admission`).
+pub fn refuse_live_sessions(sessions: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        sessions.is_empty(),
+        "sessions on retired legacy default accounts are still live ({}): stop them with the previous Controller before installing this release",
+        sessions.join(", ")
+    );
+    Ok(())
 }
 
 /// Whether the `default` account of `provider` is a retired card: the

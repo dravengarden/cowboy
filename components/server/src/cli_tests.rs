@@ -102,6 +102,32 @@ fn catalog_inspection_and_host_preflight_are_distinct_commands() {
 
 #[tokio::test]
 #[cfg(feature = "full")]
+async fn startup_admission_check_reads_existing_state_without_creating_it() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("state.db");
+    let url = format!("sqlite://{}", database.display());
+    let check = || {
+        let mut args = crate::serve_args::ServeArgs::test_plugin_check(root.path());
+        args.check_plugin_hosts = false;
+        args.check_startup_admission = true;
+        args.database_url = Some(url.clone());
+        crate::server::serve(args)
+    };
+    assert!(check().await.is_err(), "a missing database is not created");
+    assert!(!database.exists());
+    let store = crate::store::Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    check().await.unwrap();
+    assert!(
+        !root.path().join("provider-auth-service").exists(),
+        "the check never opens the Service vault"
+    );
+}
+
+#[tokio::test]
+#[cfg(feature = "full")]
 async fn catalog_inspection_does_not_validate_host_policy_or_create_service_state() {
     let root = std::env::temp_dir().join(format!("cowboy-cli-catalog-{}", uuid::Uuid::new_v4()));
     for (catalog_only, hosts) in [(true, false), (false, true), (false, false)] {
