@@ -205,91 +205,88 @@ impl Broker {
     /// reconnecting draining worker can never race with explicit Ensure (R8-H4).
     pub(in crate::machine_broker) async fn claim_ensure_slot(
         &self,
-        session: &StartSession,
-        attempt_id: &str,
+        session_id: &str,
         adopt_only: bool,
         desired_generation: &str,
     ) -> Result<(Option<Result<WorkerPeer, WorkerSnapshot>>, bool), Option<String>> {
-        let session_id = session.session_id.as_str();
         if !adopt_only {
             self.gate_ensure_against_crashed_drain(session_id)
                 .await
                 .map_err(Some)?;
         }
-        let mut displaced_retry: Option<String> = None;
-        let outcome = {
-            let mut workers = self.workers.lock();
-            if !adopt_only && self.has_any_crashed_drain_fence_locked(&workers, session_id) {
-                return Err(Some("crashed worker drain is in progress; retry".into()));
-            }
-            match workers.get(session_id) {
-                Some(worker)
-                    if !adopt_only
-                        && worker_launch::should_recycle_for_explicit_revive(
-                            &worker.snapshot,
-                            desired_generation,
-                        ) =>
-                {
-                    let removed = workers.remove(session_id);
-                    if let Some(effect) = removed
-                        .as_ref()
-                        .and_then(|peer| peer.snapshot.uncertain_effect.clone())
-                    {
-                        self.record_session_uncertain_effect(session_id, effect);
-                    }
-                    Ok((removed.map(Ok), false))
-                }
-                Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
-                None => {
-                    if !adopt_only {
-                        let mut launching = self.launching.lock();
-                        if !launching.insert(session_id.to_owned()) {
-                            // Coalesce exact-ID replays against both the active
-                            // launch and any already-queued retry; only reject a
-                            // different ID that was actually displaced (R24-M2, R25-M5).
-                            let is_active_replay = self
-                                .active_ensure_attempts
-                                .lock()
-                                .get(session_id)
-                                .is_some_and(|active_id| active_id == attempt_id);
-                            if !is_active_replay {
-                                let mut retries = self.pending_ensure_retries.lock();
-                                let replaced = retries.insert(
-                                    session_id.to_owned(),
-                                    (session.clone(), attempt_id.to_owned()),
-                                );
-                                if let Some((_, old_attempt_id)) = replaced
-                                    && old_attempt_id != attempt_id
-                                {
-                                    displaced_retry = Some(old_attempt_id);
-                                }
-                            }
-                            Err(None)
-                        } else {
-                            self.active_ensure_attempts
-                                .lock()
-                                .insert(session_id.to_owned(), attempt_id.to_owned());
-                            self.crashed_drains
-                                .inner
-                                .lock()
-                                .recently_drained
-                                .remove(session_id);
-                            Ok((None, true))
-                        }
-                    } else {
-                        Ok((None, false))
-                    }
-                }
-            }
-        };
-        if let Some(old_attempt_id) = displaced_retry {
-            self.command_rejected(
-                session_id,
-                old_attempt_id,
-                "superseded by newer ensure retry".into(),
-            );
+        let mut workers = self.workers.lock();
+        if !adopt_only && self.has_any_crashed_drain_fence_locked(&workers, session_id) {
+            return Err(Some("crashed worker drain is in progress; retry".into()));
         }
-        outcome
+        match workers.get(session_id) {
+            Some(worker)
+                if !adopt_only
+                    && worker_launch::should_recycle_for_explicit_revive(
+                        &worker.snapshot,
+                        desired_generation,
+                    ) =>
+            {
+                let removed = workers.remove(session_id);
+                if let Some(effect) = removed
+                    .as_ref()
+                    .and_then(|peer| peer.snapshot.uncertain_effect.clone())
+                {
+                    self.record_session_uncertain_effect(session_id, effect);
+                }
+                Ok((removed.map(Ok), false))
+            }
+            Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
+            None => {
+                if !adopt_only {
+                    if !self.launching.lock().insert(session_id.to_owned()) {
+                        return Err(None);
+                    }
+                    self.crashed_drains
+                        .inner
+                        .lock()
+                        .recently_drained
+                        .remove(session_id);
+                }
+                Ok((None, !adopt_only))
+            }
+        }
+    }
+
+    pub(in crate::machine_broker) fn has_any_crashed_drain_fence_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        let workers = self.workers.lock();
+        self.has_any_crashed_drain_fence_locked(&workers, session_id)
+    }
+
+    /// Atomically move a dormant session to `WorkerState::Exited` and
+    /// invalidate any cached drain receipt under `session_states -> crashed_drains`
+    /// (matching handover lock order) so handover can never observe a torn
+    /// state/receipt pair (R21-M5).
+    pub(in crate::machine_broker) fn mark_dormant_exited_and_invalidate_drain(
+        &self,
+        session_id: &str,
+    ) -> (Option<WorkerState>, bool) {
+        let mut states = self.session_states.lock();
+        let prev = states.insert(session_id.to_owned(), WorkerState::Exited);
+        let had_receipt = self
+            .crashed_drains
+            .inner
+            .lock()
+            .recently_drained
+            .remove(session_id)
+            .is_some();
+        (prev, had_receipt)
+    }
+
+    #[cfg(test)]
+    pub(in crate::machine_broker) fn invalidate_recently_drained(&self, session_id: &str) {
+        self.crashed_drains
+            .inner
+            .lock()
+            .recently_drained
+            .remove(session_id);
     }
 
     pub(in crate::machine_broker) fn has_any_crashed_drain_fence_locked(
@@ -338,7 +335,7 @@ impl Broker {
         }
         let workers = self.workers.lock();
         if workers.contains_key(session_id)
-            || self.spawned_launches.lock().contains(session_id)
+            || self.launching.lock().contains(session_id)
             || self.resetting_sessions.lock().contains_key(session_id)
         {
             return RetiredLaunch::Unresolved;
@@ -857,12 +854,12 @@ impl Broker {
         let (cleared, session_for_cache, rejections) = {
             let sessions = self.sessions.lock();
             let workers = self.workers.lock();
-            let spawned = self.spawned_launches.lock();
+            let launching = self.launching.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
             if !workers.contains_key(session_id)
-                && !spawned.contains(session_id)
+                && !launching.contains(session_id)
                 && state
                     .unconfirmed_teardown
                     .get(session_id)
@@ -911,7 +908,7 @@ impl Broker {
             .lock()
             .contains(session_id)
             && !self.cancelled_sessions.lock().contains(session_id)
-            && !self.spawned_launches.lock().contains(session_id)
+            && !self.launching.lock().contains(session_id)
             && !self.resetting_sessions.lock().contains_key(session_id)
             && !self.workers.lock().contains_key(session_id)
             && self
@@ -1005,7 +1002,7 @@ impl Broker {
                     .lock()
                     .contains(&session_id)
                     || broker.cancelled_sessions.lock().contains(&session_id)
-                    || broker.spawned_launches.lock().contains(&session_id)
+                    || broker.launching.lock().contains(&session_id)
                     || broker.resetting_sessions.lock().contains_key(&session_id)
                     || broker.workers.lock().contains_key(&session_id)
                 {
@@ -1039,9 +1036,9 @@ impl Broker {
                 }
                 let orphaned = {
                     let workers = broker.workers.lock();
-                    let spawned = broker.spawned_launches.lock();
+                    let launching = broker.launching.lock();
                     let mut state = broker.crashed_drains.inner.lock();
-                    if workers.contains_key(&session_id) || spawned.contains(&session_id) {
+                    if workers.contains_key(&session_id) || launching.contains(&session_id) {
                         return;
                     }
                     if state
@@ -1407,11 +1404,11 @@ impl Broker {
             let sessions = self.sessions.lock();
             let workers = self.workers.lock();
             let mut session_states = self.session_states.lock();
-            let spawned = self.spawned_launches.lock();
+            let launching = self.launching.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
-            if workers.contains_key(session_id) || spawned.contains(session_id) {
+            if workers.contains_key(session_id) || launching.contains(session_id) {
                 return Err(
                     "crashed worker reconnected or replacement started during drain; retry".into(),
                 );

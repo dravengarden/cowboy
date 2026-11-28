@@ -435,7 +435,7 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
         if !shared.resetting.lock().contains(&session_id) {
             let ensure_key = format!("ensure:{session_id}");
             sent.remove(&ensure_key);
-            pending.insert(ensure_key, super::ensure_command_shared(shared, session));
+            pending.insert(ensure_key, CoreCommand::EnsureSession { session });
         }
         shared
             .in_flight_prompts

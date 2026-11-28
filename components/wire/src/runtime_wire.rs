@@ -695,8 +695,6 @@ pub enum CoreCommand {
     },
     EnsureSession {
         session: StartSession,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        command_id: Option<String>,
     },
     Prompt {
         session_id: String,
@@ -828,7 +826,7 @@ impl CoreCommand {
     #[must_use]
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Self::EnsureSession { session, .. } => Some(&session.session_id),
+            Self::EnsureSession { session } => Some(&session.session_id),
             Self::RecoverExecutionSession { session, .. }
             | Self::ReadmitAccountSession { session, .. } => Some(&session.session_id),
             Self::CancelTurn { session_id, .. }
@@ -1857,7 +1855,7 @@ mod tests {
                 "generation": "gen-1"
             }
         });
-        let CoreCommand::EnsureSession { session, .. } =
+        let CoreCommand::EnsureSession { session } =
             serde_json::from_value(raw).expect("old ensure remains compatible")
         else {
             panic!("ensure command")

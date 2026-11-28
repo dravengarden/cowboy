@@ -52,12 +52,11 @@ pub(super) fn current(
     if !urgent && command.session_id().is_some_and(|id| deferred.contains(id)) {
         return None;
     }
-    let (mut session, command_id) = match command {
-        CoreCommand::EnsureSession {
-            session,
-            command_id,
-        } if session.adopt_only && shared.resetting.lock().contains(&session.session_id) => {
-            (session, command_id)
+    let mut session = match command {
+        CoreCommand::EnsureSession { session }
+            if session.adopt_only && shared.resetting.lock().contains(&session.session_id) =>
+        {
+            session
         }
         command => return Some(command),
     };
@@ -67,10 +66,7 @@ pub(super) fn current(
     }
     let id = session.session_id.clone();
     let Some(meta) = shared.hub.session_info(&id).map(|info| info.meta) else {
-        return Some(CoreCommand::EnsureSession {
-            session,
-            command_id,
-        });
+        return Some(CoreCommand::EnsureSession { session });
     };
     let Ok(plan) = crate::controller_hooks::launch_mcp(&shared.hub, &meta) else {
         let since = *WAITING
@@ -79,10 +75,7 @@ pub(super) fn current(
             .or_insert_with(std::time::Instant::now);
         if since.elapsed() >= PLAN_WAIT {
             WAITING.lock().remove(&id);
-            return Some(CoreCommand::EnsureSession {
-                session,
-                command_id,
-            });
+            return Some(CoreCommand::EnsureSession { session });
         }
         if deferred.is_empty() {
             let notify = shared.notify.clone();
@@ -110,7 +103,6 @@ pub(super) fn current(
             version,
             CoreCommand::EnsureSession {
                 session: session.clone(),
-                command_id: command_id.clone(),
             },
         ) {
             deferred.insert(id);
@@ -126,10 +118,7 @@ pub(super) fn current(
             declared.mcp_plan.clone_from(&session.mcp_plan);
         }
     }
-    Some(CoreCommand::EnsureSession {
-        session,
-        command_id,
-    })
+    Some(CoreCommand::EnsureSession { session })
 }
 
 /// Admission denied `command` before writing it. Report it like a Machine
@@ -143,15 +132,8 @@ pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin + Send>(
     let Some(session_id) = command.session_id().map(str::to_owned) else {
         return Ok(());
     };
-    let reset = matches!(command, CoreCommand::EnsureSession { session, .. } if session.adopt_only)
+    let reset = matches!(command, CoreCommand::EnsureSession { session } if session.adopt_only)
         && cancel(shared, &session_id);
-    let ack_command_id = match command {
-        CoreCommand::EnsureSession {
-            command_id: Some(id),
-            ..
-        } => id.clone(),
-        _ => key,
-    };
     let reason = if reset {
         "Worker launch admission denied; the reload was cancelled and the current worker keeps running"
     } else {
@@ -161,7 +143,7 @@ pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin + Send>(
         shared,
         Frame::CommandAck {
             session_id,
-            command_id: ack_command_id,
+            command_id: key,
             accepted: false,
             reason: Some(reason.into()),
         },
@@ -289,7 +271,7 @@ mod tests {
         let early = wire(&runtime).await;
         assert!(early.is_empty(), "{early:?}");
         let reset = |command: &CoreCommand| match command {
-            CoreCommand::EnsureSession { session, .. } => session.adopt_only,
+            CoreCommand::EnsureSession { session } => session.adopt_only,
             CoreCommand::StopSession { command_id, .. } => command_id.starts_with("reset-"),
             _ => false,
         };
@@ -308,7 +290,7 @@ mod tests {
             matches!(
                 commands.as_slice(),
                 [
-                    CoreCommand::EnsureSession { session, .. },
+                    CoreCommand::EnsureSession { session },
                     CoreCommand::StopSession { command_id, .. },
                 ] if session.adopt_only && command_id.starts_with("reset-")
             ),
@@ -475,7 +457,6 @@ mod tests {
         let v2 = runtime.shared.pending.lock().insert(
             key.to_owned(),
             CoreCommand::EnsureSession {
-                command_id: None,
                 session: newer.clone(),
             },
         );
@@ -489,7 +470,6 @@ mod tests {
                 key,
                 v1,
                 CoreCommand::EnsureSession {
-                    command_id: None,
                     session: stale.clone(),
                 },
             ),
@@ -500,10 +480,7 @@ mod tests {
                 &runtime.shared,
                 key,
                 v1,
-                CoreCommand::EnsureSession {
-                    session: stale,
-                    command_id: None
-                },
+                CoreCommand::EnsureSession { session: stale },
                 &mut deferred,
             )
             .is_none(),
@@ -531,7 +508,7 @@ mod tests {
         );
         assert_eq!(runtime.shared.pending.lock().version(key), Some(v2));
         match runtime.shared.pending.lock().get(key) {
-            Some(CoreCommand::EnsureSession { session, .. }) => {
+            Some(CoreCommand::EnsureSession { session }) => {
                 assert_eq!(session.cwd, "/tmp/new-cwd");
                 assert_eq!(
                     session.mcp_plan.as_ref().map(|p| p.command.as_str()),

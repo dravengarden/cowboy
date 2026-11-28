@@ -230,10 +230,7 @@ async fn terminal_fence(machine: &Machine) {
         write_frame(
             &mut writer,
             &Frame::CoreCommand {
-                command: CoreCommand::EnsureSession {
-                    session,
-                    command_id: None,
-                },
+                command: CoreCommand::EnsureSession { session },
             },
         )
         .await

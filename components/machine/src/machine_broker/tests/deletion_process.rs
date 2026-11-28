@@ -240,10 +240,7 @@ async fn cold_fence(root: &Path, deleted: bool) {
             write_frame(
                 &mut writer,
                 &Frame::CoreCommand {
-                    command: CoreCommand::EnsureSession {
-                        session: launch,
-                        command_id: None,
-                    },
+                    command: CoreCommand::EnsureSession { session: launch },
                 },
             )
             .await
@@ -398,10 +395,7 @@ async fn process_storage_failure_refuses_ack_and_cold_adoption() {
     write_frame(
         &mut writer,
         &Frame::CoreCommand {
-            command: CoreCommand::EnsureSession {
-                session: launch,
-                command_id: None,
-            },
+            command: CoreCommand::EnsureSession { session: launch },
         },
     )
     .await

@@ -1663,7 +1663,7 @@ mod tests {
         assert!(!runtime.has_worker("s"));
         supervisor.start_registered_session("s").unwrap();
         assert!(runtime.pending_for_test().iter().any(
-            |command| matches!(command, CoreCommand::EnsureSession { session, .. }
+            |command| matches!(command, CoreCommand::EnsureSession { session }
                 if !session.adopt_only && session.provider_auth_generation == Some(2)
                 && session.agent_session_id.is_none() && session.cwd == original.cwd)
         ));
@@ -2100,7 +2100,7 @@ mod tests {
         supervisor.start_registered_session("s").unwrap();
         assert!(runtime.pending_for_test().iter().any(|command| matches!(
             command,
-            CoreCommand::EnsureSession { session, .. } if session.agent_session_id.is_none()
+            CoreCommand::EnsureSession { session } if session.agent_session_id.is_none()
         )));
 
         // A managed-call continuation restarts the same child after its first
@@ -2116,7 +2116,7 @@ mod tests {
         supervisor.start_registered_session("s").unwrap();
         assert!(runtime.pending_for_test().iter().any(|command| matches!(
             command,
-            CoreCommand::EnsureSession { session, .. }
+            CoreCommand::EnsureSession { session }
                 if session.agent_session_id.as_deref() == Some("native-original")
         )));
     }
@@ -2219,7 +2219,7 @@ mod tests {
             .expect("prompt wakes the dormant session");
         assert!(runtime.pending_for_test().iter().any(|command| matches!(
             command,
-            CoreCommand::EnsureSession { session, .. } if session.session_id == "s"
+            CoreCommand::EnsureSession { session } if session.session_id == "s"
         )));
         assert_eq!(hub.status("s"), Some(Status::Starting));
         assert_eq!(woken.lock().as_slice(), ["s".to_owned()]);
@@ -2303,7 +2303,7 @@ mod tests {
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| matches!(
             command,
-            CoreCommand::EnsureSession { session, .. }
+            CoreCommand::EnsureSession { session }
                 if session.session_id == "s" && session.agent_session_id.is_none()
         )));
     }
@@ -2392,7 +2392,7 @@ mod tests {
         assert!(runtime.pending_for_test().iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. } if session.session_id == "s"
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
             )
         }));
         // Progress is visible before the Machine verifies and spawns.
@@ -2539,7 +2539,7 @@ mod tests {
         assert!(pending.iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. }
+                CoreCommand::EnsureSession { session }
                     if session.cwd == prepared.to_string_lossy()
             )
         }));
@@ -2566,7 +2566,7 @@ mod tests {
 
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session, .. } if session.cwd == prepared.to_string_lossy())
+            matches!(command, CoreCommand::EnsureSession { session } if session.cwd == prepared.to_string_lossy())
         }));
         assert!(
             !pending
@@ -2596,7 +2596,7 @@ mod tests {
 
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session, .. } if session.cwd == prepared.to_string_lossy())
+            matches!(command, CoreCommand::EnsureSession { session } if session.cwd == prepared.to_string_lossy())
         }));
         assert!(
             pending
@@ -2625,7 +2625,7 @@ mod tests {
         assert!(!supervisor.ensure_alive("s").expect("open busy worker"));
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
         }));
         assert!(
             !pending
@@ -2657,7 +2657,7 @@ mod tests {
 
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| {
-            matches!(command, CoreCommand::EnsureSession { session, .. } if session.session_id == "s")
+            matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
         }));
         assert!(
             !pending
@@ -2703,7 +2703,7 @@ mod tests {
         assert!(pending.iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. }
+                CoreCommand::EnsureSession { session }
                     if session.cwd == cwd.to_string_lossy()
                         && session.agent_session_id.as_deref() == Some("codex-thread-1")
             )
@@ -2752,7 +2752,7 @@ mod tests {
         assert!(!runtime.pending_for_test().iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. } if session.session_id == "s"
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
             ) || matches!(command, CoreCommand::StopSession { .. })
         }));
         assert_eq!(hub.status("s"), Some(Status::Crashed));
@@ -2805,7 +2805,7 @@ mod tests {
         assert!(!runtime.pending_for_test().iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. } if session.session_id == "s"
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
             ) || matches!(command, CoreCommand::StopSession { .. })
         }));
         assert_eq!(hub.status("s"), Some(Status::Crashed));
@@ -2816,7 +2816,7 @@ mod tests {
         assert!(runtime.pending_for_test().iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. } if session.session_id == "s"
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
             )
         }));
         assert_eq!(hub.status("s"), Some(Status::Starting));
@@ -2922,7 +2922,7 @@ mod tests {
         assert!(pending.iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. }
+                CoreCommand::EnsureSession { session }
                     if session.agent_session_id.as_deref() == Some("codex-thread-1")
             )
         }));
@@ -3069,7 +3069,7 @@ mod tests {
             .expect("reload");
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(
-            |command| matches!(command, CoreCommand::EnsureSession { session, .. }
+            |command| matches!(command, CoreCommand::EnsureSession { session }
             if session.session_id == "s" && session.provider_version == "new"
                 && session.provider_generation_digest == "new-digest"
                 && session.agent_session_id.as_deref() == Some("native-thread")
@@ -3251,7 +3251,7 @@ mod tests {
         assert!(pending.iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. }
+                CoreCommand::EnsureSession { session }
                     if session.cwd == cwd.to_string_lossy()
                         && session.agent_session_id.is_none()
             )
@@ -3312,7 +3312,7 @@ mod tests {
         assert!(runtime.pending_for_test().iter().any(|command| {
             matches!(
                 command,
-                CoreCommand::EnsureSession { session, .. }
+                CoreCommand::EnsureSession { session }
                     if session.agent_session_id.as_deref() == Some("deepseek-thread-1")
                         && session.context_window == Some(830_000)
                         && session.auto_compact_token_limit == Some(788_500)

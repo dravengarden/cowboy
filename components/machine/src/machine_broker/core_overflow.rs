@@ -15,14 +15,9 @@ pub(super) fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)
             command_id,
             ..
         } => Some((session.session_id.clone(), command_id.clone())),
-        CoreCommand::EnsureSession {
-            session,
-            command_id,
-        } => Some((
+        CoreCommand::EnsureSession { session } => Some((
             session.session_id.clone(),
-            command_id
-                .clone()
-                .unwrap_or_else(|| format!("ensure:{}", session.session_id)),
+            format!("ensure:{}", session.session_id),
         )),
         CoreCommand::StopSession {
             session_id,

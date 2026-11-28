@@ -6,12 +6,7 @@
 //! `crashed_drains`) and never held across `.await` or `send_controller`.
 //! Lifecycle mutations serialize on the broker's `session_lifecycle_gate`.
 
-mod launch_gate;
 mod teardown;
-pub(super) use launch_gate::{
-    DrainContentionError, RehabilitatedGenerationError, RetryableRegistrationError,
-    SpawnedLaunchGuard, prepare_transient_unit_with_owner_check,
-};
 
 use super::*;
 use crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION;
@@ -727,10 +722,7 @@ impl Broker {
         {
             return None;
         }
-        replacing.insert(
-            session_id.to_owned(),
-            (snapshot.generation.clone(), worker.epoch.clone()),
-        );
+        replacing.insert(session_id.to_owned(), snapshot.generation.clone());
         if self.args.spawn_mode == SpawnMode::Direct {
             worker
                 .peer_pid
@@ -977,7 +969,7 @@ impl Broker {
             .lock()
             .contains(session_id)
             && !self.cancelled_sessions.lock().contains(session_id)
-            && !self.spawned_launches.lock().contains(session_id)
+            && !self.launching.lock().contains(session_id)
             && !self.resetting_sessions.lock().contains_key(session_id)
             && !self.workers.lock().contains_key(session_id)
             && self
@@ -1039,14 +1031,14 @@ impl Broker {
             let sessions = self.sessions.lock();
             let workers = self.workers.lock();
             let mut session_states = self.session_states.lock();
-            let spawned = self.spawned_launches.lock();
+            let launching = self.launching.lock();
             let mut pending_cmds = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let mut state = self.crashed_drains.inner.lock();
 
             let valid = !cancelled.contains(session_id)
                 && !deleted.contains(session_id)
-                && !spawned.contains(session_id)
+                && !launching.contains(session_id)
                 && !workers.contains_key(session_id)
                 && state.active.get(session_id).is_some_and(|active| {
                     active.epoch == peer.epoch && active.connection_id == peer.connection_id
@@ -1066,7 +1058,7 @@ impl Broker {
                 (false, None, orphaned, Vec::new(), None)
             } else {
                 // Write Crashed BEFORE releasing `state.active` so a waiting
-                // replacement launch in `acquire_spawned_launch_slot` always
+                // replacement launch in `claim_ensure_slot` always
                 // initializes Starting strictly after this write (R21-M1).
                 session_states.insert(session_id.to_owned(), WorkerState::Crashed);
                 state.active.remove(session_id);
@@ -2785,99 +2777,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returning_draining_worker_attaches_during_launch_reservation_and_gates_spawn() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
-        *broker.controller.lock() = Some(Controller {
-            lease: 1,
-            tx: ctrl_tx,
-            protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
-            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
-        });
-        broker.sessions.lock().insert(
-            "s-h2".into(),
-            serde_json::from_value(serde_json::json!({"session_id":"s-h2","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap(),
-        );
-        // Simulate Ensure reserving `launching` after a broker restart before
-        // `spawn_worker` has actually spawned the replacement process.
-        broker.launching.lock().insert("s-h2".into());
-
-        let (w_tx, _w_rx) = mpsc::unbounded_channel();
-        broker
-            .register_worker_inner(
-                WorkerRegistration {
-                    session_id: "s-h2".into(),
-                    epoch: "old-epoch-1".into(),
-                    generation: "gen-1".into(),
-                    executable: None,
-                    fallback_for: None,
-                    connection_id: 77,
-                    tx: w_tx,
-                },
-                true,
-                Some(("drain-cmd-1".into(), RetiredLaunch::VerifiedNone)),
-            )
-            .expect(
-                "returning draining worker must attach before replacement process spawns (R20-H2)",
-            );
-        assert!(
-            broker
-                .workers
-                .lock()
-                .get("s-h2")
-                .is_some_and(|w| w.epoch == "old-epoch-1" && w.crashed_drain_fenced),
-            "returning draining worker must restore its crashed drain fence"
-        );
-
-        // Replacement spawn must wait while the returning draining worker finishes replay.
-        let broker_for_spawn = Arc::clone(&broker);
-        let acquire_task = tokio::spawn(async move {
-            let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-h2","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
-            let guard = broker_for_spawn
-                .acquire_spawned_launch_slot(&session, false)
-                .await
-                .unwrap();
-            assert!(broker_for_spawn.spawned_launches.lock().contains("s-h2"));
-            drop(guard);
-        });
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(
-            !acquire_task.is_finished(),
-            "replacement spawn must wait for returning draining worker fence to settle"
-        );
-
-        // Finish draining worker and notify waiters -> replacement spawn proceeds.
-        broker.workers.lock().remove("s-h2");
-        broker.crashed_drains.inner.lock().active.remove("s-h2");
-        broker.crashed_drains.settled.notify_waiters();
-        tokio::time::timeout(Duration::from_secs(2), acquire_task)
-            .await
-            .expect("replacement spawn must unblock once returning drain settles")
-            .unwrap();
-
-        // Once `spawned_launches` IS set, a late resumed_drain reconnect is rejected.
-        broker.spawned_launches.lock().insert("s-h2".into());
-        let (late_tx, _late_rx) = mpsc::unbounded_channel();
-        let err = broker
-            .register_worker_inner(
-                WorkerRegistration {
-                    session_id: "s-h2".into(),
-                    epoch: "old-epoch-2".into(),
-                    generation: "gen-1".into(),
-                    executable: None,
-                    fallback_for: None,
-                    connection_id: 78,
-                    tx: late_tx,
-                },
-                true,
-                Some(("drain-cmd-2".into(), RetiredLaunch::VerifiedNone)),
-            )
-            .unwrap_err();
-        assert!(err.to_string().contains("launch is already in progress"));
-    }
-
-    #[tokio::test]
     async fn dormant_exited_state_is_not_suppressed_by_cached_drain_receipt() {
         let dir = tempfile::tempdir().unwrap();
         let broker = test_broker(dir.path());
@@ -2947,457 +2846,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returning_drainer_disables_orphan_stop_and_drain_contention_skips_generation_fallback()
-    {
+    async fn claim_ensure_slot_refuses_synchronously_before_reserving_launching_during_drain() {
         let dir = tempfile::tempdir().unwrap();
         let broker = test_broker(dir.path());
-        assert!(broker.should_stop_orphan_unit("s-r21-h2"));
-
-        let (w_tx, _w_rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::unbounded_channel();
         broker
             .register_worker_inner(
                 WorkerRegistration {
-                    session_id: "s-r21-h2".into(),
-                    epoch: "ep-draining".into(),
-                    generation: "gen-1".into(),
-                    executable: None,
-                    fallback_for: None,
-                    connection_id: 91,
-                    tx: w_tx,
-                },
-                true,
-                Some(("dc-h2".into(), RetiredLaunch::VerifiedNone)),
-            )
-            .unwrap();
-        assert!(
-            !broker.should_stop_orphan_unit("s-r21-h2"),
-            "attached returning drainer must prevent orphan unit force-stop (R21-H2)"
-        );
-
-        let err = anyhow::Error::new(DrainContentionError("drain wait timed out".into()));
-        assert!(
-            !worker_generation_failure_allows_fallback(&err),
-            "drain contention/timeout must not quarantine or fall back worker generations (R21-M6)"
-        );
-    }
-
-    #[tokio::test]
-    async fn acquire_spawned_launch_slot_initializes_starting_strictly_after_drain_completes() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        broker
-            .session_states
-            .lock()
-            .insert("s-r21-m1".into(), WorkerState::Crashed);
-        broker
-            .startup_failures
-            .lock()
-            .insert("s-r21-m1".into(), "old crash".into());
-        let session: StartSession = serde_json::from_value(serde_json::json!({"session_id":"s-r21-m1","provider":"codex","cwd":"/tmp","generation":"gen-1"})).unwrap();
-        let guard = broker
-            .acquire_spawned_launch_slot(&session, false)
-            .await
-            .unwrap();
-        assert_eq!(
-            broker.session_states.lock().get("s-r21-m1"),
-            Some(&WorkerState::Starting),
-            "acquire_spawned_launch_slot must set Starting after drain settles (R21-M1)"
-        );
-        assert!(broker.startup_failures.lock().get("s-r21-m1").is_none());
-        drop(guard);
-    }
-
-    #[tokio::test]
-    async fn orphan_stop_reservation_is_mutually_exclusive_with_worker_registration() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let guard = broker
-            .try_reserve_orphan_stop("s-r22-h1", false)
-            .expect("unowned session admits orphan stop reservation");
-
-        let (w_tx, _w_rx) = mpsc::unbounded_channel();
-        let err = broker
-            .register_worker_inner(
-                WorkerRegistration {
-                    session_id: "s-r22-h1".into(),
+                    session_id: "s-gate-sync".into(),
                     epoch: "ep-1".into(),
                     generation: "gen-1".into(),
-                    executable: None,
+                    executable: Some("/bin/false".into()),
                     fallback_for: None,
-                    connection_id: 101,
-                    tx: w_tx,
+                    connection_id: 1,
+                    tx,
                 },
                 true,
-                Some(("dc-h1".into(), RetiredLaunch::VerifiedNone)),
-            )
-            .unwrap_err();
-        assert!(
-            err.downcast_ref::<RetryableRegistrationError>().is_some(),
-            "registration during orphan stop reservation must defer without terminal Reject (R22-H1)"
-        );
-
-        drop(guard);
-        let (w_tx2, _w_rx2) = mpsc::unbounded_channel();
-        broker
-            .register_worker_inner(
-                WorkerRegistration {
-                    session_id: "s-r22-h1".into(),
-                    epoch: "ep-1".into(),
-                    generation: "gen-1".into(),
-                    executable: None,
-                    fallback_for: None,
-                    connection_id: 102,
-                    tx: w_tx2,
-                },
-                true,
-                Some(("dc-h1".into(), RetiredLaunch::VerifiedNone)),
+                Some(("dc-1".into(), RetiredLaunch::VerifiedNone)),
             )
             .unwrap();
-        assert!(
-            broker.try_reserve_orphan_stop("s-r22-h1", false).is_none(),
-            "attached draining worker must block orphan stop reservation (R22-H1)"
-        );
-    }
-    #[tokio::test]
-    async fn orphan_stop_reservation_blocks_spawn_admission_until_released() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let guard = broker
-            .try_reserve_orphan_stop("s-r23-h1", false)
-            .expect("orphan stop reservation");
-
-        let broker_spawn = Arc::clone(&broker);
-        let spawn_task = tokio::spawn(async move {
-            let session: StartSession = serde_json::from_value(serde_json::json!({
-                "session_id": "s-r23-h1",
-                "provider": "codex",
-                "cwd": "/tmp",
-                "generation": "gen-fallback",
-                "fallback_for": "gen-bad"
-            }))
-            .unwrap();
-            let slot = broker_spawn
-                .acquire_spawned_launch_slot(&session, false)
-                .await
-                .unwrap();
-            assert_eq!(
-                broker_spawn
-                    .fallback_pins
-                    .lock()
-                    .get("s-r23-h1")
-                    .map(String::as_str),
-                Some("gen-fallback"),
-                "fallback pin must be applied only after acquiring the spawn slot (R23-M5)"
-            );
-            drop(slot);
-        });
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(
-            !spawn_task.is_finished(),
-            "acquire_spawned_launch_slot must wait while orphan stop reservation is held (R23-H1)"
-        );
-        assert!(
-            broker.fallback_pins.lock().get("s-r23-h1").is_none(),
-            "fallback pin must remain unset before spawn slot is acquired (R23-M5)"
-        );
-        drop(guard);
-        tokio::time::timeout(Duration::from_secs(2), spawn_task)
-            .await
-            .expect("spawn admission must unblock once orphan stop guard drops")
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn r24_rollout_deferral_preserves_state_and_hands_off_queued_ensure_retry() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        broker.install_controller(tx);
-        let start: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r24-m1",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1"
-        }))
-        .unwrap();
-        broker
-            .sessions
-            .lock()
-            .insert("s-r24-m1".into(), start.clone());
-        broker
-            .session_states
-            .lock()
-            .insert("s-r24-m1".into(), WorkerState::Starting);
-        broker.launching.lock().insert("s-r24-m1".into());
-
-        // A retry Ensure arriving while rollout holds `launching` is queued in
-        // `pending_ensure_retries` instead of being silently dropped (R24-M2).
-        let slot = broker
-            .claim_ensure_slot(&start, "ensure:s-r24-m1:2", false, "gen-1")
+        let res = broker
+            .claim_ensure_slot("s-gate-sync", false, "gen-1")
             .await;
-        assert!(matches!(slot, Err(None)));
+        assert!(
+            matches!(res, Err(Some(_))),
+            "active drain must reject Ensure"
+        );
+        assert!(
+            !broker.launching.lock().contains("s-gate-sync"),
+            "rejected Ensure during drain must never reserve launching"
+        );
+        assert!(
+            broker.has_any_crashed_drain_fence_for_session("s-gate-sync"),
+            "fence helper must observe active crashed drain"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_gate_ensure_rejects_mismatched_epoch_or_active_launching() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        broker.crashed_drains.inner.lock().active.insert(
+            "s-epoch-check".into(),
+            ActiveDrain {
+                epoch: "ep-new".into(),
+                connection_id: 2,
+                command_id: Some("dc-new".into()),
+                confirmed: true,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+            },
+        );
         assert!(
             broker
-                .pending_ensure_retries
-                .lock()
-                .contains_key("s-r24-m1")
+                .commit_gate_ensure_crashed_drain("s-epoch-check", Some("ep-old"), None)
+                .is_err(),
+            "stale probe epoch must not retire a newer drain epoch"
         );
-
-        // Rollout finishes with DrainContentionError: must NOT write Crashed or
-        // startup_failures, must emit rollout rejection, and must keep launching
-        // owned while handing off to the queued retry (R24-M1, R24-M2).
-        broker.finish_rollout_launch(
-            "s-r24-m1",
-            "gen-0",
-            Err(anyhow::Error::new(DrainContentionError(
-                "drain contention".into(),
-            ))),
-        );
-        assert!(broker.startup_failures.lock().get("s-r24-m1").is_none());
-        let first_frame = rx.try_recv().expect("rollout deferral ACK");
-        assert!(matches!(
-            first_frame,
-            Frame::CommandAck {
-                ref session_id,
-                ref command_id,
-                accepted: false,
-                ..
-            } if session_id == "s-r24-m1" && command_id == "rollout:s-r24-m1"
-        ));
-        assert!(
-            !broker
-                .pending_ensure_retries
-                .lock()
-                .contains_key("s-r24-m1"),
-            "queued ensure retry must be popped and spawned on handoff"
-        );
-    }
-
-    #[tokio::test]
-    async fn r24_rehabilitated_generation_rejects_stale_quarantine_fallback_slot() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let session: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r24-m7",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1",
-            "fallback_for": "gen-2"
-        }))
-        .unwrap();
-        broker
-            .sessions
-            .lock()
-            .insert("s-r24-m7".into(), session.clone());
-
-        // Canary rehabilitates gen-2 while this session waited behind a drain.
-        let _ = broker.rehabilitate_generation("gen-2", &session.provider);
-
-        // Quarantine-based pre-selection must refuse the stale fallback without
-        // installing fallback_pins or spawned_launches (R24-M7).
-        let Err(err) = broker.acquire_spawned_launch_slot(&session, true).await else {
-            panic!("rehabilitated generation must abort stale quarantine fallback");
-        };
-        assert!(err.downcast_ref::<RehabilitatedGenerationError>().is_some());
-        assert!(!broker.fallback_pins.lock().contains_key("s-r24-m7"));
-        assert!(!broker.spawned_launches.lock().contains("s-r24-m7"));
-
-        // Genuine failure of THIS session (fallback_from_quarantine = false)
-        // still retains its fallback pin even though gen-2 is healthy.
-        let _guard = broker
-            .acquire_spawned_launch_slot(&session, false)
-            .await
-            .expect("genuine session failure must retain fallback");
-        assert_eq!(
-            broker
-                .fallback_pins
-                .lock()
-                .get("s-r24-m7")
-                .map(String::as_str),
-            Some("gen-1")
-        );
-    }
-
-    #[tokio::test]
-    async fn r24_stale_reconnect_token_cannot_consume_newer_arm_or_publish_crashed() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let start: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r24-m4",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1"
-        }))
-        .unwrap();
-        broker.sessions.lock().insert("s-r24-m4".into(), start);
-        broker
-            .session_states
-            .lock()
-            .insert("s-r24-m4".into(), WorkerState::Exited);
-        broker
-            .awaiting_reconnect
-            .lock()
-            .insert("s-r24-m4".into(), 2);
-
-        // Stale token 1 must not consume token 2 or overwrite Exited (R24-M4).
-        broker.reap_unreconnected_worker_unit("s-r24-m4", 1).await;
-        assert_eq!(
-            broker.awaiting_reconnect.lock().get("s-r24-m4").copied(),
-            Some(2)
-        );
-        assert_eq!(
-            broker.session_states.lock().get("s-r24-m4").copied(),
-            Some(WorkerState::Exited)
-        );
-    }
-
-    #[tokio::test]
-    async fn r25_replay_of_same_ensure_attempt_id_does_not_reject_itself() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        broker.install_controller(tx);
-        let start: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r25-m5",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1"
-        }))
-        .unwrap();
-        broker
-            .sessions
-            .lock()
-            .insert("s-r25-m5".into(), start.clone());
-        broker.launching.lock().insert("s-r25-m5".into());
-        broker
-            .active_ensure_attempts
-            .lock()
-            .insert("s-r25-m5".into(), "ensure:s-r25-m5:1".into());
-
-        // Exact-ID replay of active launch coalesces without queueing or rejecting.
-        assert!(matches!(
-            broker
-                .claim_ensure_slot(&start, "ensure:s-r25-m5:1", false, "gen-1")
-                .await,
-            Err(None)
-        ));
-        assert!(broker.pending_ensure_retries.lock().is_empty());
-        assert!(rx.try_recv().is_err());
-
-        // New retry ID queues, and replaying that same retry ID twice must NOT self-reject (R25-M5).
-        assert!(matches!(
-            broker
-                .claim_ensure_slot(&start, "ensure:s-r25-m5:2", false, "gen-1")
-                .await,
-            Err(None)
-        ));
-        assert!(matches!(
-            broker
-                .claim_ensure_slot(&start, "ensure:s-r25-m5:2", false, "gen-1")
-                .await,
-            Err(None)
-        ));
-        assert!(
-            rx.try_recv().is_err(),
-            "exact-ID retry replay must not emit superseded ACK"
-        );
-
-        // A genuinely different retry ID displaces and rejects only the older ID.
-        assert!(matches!(
-            broker
-                .claim_ensure_slot(&start, "ensure:s-r25-m5:3", false, "gen-1")
-                .await,
-            Err(None)
-        ));
-        let displaced = rx
-            .try_recv()
-            .expect("displaced older retry must be rejected");
-        assert!(matches!(
-            displaced,
-            Frame::CommandAck {
-                ref command_id,
-                accepted: false,
-                ..
-            } if command_id == "ensure:s-r25-m5:2"
-        ));
-    }
-
-    #[tokio::test]
-    async fn r25_rehabilitation_preserves_session_specific_failure_fallback() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let start: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r25-m10",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1",
-            "fallback_for": "gen-2"
-        }))
-        .unwrap();
-        broker.sessions.lock().insert("s-r25-m10".into(), start);
-
-        // Install a genuine session-specific failure pin (fallback_from_quarantine = false).
-        assert!(broker.try_pin_fallback_for_slot("s-r25-m10", "gen-1", "gen-2", "codex", false));
         assert!(
             broker
-                .session_failure_fallback_pins
+                .crashed_drains
+                .inner
                 .lock()
-                .contains("s-r25-m10")
+                .active
+                .get("s-epoch-check")
+                .is_some_and(|a| a.epoch == "ep-new")
         );
 
-        // Healthy canary rehabilitation must NOT remove the session-specific pin (R25-M10).
-        let released = broker.rehabilitate_generation("gen-2", "codex");
-        assert!(released.is_empty());
-        assert_eq!(
+        broker.launching.lock().insert("s-epoch-check".into());
+        assert!(
             broker
-                .fallback_pins
-                .lock()
-                .get("s-r25-m10")
-                .map(String::as_str),
-            Some("gen-1")
+                .commit_gate_ensure_crashed_drain("s-epoch-check", Some("ep-new"), None)
+                .is_err(),
+            "active launching must block stale drain commit"
         );
-    }
-
-    #[tokio::test]
-    async fn r25_superseded_ensure_failure_suppresses_crashed_snapshot_before_retry_handoff() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = test_broker(dir.path());
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        broker.install_controller(tx);
-        let start: StartSession = serde_json::from_value(serde_json::json!({
-            "session_id": "s-r25-m3",
-            "provider": "codex",
-            "cwd": "/tmp",
-            "generation": "gen-1"
-        }))
-        .unwrap();
-        broker
-            .sessions
-            .lock()
-            .insert("s-r25-m3".into(), start.clone());
-        broker.launching.lock().insert("s-r25-m3".into());
-        broker
-            .pending_ensure_retries
-            .lock()
-            .insert("s-r25-m3".into(), (start, "ensure:s-r25-m3:2".into()));
-
-        broker.finish_ensure_launch(
-            "s-r25-m3",
-            "ensure:s-r25-m3:1",
-            Err(anyhow::anyhow!("launch attempt 1 failed")),
-        );
-
-        // Must emit correlated CommandAck for attempt 1 WITHOUT publishing an
-        // uncorrelated Crashed snapshot that could park attempt 2's prompts (R25-M3).
-        let first = rx.try_recv().expect("attempt 1 rejection");
-        assert!(matches!(
-            first,
-            Frame::CommandAck {
-                ref command_id,
-                accepted: false,
-                ..
-            } if command_id == "ensure:s-r25-m3:1"
-        ));
-        assert!(broker.startup_failures.lock().get("s-r25-m3").is_none());
     }
 }

@@ -1296,7 +1296,6 @@ mod tests {
             "ensure:s-bound".into(),
             CoreCommand::EnsureSession {
                 session: good_worker.launch.clone().unwrap(),
-                command_id: None,
             },
         );
         // Incoming snapshot has mismatched execution_binding (launch = None) and wrap_up_steering = false.
